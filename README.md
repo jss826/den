@@ -25,21 +25,12 @@ iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用�
 
 ## Quick Start (Production)
 
-### PowerShell
-
 ```powershell
-# ビルド
 cargo build --release
-
-# 環境変数を設定して起動
-$env:DEN_ENV = "production"
-$env:DEN_PASSWORD = "your_password"
-cargo run --release
+.\den.ps1 -Password "your_password"
 ```
 
 ブラウザで `http://localhost:8080` を開く。
-
-> 環境変数はセッション内のみ有効。ターミナルを閉じるとリセットされる。
 
 ## Environment Variables
 
