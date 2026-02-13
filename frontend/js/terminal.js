@@ -5,10 +5,18 @@ const DenTerminal = (() => {
   let ws = null;
 
   /** fit + refresh + resize 通知をまとめて実行 */
+  let fitRetryCount = 0;
   function fitAndRefresh() {
     if (!term || !fitAddon) return;
     const container = term.element?.parentElement;
-    if (container && container.clientWidth === 0) return;
+    if (container && container.clientWidth === 0) {
+      if (fitRetryCount < 10) {
+        fitRetryCount++;
+        requestAnimationFrame(() => fitAndRefresh());
+      }
+      return;
+    }
+    fitRetryCount = 0;
     fitAddon.fit();
     term.refresh(0, term.rows - 1);
     sendResize();
@@ -47,7 +55,7 @@ const DenTerminal = (() => {
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    // WebGL レンダラー（Safari/iOS では不安定なためスキップ）
+    // レンダラー選択: デスクトップ → WebGL、iOS/Safari → Canvas
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     const isSafari = !isIOS && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
@@ -57,28 +65,32 @@ const DenTerminal = (() => {
         webglAddon.onContextLost(() => webglAddon.dispose());
         term.loadAddon(webglAddon);
       } catch (_e) {
-        console.warn('WebGL not available, using canvas renderer');
+        console.warn('WebGL not available, falling back to canvas renderer');
+        try {
+          term.loadAddon(new CanvasAddon.CanvasAddon());
+        } catch (_e2) { /* DOM fallback */ }
+      }
+    } else {
+      // iOS/Safari: Canvas レンダラーを明示的にロード
+      // xterm.js v6 は WebGL/Canvas アドオン未ロードだと DOM レンダラーになり描画されない
+      try {
+        term.loadAddon(new CanvasAddon.CanvasAddon());
+      } catch (_e) {
+        console.warn('Canvas addon not available, using DOM renderer');
       }
     }
 
     term.open(container);
-    fitAddon.fit();
-
-    // Safari/iOS: canvas 初回ペイント遅延対策（多段リトライ）
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => fitAndRefresh());
-    });
+    fitAndRefresh();
+    requestAnimationFrame(() => fitAndRefresh());
     setTimeout(() => fitAndRefresh(), 300);
+    setTimeout(() => fitAndRefresh(), 1000);
 
-    // フォント読み込み完了後に再 fit（iOS のフォント計測ずれ対策）
+    // フォント読み込み完了後に再 fit
     if (document.fonts?.ready) {
       document.fonts.ready.then(() => fitAndRefresh());
     }
-
-    // pageshow: bfcache 復帰時にも再描画
     window.addEventListener('pageshow', () => fitAndRefresh());
-
-    // リサイズ監視
     const resizeObserver = new ResizeObserver(() => fitAndRefresh());
     resizeObserver.observe(container);
 
@@ -90,7 +102,6 @@ const DenTerminal = (() => {
       }
     });
 
-    // バイナリデータ → WebSocket
     term.onBinary((data) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         const bytes = new Uint8Array(data.length);
@@ -110,31 +121,51 @@ const DenTerminal = (() => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(token)}&cols=${cols}&rows=${rows}`;
 
-    ws = new WebSocket(url);
-    ws.binaryType = 'arraybuffer';
+    let retries = 0;
 
-    ws.onopen = () => {
-      term.writeln('\x1b[32mConnected.\x1b[0m');
-      term.focus();
-      // 接続後に再 fit（初期 cols/rows ずれ補正）
-      fitAndRefresh();
-    };
-
-    ws.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(event.data));
-      } else {
-        term.write(event.data);
+    const doConnect = () => {
+      // 古い接続を破棄
+      if (ws) {
+        ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+        ws.close();
+        ws = null;
       }
+
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        retries = 0;
+        term.writeln('\x1b[32mConnected.\x1b[0m');
+        term.focus();
+        fitAndRefresh();
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(event.data));
+        } else {
+          term.write(event.data);
+        }
+      };
+
+      ws.onclose = () => {
+        term.writeln('\r\n\x1b[31mDisconnected.\x1b[0m');
+      };
+
+      ws.onerror = () => {};
+
+      // Safari: WebSocket が CONNECTING のまま stall する問題のリトライ
+      setTimeout(() => {
+        if (ws && ws.readyState === WebSocket.CONNECTING && retries < 3) {
+          retries++;
+          doConnect();
+        }
+      }, 3000);
     };
 
-    ws.onclose = () => {
-      term.writeln('\r\n\x1b[31mDisconnected.\x1b[0m');
-    };
-
-    ws.onerror = () => {
-      term.writeln('\r\n\x1b[31mConnection error.\x1b[0m');
-    };
+    // 少し遅延させてから接続（Safari の初回 WS stall 軽減）
+    setTimeout(doConnect, 200);
   }
 
   function sendResize() {

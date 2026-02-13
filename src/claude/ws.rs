@@ -171,8 +171,8 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
 
                 let pty_reader = pty.reader;
                 let pty_writer = pty.writer;
-                let _child = pty.child;
-                let _master = pty.master;
+                let child = pty.child;
+                let master = pty.master;
 
                 // writer をセッションマップに格納
                 let writer = Arc::new(Mutex::new(pty_writer));
@@ -191,7 +191,7 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                     );
                 }
 
-                // PTY 読み取りタスクを起動
+                // PTY 読み取りタスクを起動（child と master の所有権を渡してセッション中生存させる）
                 tokio::spawn(stream_pty_output(
                     session_id.clone(),
                     pty_reader,
@@ -200,6 +200,8 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                     stop_rx,
                     store.clone(),
                     meta,
+                    child,
+                    master,
                 ));
             }
 
@@ -255,6 +257,7 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
 }
 
 /// PTY の出力を WebSocket に中継 + Store に永続化
+#[allow(clippy::too_many_arguments)]
 async fn stream_pty_output(
     session_id: String,
     mut reader: Box<dyn std::io::Read + Send>,
@@ -263,6 +266,8 @@ async fn stream_pty_output(
     mut stop_rx: tokio::sync::oneshot::Receiver<()>,
     store: Store,
     mut meta: SessionMeta,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    _master: Box<dyn portable_pty::MasterPty + Send>,
 ) {
     let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
@@ -348,6 +353,16 @@ async fn stream_pty_output(
 
     forward.await;
     read_task.abort();
+
+    // 子プロセスを明示的に終了してゾンビ化を防ぐ
+    tokio::task::spawn_blocking(move || {
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(_master);
+    })
+    .await
+    .ok();
 
     // セッション完了 → メタデータ更新
     meta.status = "completed".to_string();

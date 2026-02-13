@@ -23,14 +23,41 @@ iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用�
 └─────────────────────────────────────────┘
 ```
 
-## Quick Start (Production)
+## Quick Start
+
+[just](https://github.com/casey/just) task runner を使用。
 
 ```powershell
-cargo build --release
-.\den.ps1 -Password "your_password"
+cargo install just
+
+# .env にパスワードを設定（初回のみ）
+echo 'DEN_PASSWORD=your_password' > .env
+
+# 開発
+just dev              # debug ビルド＆起動 (localhost:3939)
+just watch            # ホットリロード開発 (cargo-watch)
+
+# 本番
+just prod             # release ビルド＆起動 (0.0.0.0:8080)
+just prod strongpw    # パスワード上書き指定も可
 ```
 
-ブラウザで `http://localhost:8080` を開く。
+開発ビルドでは `rust-embed` がファイルシステムから直接読むため、`frontend/` の変更はブラウザリロードだけで反映される。
+
+### 全コマンド
+
+| Command | Description |
+|---------|-------------|
+| `just dev` | 開発ビルド＆起動 |
+| `just prod [pw]` | 本番ビルド＆起動 |
+| `just watch` | ホットリロード開発 |
+| `just check` | fmt + clippy + test |
+| `just build` | ビルドのみ |
+| `just test` | cargo test |
+| `just e2e` | E2E テスト |
+| `just fmt` | コード整形 |
+| `just ps` | OpenConsole プロセス一覧 |
+| `just clean` | ビルド成果物削除 |
 
 ## Environment Variables
 
@@ -76,4 +103,4 @@ den/
 
 - **v0.1** Web terminal + touch keybar + auth
 - **v0.2** Claude Code UI + persistence + security
-- **v0.3** File manager (tree + editor) *(planned)*
+- **v0.3** File manager (tree + editor + upload/download + search)

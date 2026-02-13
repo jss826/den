@@ -58,7 +58,7 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
     let mut pty_reader = pty.reader;
     let mut pty_writer = pty.writer;
     let master = pty.master;
-    let _child = pty.child;
+    let child = pty.child;
 
     // PTY → WS: blocking read を spawn_blocking で非同期化
     let (pty_data_tx, mut pty_data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
@@ -147,5 +147,15 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
 
     read_task.abort();
     resize_task.abort();
+
+    // 子プロセスを明示的に終了してゾンビ化を防ぐ
+    tokio::task::spawn_blocking(move || {
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
+    })
+    .await
+    .ok();
+
     tracing::info!("WebSocket session ended");
 }
