@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const keybar = document.getElementById('keybar');
     if (tabName === 'terminal') {
       if (Keybar.isTouchDevice()) keybar.classList.add('visible');
+      DenTerminal.fitAndRefresh();
       DenTerminal.focus();
     } else {
       keybar.classList.remove('visible');

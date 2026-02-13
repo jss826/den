@@ -4,6 +4,16 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
 
+  /** fit + refresh + resize 通知をまとめて実行 */
+  function fitAndRefresh() {
+    if (!term || !fitAddon) return;
+    const container = term.element?.parentElement;
+    if (container && container.clientWidth === 0) return;
+    fitAddon.fit();
+    term.refresh(0, term.rows - 1);
+    sendResize();
+  }
+
   function init(container) {
     term = new Terminal({
       cursorBlink: true,
@@ -54,27 +64,27 @@ const DenTerminal = (() => {
     term.open(container);
     fitAddon.fit();
 
-    // iPad 等でレイアウト確定前に fit() が空振りする対策
+    // Safari/iOS: canvas 初回ペイント遅延対策（多段リトライ）
     requestAnimationFrame(() => {
-      fitAddon.fit();
-      sendResize();
+      requestAnimationFrame(() => fitAndRefresh());
     });
-    setTimeout(() => {
-      fitAddon.fit();
-      sendResize();
-    }, 200);
+    setTimeout(() => fitAndRefresh(), 300);
+
+    // フォント読み込み完了後に再 fit（iOS のフォント計測ずれ対策）
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => fitAndRefresh());
+    }
+
+    // pageshow: bfcache 復帰時にも再描画
+    window.addEventListener('pageshow', () => fitAndRefresh());
 
     // リサイズ監視
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      sendResize();
-    });
+    const resizeObserver = new ResizeObserver(() => fitAndRefresh());
     resizeObserver.observe(container);
 
     // キー入力 → WebSocket
     term.onData((data) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        // バイナリで送信
         const encoder = new TextEncoder();
         ws.send(encoder.encode(data));
       }
@@ -106,6 +116,8 @@ const DenTerminal = (() => {
     ws.onopen = () => {
       term.writeln('\x1b[32mConnected.\x1b[0m');
       term.focus();
+      // 接続後に再 fit（初期 cols/rows ずれ補正）
+      fitAndRefresh();
     };
 
     ws.onmessage = (event) => {
@@ -150,5 +162,5 @@ const DenTerminal = (() => {
     return term;
   }
 
-  return { init, connect, sendInput, sendResize, focus, getTerminal };
+  return { init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal };
 })();
