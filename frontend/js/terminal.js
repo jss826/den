@@ -42,7 +42,7 @@ const DenTerminal = (() => {
       const webglAddon = new WebglAddon.WebglAddon();
       webglAddon.onContextLost(() => webglAddon.dispose());
       term.loadAddon(webglAddon);
-    } catch (e) {
+    } catch (_e) {
       console.warn('WebGL not available, using canvas renderer');
     }
 

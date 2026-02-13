@@ -117,4 +117,90 @@ Host *
         assert_eq!(hosts[1].hostname.as_deref(), Some("example.com"));
         assert_eq!(hosts[1].port, None);
     }
+
+    #[test]
+    fn empty_config() {
+        let hosts = parse_ssh_config("");
+        assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn comments_only() {
+        let config = "# This is a comment\n# Another comment\n";
+        let hosts = parse_ssh_config(config);
+        assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn wildcard_excluded() {
+        let config = "Host *\n    ServerAliveInterval 60\n";
+        let hosts = parse_ssh_config(config);
+        assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn equals_syntax() {
+        let config = "Host=myhost\n    HostName=10.0.0.1\n    User=root\n    Port=22\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name, "myhost");
+        assert_eq!(hosts[0].hostname.as_deref(), Some("10.0.0.1"));
+        assert_eq!(hosts[0].user.as_deref(), Some("root"));
+        assert_eq!(hosts[0].port, Some(22));
+    }
+
+    #[test]
+    fn minimal_host() {
+        let config = "Host jump\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name, "jump");
+        assert!(hosts[0].hostname.is_none());
+        assert!(hosts[0].user.is_none());
+        assert!(hosts[0].port.is_none());
+    }
+
+    #[test]
+    fn duplicate_host_names() {
+        let config = "Host a\n    User u1\nHost a\n    User u2\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(hosts[0].user.as_deref(), Some("u1"));
+        assert_eq!(hosts[1].user.as_deref(), Some("u2"));
+    }
+
+    #[test]
+    fn invalid_port_ignored() {
+        let config = "Host bad\n    Port abc\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 1);
+        assert!(hosts[0].port.is_none());
+    }
+
+    #[test]
+    fn case_insensitive_keys() {
+        let config = "HOST myhost\n    HOSTNAME 1.2.3.4\n    USER admin\n    PORT 443\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].hostname.as_deref(), Some("1.2.3.4"));
+        assert_eq!(hosts[0].user.as_deref(), Some("admin"));
+        assert_eq!(hosts[0].port, Some(443));
+    }
+
+    #[test]
+    fn quoted_values() {
+        let config = "Host quoted\n    HostName \"my.server.com\"\n    User \"admin\"\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].hostname.as_deref(), Some("my.server.com"));
+        assert_eq!(hosts[0].user.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn unknown_directives_ignored() {
+        let config = "Host myhost\n    IdentityFile ~/.ssh/id_rsa\n    ForwardAgent yes\n    HostName 10.0.0.1\n";
+        let hosts = parse_ssh_config(config);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].hostname.as_deref(), Some("10.0.0.1"));
+    }
 }

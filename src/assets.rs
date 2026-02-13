@@ -9,9 +9,7 @@ use rust_embed::Embed;
 struct FrontendAssets;
 
 /// 静的ファイル配信ハンドラ
-pub async fn serve_static(
-    axum::extract::Path(path): axum::extract::Path<String>,
-) -> Response {
+pub async fn serve_static(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
     serve_file(&path)
 }
 

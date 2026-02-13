@@ -1,5 +1,8 @@
 use axum::{
-    extract::{Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
@@ -122,11 +125,8 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
                             }
                             Some("input") => {
                                 if let Some(data) = cmd["data"].as_str()
-                                    && std::io::Write::write_all(
-                                        &mut pty_writer,
-                                        data.as_bytes(),
-                                    )
-                                    .is_err()
+                                    && std::io::Write::write_all(&mut pty_writer, data.as_bytes())
+                                        .is_err()
                                 {
                                     break;
                                 }

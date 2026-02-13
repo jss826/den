@@ -56,10 +56,7 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
             let name = entry.file_name().to_string_lossy().to_string();
             // 隠しディレクトリを除外（先頭 . または $）
             if !name.starts_with('.') && !name.starts_with('$') {
-                entries.push(DirEntry {
-                    name,
-                    is_dir: true,
-                });
+                entries.push(DirEntry { name, is_dir: true });
             }
         }
     }
@@ -159,4 +156,46 @@ fn home_dir() -> String {
 fn shell_escape(s: &str) -> String {
     // シングルクォートでエスケープ
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_escape_normal() {
+        assert_eq!(shell_escape("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_escape_single_quote() {
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_escape_empty() {
+        assert_eq!(shell_escape(""), "''");
+    }
+
+    #[test]
+    fn shell_escape_spaces() {
+        assert_eq!(shell_escape("hello world"), "'hello world'");
+    }
+
+    #[test]
+    fn shell_escape_special_chars() {
+        assert_eq!(shell_escape("a;b&c|d"), "'a;b&c|d'");
+    }
+
+    #[test]
+    fn shell_escape_path() {
+        assert_eq!(shell_escape("/home/user/my dir"), "'/home/user/my dir'");
+    }
+
+    #[test]
+    fn connection_target_local_deserialize() {
+        let json = r#"{"type":"local"}"#;
+        let target: ConnectionTarget = serde_json::from_str(json).unwrap();
+        assert!(matches!(target, ConnectionTarget::Local));
+    }
 }

@@ -1,10 +1,13 @@
 use axum::{
-    extract::{Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
+    extract::{
+        Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -56,11 +59,16 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
             Some("get_ssh_hosts") => {
                 let hosts = ssh_config::list_ssh_hosts();
                 let resp = json!({ "type": "ssh_hosts", "hosts": hosts });
-                let _ = ws_tx.lock().await.send(Message::Text(resp.to_string().into())).await;
+                let _ = ws_tx
+                    .lock()
+                    .await
+                    .send(Message::Text(resp.to_string().into()))
+                    .await;
             }
 
             Some("list_dirs") => {
-                let conn: ConnectionTarget = match serde_json::from_value(cmd["connection"].clone()) {
+                let conn: ConnectionTarget = match serde_json::from_value(cmd["connection"].clone())
+                {
                     Ok(c) => c,
                     Err(_) => {
                         send_error(&ws_tx, "Invalid connection target").await;
@@ -80,7 +88,11 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
                 match result {
                     Ok(Ok(listing)) => {
                         let resp = json!({ "type": "dir_list", "listing": listing });
-                        let _ = ws_tx.lock().await.send(Message::Text(resp.to_string().into())).await;
+                        let _ = ws_tx
+                            .lock()
+                            .await
+                            .send(Message::Text(resp.to_string().into()))
+                            .await;
                     }
                     Ok(Err(e)) => send_error(&ws_tx, &e).await,
                     Err(e) => send_error(&ws_tx, &e.to_string()).await,
@@ -88,7 +100,8 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
             }
 
             Some("start_session") => {
-                let conn: ConnectionTarget = match serde_json::from_value(cmd["connection"].clone()) {
+                let conn: ConnectionTarget = match serde_json::from_value(cmd["connection"].clone())
+                {
                     Ok(c) => c,
                     Err(_) => {
                         send_error(&ws_tx, "Invalid connection target").await;
@@ -111,7 +124,11 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
                     "connection": &conn,
                     "dir": &dir,
                 });
-                let _ = ws_tx.lock().await.send(Message::Text(resp.to_string().into())).await;
+                let _ = ws_tx
+                    .lock()
+                    .await
+                    .send(Message::Text(resp.to_string().into()))
+                    .await;
 
                 // PTY で claude CLI を起動
                 let pty_result = tokio::task::spawn_blocking({
@@ -198,7 +215,11 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
                 if let Some(handle) = map.remove(&session_id) {
                     let _ = handle.stop_tx.send(());
                     let resp = json!({ "type": "session_stopped", "session_id": session_id });
-                    let _ = ws_tx.lock().await.send(Message::Text(resp.to_string().into())).await;
+                    let _ = ws_tx
+                        .lock()
+                        .await
+                        .send(Message::Text(resp.to_string().into()))
+                        .await;
                 }
             }
 
@@ -286,7 +307,9 @@ async fn stream_pty_output(
                 "session_id": &session_id,
                 "event": Value::String(remaining),
             });
-            let _ = ws_tx.lock().await
+            let _ = ws_tx
+                .lock()
+                .await
                 .send(Message::Text(event.to_string().into()))
                 .await;
         }
@@ -297,7 +320,11 @@ async fn stream_pty_output(
 
     // セッション完了通知
     let resp = json!({ "type": "session_completed", "session_id": &session_id });
-    let _ = ws_tx.lock().await.send(Message::Text(resp.to_string().into())).await;
+    let _ = ws_tx
+        .lock()
+        .await
+        .send(Message::Text(resp.to_string().into()))
+        .await;
 
     // セッションマップから削除
     sessions.lock().await.remove(&session_id);
@@ -308,7 +335,11 @@ async fn send_error(
     message: &str,
 ) {
     let resp = json!({ "type": "error", "message": message });
-    let _ = ws_tx.lock().await.send(Message::Text(resp.to_string().into())).await;
+    let _ = ws_tx
+        .lock()
+        .await
+        .send(Message::Text(resp.to_string().into()))
+        .await;
 }
 
 fn uuid_v4() -> String {
@@ -321,6 +352,60 @@ fn uuid_v4() -> String {
         u16::from_be_bytes([bytes[4], bytes[5]]),
         u16::from_be_bytes([bytes[6], bytes[7]]) & 0x0FFF,
         (u16::from_be_bytes([bytes[8], bytes[9]]) & 0x3FFF) | 0x8000,
-        u64::from_be_bytes([0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]])
+        u64::from_be_bytes([
+            0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ])
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uuid_v4_format() {
+        let id = uuid_v4();
+        // 8-4-4-4-12 format
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[0].len(), 8);
+        assert_eq!(parts[1].len(), 4);
+        assert_eq!(parts[2].len(), 4);
+        assert_eq!(parts[3].len(), 4);
+        assert_eq!(parts[4].len(), 12);
+    }
+
+    #[test]
+    fn uuid_v4_version_nibble() {
+        let id = uuid_v4();
+        let parts: Vec<&str> = id.split('-').collect();
+        // Third group starts with '4' (version 4)
+        assert!(parts[2].starts_with('4'));
+    }
+
+    #[test]
+    fn uuid_v4_variant_bits() {
+        let id = uuid_v4();
+        let parts: Vec<&str> = id.split('-').collect();
+        // Fourth group first char should be 8, 9, a, or b
+        let first_char = parts[3].chars().next().unwrap();
+        assert!(
+            "89ab".contains(first_char),
+            "variant nibble '{}' not in 89ab",
+            first_char
+        );
+    }
+
+    #[test]
+    fn uuid_v4_hex_chars() {
+        let id = uuid_v4();
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+    }
+
+    #[test]
+    fn uuid_v4_uniqueness() {
+        let a = uuid_v4();
+        let b = uuid_v4();
+        assert_ne!(a, b);
+    }
 }

@@ -1,31 +1,19 @@
-mod assets;
-mod auth;
-mod config;
-mod ws;
-mod pty;
-mod claude;
-mod filer;
-
-use axum::{
-    Router,
-    middleware,
-    routing::{get, post},
-};
-use config::Config;
-use std::sync::Arc;
-
-pub struct AppState {
-    pub config: Config,
-}
+use den::config::Config;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
-
     let config = Config::from_env();
     let port = config.port;
 
-    tracing::info!("Den v0.2 starting on port {}", port);
+    // env-filter 対応の tracing 初期化
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
+        )
+        .init();
+
+    tracing::info!("Den v0.2 starting on port {} ({})", port, config.env);
     tracing::info!("Shell: {}", config.shell);
     tracing::info!(
         "Password: {}",
@@ -36,27 +24,7 @@ async fn main() {
         }
     );
 
-    let state = Arc::new(AppState { config });
-
-    // 認証不要のルート
-    let public_routes = Router::new()
-        .route("/api/login", post(auth::login))
-        .route("/", get(assets::serve_index))
-        .route("/{*path}", get(assets::serve_static));
-
-    // 認証必要のルート
-    let protected_routes = Router::new()
-        .route("/api/ws", get(ws::ws_handler))
-        .route("/api/claude/ws", get(claude::ws::ws_handler))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            auth::auth_middleware,
-        ));
-
-    let app = Router::new()
-        .merge(protected_routes)
-        .merge(public_routes)
-        .with_state(state);
+    let app = den::create_app(config);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
         .await

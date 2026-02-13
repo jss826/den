@@ -1,4 +1,4 @@
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
 
 /// PTY セッションの生成結果
@@ -13,7 +13,11 @@ pub struct PtyManager;
 
 impl PtyManager {
     /// シェルプロセスを PTY で起動
-    pub fn spawn(shell: &str, cols: u16, rows: u16) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn spawn(
+        shell: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
         let pty_system = native_pty_system();
 
         let size = PtySize {
@@ -27,9 +31,7 @@ impl PtyManager {
 
         let mut cmd = CommandBuilder::new(shell);
         // Windows の場合、ホームディレクトリで起動
-        if let Ok(home) = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-        {
+        if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             cmd.cwd(home);
         }
 

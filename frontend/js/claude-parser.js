@@ -178,3 +178,4 @@ const ClaudeParser = (() => {
 
   return { parse, renderEvent };
 })();
+if (typeof module !== 'undefined') module.exports = ClaudeParser;

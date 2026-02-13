@@ -61,15 +61,56 @@ pub async fn auth_middleware(
         .or_else(|| {
             req.uri()
                 .query()
-                .and_then(|q| {
-                    q.split('&')
-                        .find_map(|pair| pair.strip_prefix("token="))
-                })
+                .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
                 .map(|s| s.to_string())
         });
 
     match token {
         Some(t) if t == expected_token => next.run(req).await,
         _ => StatusCode::UNAUTHORIZED.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_token_deterministic() {
+        let t1 = generate_token("password");
+        let t2 = generate_token("password");
+        assert_eq!(t1, t2);
+    }
+
+    #[test]
+    fn generate_token_hex_format() {
+        let token = generate_token("test");
+        assert_eq!(token.len(), 64); // SHA-256 = 32 bytes = 64 hex chars
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn generate_token_different_passwords() {
+        let t1 = generate_token("password1");
+        let t2 = generate_token("password2");
+        assert_ne!(t1, t2);
+    }
+
+    #[test]
+    fn generate_token_includes_salt() {
+        // Without salt, same password would produce different hash
+        // Verify our token differs from a plain SHA-256 of the password
+        let token = generate_token("test");
+        let mut plain_hasher = Sha256::new();
+        plain_hasher.update(b"test");
+        let plain = hex::encode(plain_hasher.finalize());
+        assert_ne!(token, plain);
+    }
+
+    #[test]
+    fn generate_token_empty_password() {
+        let token = generate_token("");
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
