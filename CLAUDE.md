@@ -24,6 +24,11 @@ DEN_PASSWORD=your_password cargo run
 | DEN_SHELL | cmd.exe (Win) / $SHELL | シェル |
 | DEN_DATA_DIR | ./data | データ保存ディレクトリ |
 
+## テスト
+```bash
+cargo test
+```
+
 ## バージョン計画
 - v0.1: Web ターミナル + タッチキーバー + 認証
 - v0.2: Claude Code 専用 UI (streaming-json)

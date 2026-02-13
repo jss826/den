@@ -1,6 +1,6 @@
 ---
 name: checker
-description: 'cargo check・build・clippy・test の検証エージェント。実装完了後の検証フェーズで使用する。'
+description: 'cargo fmt・check・build・clippy・test の検証エージェント。実装完了後の検証フェーズで使用する。'
 tools: Bash, Read, Grep, Glob
 ---
 
@@ -12,25 +12,31 @@ tools: Bash, Read, Grep, Glob
 
 以下を順番に実行する。各ステップが失敗しても次のステップに進む。
 
-### 1. cargo check
+### 1. cargo fmt
+
+```bash
+cargo fmt -- --check 2>&1
+```
+
+### 2. cargo check
 
 ```bash
 cargo check 2>&1
 ```
 
-### 2. cargo build
+### 3. cargo build
 
 ```bash
 cargo build 2>&1
 ```
 
-### 3. cargo clippy
+### 4. cargo clippy
 
 ```bash
 cargo clippy -- -D warnings 2>&1
 ```
 
-### 4. cargo test
+### 5. cargo test
 
 tests ディレクトリまたは `#[test]` が存在する場合のみ実行:
 
@@ -44,6 +50,7 @@ cargo test 2>&1
 
 | 検証 | 結果 | 詳細 |
 |------|------|------|
+| cargo fmt | Pass / Fail | 差分のあるファイル（あれば） |
 | cargo check | Pass / Fail | エラー内容（あれば） |
 | cargo build | Pass / Fail | エラー内容（あれば） |
 | cargo clippy | Pass / Fail | 警告内容（あれば） |
