@@ -535,6 +535,10 @@ html, body {
   z-index: 200;
 }
 
+.modal[hidden] {
+  display: none;
+}
+
 .modal-content {
   background: var(--surface);
   border: 1px solid var(--border);

@@ -5,11 +5,14 @@
   "scripts": {
     "lint": "eslint frontend/js/",
     "test": "node --test frontend/test/*.test.js",
-    "check": "npm run lint && npm test"
+    "check": "npm run lint && npm test",
+    "test:e2e": "playwright test",
+    "test:all": "npm run check && playwright test"
   },
   "devDependencies": {
     "eslint": "^9.0.0",
     "@eslint/js": "^9.0.0",
-    "globals": "^15.0.0"
+    "globals": "^15.0.0",
+    "@playwright/test": "^1.50.0"
   }
 }

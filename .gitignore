@@ -4,3 +4,6 @@ node_modules/
 !frontend/vendor/
 /data
 /data-dev
+/data-e2e
+test-results/
+playwright-report/
