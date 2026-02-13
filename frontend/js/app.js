@@ -22,11 +22,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 既にトークンがあればメイン画面へ
+  // 既にトークンがあればサーバーに有効性を確認してからメイン画面へ
   if (Auth.isLoggedIn()) {
-    showMain();
+    validateAndShow();
   } else {
     passwordInput.focus();
+  }
+
+  async function validateAndShow() {
+    try {
+      const resp = await fetch('/api/settings', {
+        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+      });
+      if (resp.ok) {
+        showMain();
+      } else {
+        Auth.clearToken();
+        loginScreen.hidden = false;
+        mainScreen.hidden = true;
+        passwordInput.focus();
+      }
+    } catch {
+      Auth.clearToken();
+      loginScreen.hidden = false;
+      mainScreen.hidden = true;
+      passwordInput.focus();
+    }
   }
 
   async function showMain() {
