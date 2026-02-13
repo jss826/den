@@ -9,6 +9,11 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::store::Settings;
 
+/// セッション ID が安全な文字列か検証
+fn is_valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// GET /api/settings
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> Json<Settings> {
     Json(state.store.load_settings())
@@ -38,6 +43,9 @@ pub async fn get_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_valid_id(&id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     match state.store.load_session_meta(&id) {
         Some(meta) => Json(meta).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -49,6 +57,9 @@ pub async fn get_session_events(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_valid_id(&id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     if state.store.load_session_meta(&id).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }

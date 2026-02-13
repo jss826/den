@@ -20,9 +20,10 @@ DEN_PASSWORD=your_password cargo run
 | DEN_PORT | 3939 (dev) / 8080 (prod) | リッスンポート |
 | DEN_ENV | development | development / production |
 | DEN_LOG_LEVEL | debug (dev) / info (prod) | ログレベル |
-| DEN_PASSWORD | den | ログインパスワード |
+| DEN_PASSWORD | (必須) | ログインパスワード |
 | DEN_SHELL | cmd.exe (Win) / $SHELL | シェル |
 | DEN_DATA_DIR | ./data | データ保存ディレクトリ |
+| DEN_BIND_ADDRESS | 127.0.0.1 (dev) / 0.0.0.0 (prod) | バインドアドレス |
 
 ## テスト
 ```bash

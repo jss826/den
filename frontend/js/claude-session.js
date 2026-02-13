@@ -24,7 +24,13 @@ const ClaudeSession = (() => {
     };
 
     ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
+      let msg;
+      try {
+        msg = JSON.parse(e.data);
+      } catch {
+        console.warn('Invalid JSON from WebSocket:', e.data);
+        return;
+      }
       handleMessage(msg);
     };
 
@@ -156,11 +162,11 @@ const ClaudeSession = (() => {
     closeModal();
   }
 
-  function selectConnection(conn) {
+  function selectConnection(conn, clickedBtn) {
     selectedConnection = conn;
     // ボタンの active 状態更新
     document.querySelectorAll('.conn-btn').forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
+    if (clickedBtn) clickedBtn.classList.add('active');
     // ディレクトリ再取得
     currentDirPath = '~';
     send({ type: 'list_dirs', connection: conn, path: '~' });
@@ -179,16 +185,16 @@ const ClaudeSession = (() => {
     const container = document.getElementById('modal-connections');
     // ローカルボタンは残す
     container.innerHTML = '<button class="conn-btn active" data-conn="local">Local</button>';
-    container.querySelector('[data-conn="local"]').addEventListener('click', () => {
-      selectConnection({ type: 'local' });
+    container.querySelector('[data-conn="local"]').addEventListener('click', (e) => {
+      selectConnection({ type: 'local' }, e.currentTarget);
     });
 
     hosts.forEach(h => {
       const btn = document.createElement('button');
       btn.className = 'conn-btn';
       btn.textContent = h.name;
-      btn.addEventListener('click', () => {
-        selectConnection({ type: 'ssh', host: h.name });
+      btn.addEventListener('click', (e) => {
+        selectConnection({ type: 'ssh', host: h.name }, e.currentTarget);
       });
       container.appendChild(btn);
     });
@@ -220,11 +226,21 @@ const ClaudeSession = (() => {
 
       const connLabel = s.connection.type === 'local' ? 'Local' : s.connection.host;
       const shortDir = s.dir.split(/[/\\]/).pop() || s.dir;
-      const statusDot = s.status === 'running' ? '●' : '○';
+      const statusDot = s.status === 'running' ? '\u25CF' : '\u25CB';
 
-      div.innerHTML = `<span class="session-status">${statusDot}</span>
-        <span class="session-info"><span class="session-name">${shortDir}</span>
-        <span class="session-conn">${connLabel}</span></span>`;
+      const statusSpan = document.createElement('span');
+      statusSpan.className = 'session-status';
+      statusSpan.textContent = statusDot;
+      const infoSpan = document.createElement('span');
+      infoSpan.className = 'session-info';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'session-name';
+      nameSpan.textContent = shortDir;
+      const connSpan = document.createElement('span');
+      connSpan.className = 'session-conn';
+      connSpan.textContent = connLabel;
+      infoSpan.append(nameSpan, connSpan);
+      div.append(statusSpan, infoSpan);
 
       div.addEventListener('click', () => {
         activeSessionId = s.id;

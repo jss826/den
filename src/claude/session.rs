@@ -20,6 +20,19 @@ pub fn new_session_map() -> SessionMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// working_dir が cmd.exe に安全か検証（メタ文字を拒否）
+fn validate_working_dir(dir: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if dir.is_empty() {
+        return Err("working_dir is empty".into());
+    }
+    // cmd.exe のメタ文字を拒否
+    const DANGEROUS_CHARS: &[char] = &['&', '|', '>', '<', '^', '%', '!', '`', '"', '\'', ';'];
+    if dir.chars().any(|c| DANGEROUS_CHARS.contains(&c)) {
+        return Err(format!("working_dir contains unsafe characters: {}", dir).into());
+    }
+    Ok(())
+}
+
 /// Claude CLI コマンドを組み立て、PTY で起動
 pub fn spawn_claude_session(
     connection: &ConnectionTarget,
@@ -37,6 +50,7 @@ pub fn spawn_claude_session(
     let (shell, args) = match connection {
         ConnectionTarget::Local => {
             if cfg!(windows) {
+                validate_working_dir(working_dir)?;
                 (
                     "cmd.exe".to_string(),
                     vec![

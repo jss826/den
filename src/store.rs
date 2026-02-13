@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// サーバーサイド永続化ストア
@@ -64,6 +64,11 @@ pub struct SessionMeta {
     pub duration_ms: Option<u64>,
 }
 
+/// セッション ID が安全な文字列か検証（英数字・ハイフンのみ許可）
+fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 // --- Store 実装 ---
 
 impl Store {
@@ -99,6 +104,12 @@ impl Store {
     // --- Sessions ---
 
     pub fn create_session(&self, meta: &SessionMeta) -> std::io::Result<()> {
+        if !is_valid_session_id(&meta.id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid session ID",
+            ));
+        }
         let session_dir = self.root.join("sessions").join(&meta.id);
         fs::create_dir_all(&session_dir)?;
 
@@ -113,6 +124,12 @@ impl Store {
     }
 
     pub fn append_event(&self, session_id: &str, line: &str) -> std::io::Result<()> {
+        if !is_valid_session_id(session_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid session ID",
+            ));
+        }
         let path = self
             .root
             .join("sessions")
@@ -127,6 +144,12 @@ impl Store {
     }
 
     pub fn update_session_meta(&self, meta: &SessionMeta) -> std::io::Result<()> {
+        if !is_valid_session_id(&meta.id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid session ID",
+            ));
+        }
         let path = self.root.join("sessions").join(&meta.id).join("meta.json");
         let json = serde_json::to_string_pretty(meta)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -160,20 +183,33 @@ impl Store {
     }
 
     pub fn load_session_meta(&self, id: &str) -> Option<SessionMeta> {
+        if !is_valid_session_id(id) {
+            return None;
+        }
         let session_dir = self.root.join("sessions").join(id);
         self.load_session_meta_from_path(&session_dir)
     }
 
     pub fn load_session_events(&self, id: &str) -> Vec<String> {
-        let path = self.root.join("sessions").join(id).join("events.jsonl");
-        match fs::read_to_string(&path) {
-            Ok(content) => content
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.to_string())
-                .collect(),
-            Err(_) => Vec::new(),
+        if !is_valid_session_id(id) {
+            return Vec::new();
         }
+        let path = self.root.join("sessions").join(id).join("events.jsonl");
+        let file = match fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => return Vec::new(),
+        };
+        std::io::BufReader::new(file)
+            .lines()
+            .filter_map(|line| {
+                let line = line.ok()?;
+                if line.trim().is_empty() {
+                    None
+                } else {
+                    Some(line)
+                }
+            })
+            .collect()
     }
 
     fn load_session_meta_from_path(&self, dir: &Path) -> Option<SessionMeta> {
@@ -313,6 +349,24 @@ mod tests {
         let loaded = store.load_session_meta("sess-up").unwrap();
         assert_eq!(loaded.status, "completed");
         assert!(loaded.total_cost.is_some());
+    }
+
+    #[test]
+    fn path_traversal_rejected() {
+        let (store, _tmp) = temp_store();
+        // ".." を含む ID は拒否
+        let meta = sample_meta("../escape");
+        assert!(store.create_session(&meta).is_err());
+        assert!(store.load_session_meta("../escape").is_none());
+        assert!(store.load_session_events("../../../etc/passwd").is_empty());
+        assert!(store.append_event("../escape", "data").is_err());
+    }
+
+    #[test]
+    fn empty_session_id_rejected() {
+        let (store, _tmp) = temp_store();
+        let meta = sample_meta("");
+        assert!(store.create_session(&meta).is_err());
     }
 
     #[test]

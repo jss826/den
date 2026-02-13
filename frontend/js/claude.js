@@ -92,9 +92,17 @@ const DenClaude = (() => {
 
     const connLabel = session.connection.type === 'local' ? 'Local' : session.connection.host;
     const statusClass = session.status === 'running' ? 'running' : 'done';
-    header.innerHTML = `<span class="header-conn">${connLabel}</span>
-      <span class="header-dir">${session.dir}</span>
-      <span class="header-status ${statusClass}">${session.status}</span>`;
+    header.innerHTML = '';
+    const connSpan = document.createElement('span');
+    connSpan.className = 'header-conn';
+    connSpan.textContent = connLabel;
+    const dirSpan = document.createElement('span');
+    dirSpan.className = 'header-dir';
+    dirSpan.textContent = session.dir;
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'header-status ' + statusClass;
+    statusSpan.textContent = session.status;
+    header.append(connSpan, dirSpan, statusSpan);
   }
 
   function appendError(message) {
@@ -161,10 +169,20 @@ const DenClaude = (() => {
     // ヘッダーを読み取り専用で更新
     const header = document.getElementById('claude-header');
     const connLabel = meta.connection?.type === 'local' ? 'Local' : (meta.connection?.host || '?');
-    header.innerHTML = `<span class="header-conn">${connLabel}</span>
-      <span class="header-dir">${meta.working_dir}</span>
-      <span class="header-status">${meta.status}</span>
-      <span class="header-replay">replay</span>`;
+    header.innerHTML = '';
+    const connSpan = document.createElement('span');
+    connSpan.className = 'header-conn';
+    connSpan.textContent = connLabel;
+    const dirSpan = document.createElement('span');
+    dirSpan.className = 'header-dir';
+    dirSpan.textContent = meta.working_dir;
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'header-status';
+    statusSpan.textContent = meta.status;
+    const replaySpan = document.createElement('span');
+    replaySpan.className = 'header-replay';
+    replaySpan.textContent = 'replay';
+    header.append(connSpan, dirSpan, statusSpan, replaySpan);
 
     // 入力エリアを無効化
     document.getElementById('claude-input').disabled = true;

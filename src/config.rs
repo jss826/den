@@ -36,6 +36,7 @@ pub struct Config {
     pub env: Environment,
     pub log_level: String,
     pub data_dir: String,
+    pub bind_address: String,
 }
 
 impl Config {
@@ -55,7 +56,14 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default_port);
 
-        let password = env::var("DEN_PASSWORD").unwrap_or_else(|_| "den".to_string());
+        let password = match env::var("DEN_PASSWORD") {
+            Ok(p) if !p.is_empty() => p,
+            _ => {
+                eprintln!("ERROR: DEN_PASSWORD environment variable is required.");
+                eprintln!("  Set it before starting Den: DEN_PASSWORD=your_password cargo run");
+                std::process::exit(1);
+            }
+        };
 
         let shell = env::var("DEN_SHELL").unwrap_or_else(|_| {
             if cfg!(windows) {
@@ -73,6 +81,13 @@ impl Config {
 
         let data_dir = env::var("DEN_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
 
+        let default_bind = match env {
+            Environment::Development => "127.0.0.1",
+            Environment::Production => "0.0.0.0",
+        };
+        let bind_address =
+            env::var("DEN_BIND_ADDRESS").unwrap_or_else(|_| default_bind.to_string());
+
         Self {
             port,
             password,
@@ -80,6 +95,7 @@ impl Config {
             env,
             log_level,
             data_dir,
+            bind_address,
         }
     }
 }
@@ -95,10 +111,11 @@ mod tests {
         unsafe {
             env::remove_var("DEN_ENV");
             env::remove_var("DEN_PORT");
-            env::remove_var("DEN_PASSWORD");
+            env::set_var("DEN_PASSWORD", "test_password");
             env::remove_var("DEN_SHELL");
             env::remove_var("DEN_LOG_LEVEL");
             env::remove_var("DEN_DATA_DIR");
+            env::remove_var("DEN_BIND_ADDRESS");
         }
     }
 
@@ -109,8 +126,9 @@ mod tests {
         let config = Config::from_env();
         assert_eq!(config.env, Environment::Development);
         assert_eq!(config.port, 3939);
-        assert_eq!(config.password, "den");
+        assert_eq!(config.password, "test_password");
         assert_eq!(config.log_level, "debug");
+        assert_eq!(config.bind_address, "127.0.0.1");
     }
 
     #[test]
@@ -122,6 +140,7 @@ mod tests {
         assert_eq!(config.env, Environment::Production);
         assert_eq!(config.port, 8080);
         assert_eq!(config.log_level, "info");
+        assert_eq!(config.bind_address, "0.0.0.0");
         clear_env();
     }
 
@@ -152,6 +171,16 @@ mod tests {
         unsafe { env::set_var("DEN_PASSWORD", "secret123") };
         let config = Config::from_env();
         assert_eq!(config.password, "secret123");
+        clear_env();
+    }
+
+    #[test]
+    #[serial]
+    fn custom_bind_address() {
+        clear_env();
+        unsafe { env::set_var("DEN_BIND_ADDRESS", "192.168.1.100") };
+        let config = Config::from_env();
+        assert_eq!(config.bind_address, "192.168.1.100");
         clear_env();
     }
 

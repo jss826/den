@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::AppState;
-use crate::auth::generate_token;
+use crate::auth::validate_token;
 use crate::store::{SessionMeta, Store};
 
 use super::connection::{self, ConnectionTarget};
@@ -31,8 +31,7 @@ pub async fn ws_handler(
     Query(query): Query<ClaudeWsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let expected = generate_token(&state.config.password);
-    if query.token != expected {
+    if !validate_token(&query.token, &state.config.password) {
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -299,7 +298,7 @@ async fn stream_pty_output(
                             // 改行ごとに JSON イベントとして送信
                             while let Some(pos) = line_buf.find('\n') {
                                 let line = line_buf[..pos].trim().to_string();
-                                line_buf = line_buf[pos + 1..].to_string();
+                                line_buf.drain(..=pos);
 
                                 if line.is_empty() {
                                     continue;
