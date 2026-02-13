@@ -34,6 +34,10 @@ const DenClaude = (() => {
         updateHeader(sessionId);
         break;
 
+      case 'replay_session':
+        replaySession(msg.meta, msg.events);
+        break;
+
       case 'error':
         appendError(msg.message);
         break;
@@ -66,6 +70,10 @@ const DenClaude = (() => {
   function showSession(sessionId) {
     const container = document.getElementById('claude-messages');
     container.innerHTML = '';
+
+    // 入力エリアを再有効化
+    document.getElementById('claude-input').disabled = false;
+    document.getElementById('claude-send').disabled = false;
 
     const history = messageHistory[sessionId] || [];
     for (const el of history) {
@@ -143,6 +151,34 @@ const DenClaude = (() => {
 
     ClaudeSession.sendPrompt(sessionId, prompt);
     input.value = '';
+    scrollToBottom();
+  }
+
+  function replaySession(meta, events) {
+    const container = document.getElementById('claude-messages');
+    container.innerHTML = '';
+
+    // ヘッダーを読み取り専用で更新
+    const header = document.getElementById('claude-header');
+    const connLabel = meta.connection?.type === 'local' ? 'Local' : (meta.connection?.host || '?');
+    header.innerHTML = `<span class="header-conn">${connLabel}</span>
+      <span class="header-dir">${meta.working_dir}</span>
+      <span class="header-status">${meta.status}</span>
+      <span class="header-replay">replay</span>`;
+
+    // 入力エリアを無効化
+    document.getElementById('claude-input').disabled = true;
+    document.getElementById('claude-send').disabled = true;
+
+    // イベントを順番にレンダリング
+    for (const eventStr of events) {
+      const event = ClaudeParser.parse(eventStr);
+      if (!event) continue;
+      const element = ClaudeParser.renderEvent(event);
+      if (!element) continue;
+      if (element instanceof DocumentFragment) continue;
+      container.appendChild(element);
+    }
     scrollToBottom();
   }
 

@@ -35,6 +35,7 @@ pub struct Config {
     pub shell: String,
     pub env: Environment,
     pub log_level: String,
+    pub data_dir: String,
 }
 
 impl Config {
@@ -45,8 +46,8 @@ impl Config {
             .unwrap_or(Environment::Development);
 
         let default_port = match env {
-            Environment::Development => 8080,
-            Environment::Production => 3000,
+            Environment::Development => 3939,
+            Environment::Production => 8080,
         };
 
         let port = env::var("DEN_PORT")
@@ -70,12 +71,15 @@ impl Config {
         };
         let log_level = env::var("DEN_LOG_LEVEL").unwrap_or_else(|_| default_log_level.to_string());
 
+        let data_dir = env::var("DEN_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+
         Self {
             port,
             password,
             shell,
             env,
             log_level,
+            data_dir,
         }
     }
 }
@@ -94,6 +98,7 @@ mod tests {
             env::remove_var("DEN_PASSWORD");
             env::remove_var("DEN_SHELL");
             env::remove_var("DEN_LOG_LEVEL");
+            env::remove_var("DEN_DATA_DIR");
         }
     }
 
@@ -103,7 +108,7 @@ mod tests {
         clear_env();
         let config = Config::from_env();
         assert_eq!(config.env, Environment::Development);
-        assert_eq!(config.port, 8080);
+        assert_eq!(config.port, 3939);
         assert_eq!(config.password, "den");
         assert_eq!(config.log_level, "debug");
     }
@@ -115,7 +120,7 @@ mod tests {
         unsafe { env::set_var("DEN_ENV", "production") };
         let config = Config::from_env();
         assert_eq!(config.env, Environment::Production);
-        assert_eq!(config.port, 3000);
+        assert_eq!(config.port, 8080);
         assert_eq!(config.log_level, "info");
         clear_env();
     }
@@ -136,7 +141,7 @@ mod tests {
         clear_env();
         unsafe { env::set_var("DEN_PORT", "not_a_number") };
         let config = Config::from_env();
-        assert_eq!(config.port, 8080);
+        assert_eq!(config.port, 3939);
         clear_env();
     }
 

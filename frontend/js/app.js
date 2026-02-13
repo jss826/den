@@ -29,9 +29,14 @@ document.addEventListener('DOMContentLoaded', () => {
     passwordInput.focus();
   }
 
-  function showMain() {
+  async function showMain() {
     loginScreen.hidden = true;
     mainScreen.hidden = false;
+
+    // 設定ロード＆適用
+    await DenSettings.load();
+    DenSettings.apply();
+    DenSettings.bindUI();
 
     // ターミナル初期化
     const container = document.getElementById('terminal-container');

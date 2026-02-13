@@ -721,3 +721,134 @@ html, body {
     }
   }
 }
+
+/* === 設定ボタン (タブバー内) === */
+
+.tab-spacer {
+  flex: 1;
+}
+
+.tab-icon-btn {
+  background: none;
+  border: none;
+  color: var(--border);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  transition: color 0.15s;
+}
+
+.tab-icon-btn:hover {
+  color: var(--fg);
+}
+
+/* === 設定モーダル === */
+
+.settings-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--fg);
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+}
+
+.settings-input:focus {
+  border-color: var(--accent);
+}
+
+/* === サイドバー History セクション === */
+
+.sidebar-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 12px;
+}
+
+.sidebar-section-label {
+  padding: 4px 12px;
+  font-size: 0.7rem;
+  color: var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.claude-history {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.history-empty {
+  padding: 12px;
+  font-size: 0.75rem;
+  color: var(--border);
+  text-align: center;
+}
+
+.history-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  font-size: 0.75rem;
+}
+
+.history-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-status {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--accent);
+}
+
+.history-dir {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.history-date {
+  flex-shrink: 0;
+  color: var(--border);
+  font-size: 0.65rem;
+}
+
+.history-prompt {
+  color: var(--border);
+  font-size: 0.7rem;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-meta {
+  color: var(--border);
+  font-size: 0.65rem;
+  margin-top: 1px;
+}
+
+/* === Replay ヘッダー === */
+
+.header-replay {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(122,162,247,0.2);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

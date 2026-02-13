@@ -35,14 +35,14 @@ DEN_PASSWORD=your_password cargo run
 DEN_ENV=production DEN_PASSWORD=your_password cargo run
 ```
 
-ブラウザで `http://localhost:8080` (dev) または `http://localhost:3000` (prod) を開く。
+ブラウザで `http://localhost:3939` (dev) または `http://localhost:8080` (prod) を開く。
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEN_ENV` | `development` | `development` / `production` |
-| `DEN_PORT` | `8080` (dev) / `3000` (prod) | Listen port |
+| `DEN_PORT` | `3939` (dev) / `8080` (prod) | Listen port |
 | `DEN_PASSWORD` | `den` | Login password |
 | `DEN_SHELL` | `cmd.exe` (Win) / `$SHELL` | Shell for terminal |
 | `DEN_LOG_LEVEL` | `debug` (dev) / `info` (prod) | Log level filter |

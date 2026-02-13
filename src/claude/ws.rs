@@ -5,6 +5,7 @@ use axum::{
     },
     response::IntoResponse,
 };
+use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,6 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::AppState;
 use crate::auth::generate_token;
+use crate::store::{SessionMeta, Store};
 
 use super::connection::{self, ConnectionTarget};
 use super::session::{self, SessionMap};
@@ -35,10 +37,11 @@ pub async fn ws_handler(
     }
 
     let sessions = session::new_session_map();
-    ws.on_upgrade(move |socket| handle_claude_ws(socket, sessions))
+    let store = state.store.clone();
+    ws.on_upgrade(move |socket| handle_claude_ws(socket, sessions, store))
 }
 
-async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
+async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store) {
     let (ws_tx, mut ws_rx) = socket.split();
     let ws_tx = Arc::new(Mutex::new(ws_tx));
 
@@ -117,6 +120,22 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
                     continue;
                 }
 
+                // Store にセッションメタを永続化
+                let meta = SessionMeta {
+                    id: session_id.clone(),
+                    prompt: prompt.clone(),
+                    connection: serde_json::to_value(&conn).unwrap_or_default(),
+                    working_dir: dir.clone(),
+                    status: "running".to_string(),
+                    created_at: Utc::now(),
+                    finished_at: None,
+                    total_cost: None,
+                    duration_ms: None,
+                };
+                if let Err(e) = store.create_session(&meta) {
+                    tracing::error!("Failed to persist session meta: {}", e);
+                }
+
                 // セッション開始通知
                 let resp = json!({
                     "type": "session_created",
@@ -180,6 +199,8 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
                     Arc::clone(&ws_tx),
                     Arc::clone(&sessions),
                     stop_rx,
+                    store.clone(),
+                    meta,
                 ));
             }
 
@@ -234,13 +255,15 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap) {
     }
 }
 
-/// PTY の出力を WebSocket に中継
+/// PTY の出力を WebSocket に中継 + Store に永続化
 async fn stream_pty_output(
     session_id: String,
     mut reader: Box<dyn std::io::Read + Send>,
     ws_tx: Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
     sessions: SessionMap,
     mut stop_rx: tokio::sync::oneshot::Receiver<()>,
+    store: Store,
+    mut meta: SessionMeta,
 ) {
     let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
@@ -282,6 +305,11 @@ async fn stream_pty_output(
                                     continue;
                                 }
 
+                                // Store にイベント追記
+                                if let Err(e) = store.append_event(&session_id, &line) {
+                                    tracing::warn!("Failed to append event: {}", e);
+                                }
+
                                 let event = json!({
                                     "type": "claude_event",
                                     "session_id": &session_id,
@@ -302,6 +330,10 @@ async fn stream_pty_output(
         // 残りのバッファを送信
         let remaining = line_buf.trim().to_string();
         if !remaining.is_empty() {
+            if let Err(e) = store.append_event(&session_id, &remaining) {
+                tracing::warn!("Failed to append final event: {}", e);
+            }
+
             let event = json!({
                 "type": "claude_event",
                 "session_id": &session_id,
@@ -317,6 +349,22 @@ async fn stream_pty_output(
 
     forward.await;
     read_task.abort();
+
+    // セッション完了 → メタデータ更新
+    meta.status = "completed".to_string();
+    meta.finished_at = Some(Utc::now());
+    if let Ok(duration) = meta
+        .finished_at
+        .unwrap()
+        .signed_duration_since(meta.created_at)
+        .num_milliseconds()
+        .try_into()
+    {
+        meta.duration_ms = Some(duration);
+    }
+    if let Err(e) = store.update_session_meta(&meta) {
+        tracing::error!("Failed to update session meta: {}", e);
+    }
 
     // セッション完了通知
     let resp = json!({ "type": "session_completed", "session_id": &session_id });

@@ -5,18 +5,29 @@ use den::config::{Config, Environment};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
 fn test_config() -> Config {
+    let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("den-test-{}-{}", std::process::id(), id));
     Config {
         port: 0,
         password: "testpass".to_string(),
         shell: "cmd.exe".to_string(),
         env: Environment::Development,
         log_level: "debug".to_string(),
+        data_dir: tmp.to_string_lossy().to_string(),
     }
 }
 
 fn test_app() -> axum::Router {
     den::create_app(test_config())
+}
+
+fn auth_header() -> String {
+    format!("Bearer {}", generate_token("testpass"))
 }
 
 // --- POST /api/login ---
@@ -191,6 +202,119 @@ async fn static_404() {
     let app = test_app();
     let req = Request::builder()
         .uri("/nonexistent.xyz")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// --- Settings API ---
+
+#[tokio::test]
+async fn settings_get_default() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["font_size"], 14);
+    assert_eq!(json["theme"], "dark");
+    assert_eq!(json["terminal_scrollback"], 1000);
+}
+
+#[tokio::test]
+async fn settings_put_and_get() {
+    let config = test_config();
+    let app = den::create_app(config);
+
+    // PUT
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"font_size":20,"theme":"dark","terminal_scrollback":2000}"#,
+        ))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["font_size"], 20);
+    assert_eq!(json["terminal_scrollback"], 2000);
+}
+
+#[tokio::test]
+async fn settings_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/settings")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- Sessions API ---
+
+#[tokio::test]
+async fn sessions_list_empty() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sessions")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn sessions_get_not_found() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sessions/nonexistent")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sessions_events_not_found() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sessions/nonexistent/events")
+        .header(header::AUTHORIZATION, auth_header())
         .body(Body::empty())
         .unwrap();
 

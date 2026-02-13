@@ -17,9 +17,12 @@ DEN_PASSWORD=your_password cargo run
 ## 環境変数
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| DEN_PORT | 8080 | リッスンポート |
+| DEN_PORT | 3939 (dev) / 8080 (prod) | リッスンポート |
+| DEN_ENV | development | development / production |
+| DEN_LOG_LEVEL | debug (dev) / info (prod) | ログレベル |
 | DEN_PASSWORD | den | ログインパスワード |
 | DEN_SHELL | cmd.exe (Win) / $SHELL | シェル |
+| DEN_DATA_DIR | ./data | データ保存ディレクトリ |
 
 ## バージョン計画
 - v0.1: Web ターミナル + タッチキーバー + 認証

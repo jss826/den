@@ -11,6 +11,7 @@ const ClaudeSession = (() => {
     onEvent = eventCallback;
     connectWs(token);
     bindUI();
+    loadHistory();
   }
 
   function connectWs(token) {
@@ -71,6 +72,8 @@ const ClaudeSession = (() => {
           renderSessionList();
         }
         if (onEvent) onEvent(msg.session_id, msg);
+        // 履歴を再取得
+        loadHistory();
         break;
 
       case 'session_stopped':
@@ -79,11 +82,20 @@ const ClaudeSession = (() => {
           renderSessionList();
         }
         if (onEvent) onEvent(msg.session_id, msg);
+        loadHistory();
         break;
 
       case 'error':
         if (onEvent) onEvent(null, msg);
         break;
+    }
+  }
+
+  async function loadHistory() {
+    await SessionHistory.load();
+    const container = document.getElementById('claude-history-list');
+    if (container) {
+      SessionHistory.render(container);
     }
   }
 
@@ -98,14 +110,33 @@ const ClaudeSession = (() => {
     document.getElementById('claude-modal').addEventListener('click', (e) => {
       if (e.target.id === 'claude-modal') closeModal();
     });
+
+    // 履歴リプレイコールバック
+    SessionHistory.setReplayCallback((meta, events) => {
+      if (onEvent) onEvent(meta.id, {
+        type: 'replay_session',
+        session_id: meta.id,
+        meta: meta,
+        events: events,
+      });
+    });
   }
 
   function openModal() {
     document.getElementById('claude-modal').hidden = false;
     document.getElementById('modal-prompt').value = '';
-    // 初期ディレクトリ取得
-    currentDirPath = '~';
-    send({ type: 'list_dirs', connection: selectedConnection, path: '~' });
+
+    // デフォルト接続先を適用
+    const defaultConn = DenSettings.get('claude_default_connection');
+    if (defaultConn) {
+      selectedConnection = defaultConn;
+    }
+
+    // デフォルトディレクトリを適用
+    const defaultDir = DenSettings.get('claude_default_dir');
+    currentDirPath = defaultDir || '~';
+
+    send({ type: 'list_dirs', connection: selectedConnection, path: currentDirPath });
   }
 
   function closeModal() {
