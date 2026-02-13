@@ -49,6 +49,16 @@ const DenTerminal = (() => {
     term.open(container);
     fitAddon.fit();
 
+    // iPad 等でレイアウト確定前に fit() が空振りする対策
+    requestAnimationFrame(() => {
+      fitAddon.fit();
+      sendResize();
+    });
+    setTimeout(() => {
+      fitAddon.fit();
+      sendResize();
+    }, 200);
+
     // リサイズ監視
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
