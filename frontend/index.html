@@ -28,13 +28,64 @@
     <!-- タブバー -->
     <div id="tab-bar">
       <button class="tab active" data-tab="terminal">Terminal</button>
-      <!-- v0.2: <button class="tab" data-tab="claude">Claude</button> -->
+      <button class="tab" data-tab="claude">Claude</button>
       <!-- v0.3: <button class="tab" data-tab="filer">Files</button> -->
     </div>
 
     <!-- ターミナル -->
     <div id="terminal-pane" class="pane">
       <div id="terminal-container"></div>
+    </div>
+
+    <!-- Claude -->
+    <div id="claude-pane" class="pane" hidden>
+      <div class="claude-layout">
+        <!-- サイドバー -->
+        <div class="claude-sidebar">
+          <button id="claude-new-session" class="claude-new-btn">+ New Session</button>
+          <div id="claude-session-list" class="claude-sessions"></div>
+        </div>
+        <!-- メインエリア -->
+        <div class="claude-main">
+          <div id="claude-header" class="claude-header"></div>
+          <div id="claude-messages" class="claude-messages"></div>
+          <div class="claude-input-area">
+            <textarea id="claude-input" class="claude-input" placeholder="Message..." rows="3"></textarea>
+            <button id="claude-send" class="claude-send-btn">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新規セッションモーダル -->
+    <div id="claude-modal" class="modal" hidden>
+      <div class="modal-content">
+        <h3>New Claude Session</h3>
+        <div class="modal-section">
+          <label>Connection</label>
+          <div id="modal-connections" class="modal-connections">
+            <button class="conn-btn active" data-conn="local">Local</button>
+          </div>
+        </div>
+        <div class="modal-section">
+          <label>Working Directory</label>
+          <div id="modal-dir-browser" class="dir-browser">
+            <div class="dir-path">
+              <button id="dir-up" class="dir-up-btn">..</button>
+              <span id="dir-current"></span>
+            </div>
+            <div id="dir-list" class="dir-list"></div>
+          </div>
+        </div>
+        <div class="modal-section">
+          <label>Prompt</label>
+          <textarea id="modal-prompt" class="modal-prompt" placeholder="What would you like Claude to do?" rows="3"></textarea>
+        </div>
+        <div class="modal-actions">
+          <button id="modal-cancel" class="modal-btn">Cancel</button>
+          <button id="modal-start" class="modal-btn primary">Start</button>
+        </div>
+      </div>
     </div>
 
     <!-- キーバー (タッチ用) -->
@@ -47,6 +98,9 @@
   <script src="/js/auth.js"></script>
   <script src="/js/terminal.js"></script>
   <script src="/js/keybar.js"></script>
+  <script src="/js/claude-parser.js"></script>
+  <script src="/js/claude-session.js"></script>
+  <script src="/js/claude.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

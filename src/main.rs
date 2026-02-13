@@ -25,7 +25,7 @@ async fn main() {
     let config = Config::from_env();
     let port = config.port;
 
-    tracing::info!("Den v0.1 starting on port {}", port);
+    tracing::info!("Den v0.2 starting on port {}", port);
     tracing::info!("Shell: {}", config.shell);
     tracing::info!(
         "Password: {}",
@@ -47,6 +47,7 @@ async fn main() {
     // 認証必要のルート
     let protected_routes = Router::new()
         .route("/api/ws", get(ws::ws_handler))
+        .route("/api/claude/ws", get(claude::ws::ws_handler))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::auth_middleware,

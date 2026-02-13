@@ -1,3 +1,4 @@
-// v0.2: Claude Code 専用 UI
-// pub mod process;
-// pub mod protocol;
+pub mod connection;
+pub mod session;
+pub mod ssh_config;
+pub mod ws;

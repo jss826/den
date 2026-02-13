@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const passwordInput = document.getElementById('password-input');
   const loginError = document.getElementById('login-error');
 
+  let claudeInitialized = false;
+
   // ログイン処理
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -41,11 +43,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // タブ切り替え
     document.querySelectorAll('.tab').forEach((tab) => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-        tab.classList.add('active');
-        // v0.2, v0.3 でペイン切り替え実装
-      });
+      tab.addEventListener('click', () => switchTab(tab.dataset.tab));
     });
+  }
+
+  function switchTab(tabName) {
+    // タブボタン更新
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+
+    // ペイン表示切り替え
+    document.getElementById('terminal-pane').hidden = tabName !== 'terminal';
+    document.getElementById('claude-pane').hidden = tabName !== 'claude';
+
+    // キーバーはターミナル時のみ
+    const keybar = document.getElementById('keybar');
+    if (tabName === 'terminal') {
+      if (Keybar.isTouchDevice()) keybar.classList.add('visible');
+      DenTerminal.focus();
+    } else {
+      keybar.classList.remove('visible');
+    }
+
+    // Claude 初期化（初回のみ）
+    if (tabName === 'claude' && !claudeInitialized) {
+      claudeInitialized = true;
+      DenClaude.init(Auth.getToken());
+    }
   }
 });

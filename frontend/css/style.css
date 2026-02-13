@@ -195,6 +195,505 @@ html, body {
   background: var(--error);
 }
 
+/* === Claude UI === */
+
+.claude-layout {
+  display: flex;
+  height: 100%;
+}
+
+.claude-sidebar {
+  width: 200px;
+  min-width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.claude-new-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin: 8px;
+  border-radius: 6px;
+}
+
+.claude-new-btn:active {
+  opacity: 0.8;
+}
+
+.claude-sessions {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  font-size: 0.8rem;
+}
+
+.session-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.session-item.active {
+  border-left-color: var(--accent);
+  background: rgba(122,162,247,0.1);
+}
+
+.session-status {
+  font-size: 0.7rem;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.session-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.session-name {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-conn {
+  color: var(--border);
+  font-size: 0.7rem;
+}
+
+.claude-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.claude-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  min-height: 36px;
+}
+
+.header-conn {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.header-dir {
+  color: var(--fg);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--border);
+}
+
+.header-status.running {
+  background: #9ece6a;
+  color: var(--bg);
+}
+
+.header-hint {
+  color: var(--border);
+}
+
+.claude-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* メッセージ */
+.msg {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.msg-system {
+  background: rgba(122,162,247,0.1);
+  color: var(--border);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.msg-system .msg-label {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.msg-assistant {
+  background: var(--surface);
+}
+
+.msg-text {
+  word-break: break-word;
+}
+
+.msg-text code {
+  background: rgba(255,255,255,0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.8rem;
+}
+
+.msg-text .code-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-size: 0.8rem;
+}
+
+.msg-user {
+  background: rgba(122,162,247,0.15);
+  align-self: flex-end;
+  max-width: 80%;
+}
+
+.msg-error {
+  background: rgba(247,118,142,0.15);
+  color: var(--error);
+}
+
+.msg-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+}
+
+.result-status {
+  font-weight: 600;
+  color: #9ece6a;
+}
+
+.result-status.error {
+  color: var(--error);
+}
+
+.result-meta {
+  color: var(--border);
+}
+
+/* ツール表示 */
+.tool-use {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.tool-header:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.tool-icon {
+  font-size: 0.75rem;
+}
+
+.tool-name {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.tool-body {
+  border-top: 1px solid var(--border);
+}
+
+.tool-body.collapsed {
+  display: none;
+}
+
+.tool-input, .tool-output {
+  padding: 8px 10px;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-input {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tool-result {
+  border-top: 1px solid var(--border);
+}
+
+.tool-result.error .tool-output {
+  color: var(--error);
+}
+
+.tool-output {
+  background: rgba(0,0,0,0.2);
+  color: #a9b1d6;
+}
+
+/* 入力エリア */
+.claude-input-area {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.claude-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--fg);
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: none;
+  outline: none;
+}
+
+.claude-input:focus {
+  border-color: var(--accent);
+}
+
+.claude-send-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+.claude-send-btn:active {
+  opacity: 0.8;
+}
+
+/* モーダル */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.modal-content {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  width: 90%;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-content h3 {
+  color: var(--fg);
+  margin-bottom: 16px;
+}
+
+.modal-section {
+  margin-bottom: 16px;
+}
+
+.modal-section label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--border);
+  margin-bottom: 6px;
+}
+
+.modal-connections {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.conn-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.conn-btn.active {
+  border-color: var(--accent);
+  background: rgba(122,162,247,0.15);
+  color: var(--accent);
+}
+
+.dir-browser {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.dir-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+}
+
+.dir-up-btn {
+  background: var(--border);
+  color: var(--fg);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+#dir-current {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dir-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.dir-item {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.dir-item:hover {
+  background: rgba(122,162,247,0.1);
+}
+
+.modal-prompt {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--fg);
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+}
+
+.modal-prompt:focus {
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modal-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.modal-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+/* iPad 対応: サイドバー非表示 */
+@media (max-width: 640px) {
+  .claude-sidebar {
+    width: 50px;
+    min-width: 50px;
+  }
+  .claude-sidebar .claude-new-btn {
+    font-size: 0;
+    padding: 0.6rem;
+  }
+  .claude-sidebar .claude-new-btn::after {
+    content: '+';
+    font-size: 1.2rem;
+  }
+  .session-info {
+    display: none;
+  }
+}
+
 /* キーバー表示時のペイン調整 */
 #keybar.visible ~ #main-screen .pane,
 .keybar-active .pane {

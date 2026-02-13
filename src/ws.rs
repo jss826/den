@@ -121,15 +121,14 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
                                 }
                             }
                             Some("input") => {
-                                if let Some(data) = cmd["data"].as_str() {
-                                    if std::io::Write::write_all(
+                                if let Some(data) = cmd["data"].as_str()
+                                    && std::io::Write::write_all(
                                         &mut pty_writer,
                                         data.as_bytes(),
                                     )
                                     .is_err()
-                                    {
-                                        break;
-                                    }
+                                {
+                                    break;
                                 }
                             }
                             _ => {}
