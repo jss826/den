@@ -1,0 +1,32 @@
+{
+  "env": {
+    "CLAUDE_CODE_TASK_LIST_ID": "dev"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo add:*)",
+      "Bash(cargo update:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(git status:*)",
+      "Bash(git checkout:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git tag:*)",
+      "Bash(gh release:*)",
+      "Bash(gh issue:*)",
+      "Skill(develop)",
+      "Skill(ship)",
+      "Skill(release)",
+      "Bash(git -C \"D:/Documents/git/Den\" add .claude/agents/checker.md .claude/commands/develop.md .claude/commands/release.md .claude/commands/ship.md .claude/rules/development.md .claude/settings.local.json)"
+    ]
+  }
+}
