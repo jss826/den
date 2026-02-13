@@ -19,91 +19,61 @@ iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用�
 │  │  PTY (shell)│  │  PTY (claude CLI)│  │
 │  └─────────────┘  └──────────────────┘  │
 │  Static files (rust-embed)              │
+│  Store (JSON file persistence)          │
 └─────────────────────────────────────────┘
 ```
 
-## Quick Start
+## Quick Start (Production)
 
-```bash
-# Build
-cargo build
-
-# Run (development)
-DEN_PASSWORD=your_password cargo run
-
-# Run (production)
-DEN_ENV=production DEN_PASSWORD=your_password cargo run
+```powershell
+cargo build --release
+$env:DEN_ENV="production"; $env:DEN_PASSWORD="your_password"; cargo run --release
 ```
 
-ブラウザで `http://localhost:3939` (dev) または `http://localhost:8080` (prod) を開く。
+ブラウザで `http://localhost:8080` を開く。
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `DEN_PASSWORD` | **(required)** | Login password |
 | `DEN_ENV` | `development` | `development` / `production` |
 | `DEN_PORT` | `3939` (dev) / `8080` (prod) | Listen port |
-| `DEN_PASSWORD` | `den` | Login password |
+| `DEN_BIND_ADDRESS` | `127.0.0.1` (dev) / `0.0.0.0` (prod) | Bind address |
 | `DEN_SHELL` | `cmd.exe` (Win) / `$SHELL` | Shell for terminal |
 | `DEN_LOG_LEVEL` | `debug` (dev) / `info` (prod) | Log level filter |
+| `DEN_DATA_DIR` | `./data` | Data persistence directory |
 
-## Development
+## Features
 
-### Prerequisites
-
-- Rust (edition 2024)
-- Node.js 22+
-
-### Test & Lint
-
-```bash
-# Rust
-cargo fmt -- --check   # Format check
-cargo clippy            # Lint
-cargo test              # Unit (~34) + Integration (~11) tests
-
-# Frontend
-npm install
-npm run lint            # ESLint
-npm test                # node:test
-npm run check           # lint + test
-```
+- **Web Terminal** - xterm.js v6 with touch-friendly keybar
+- **Claude Code UI** - streaming-json chat, multi-session, SSH support
+- **Server-side Persistence** - settings and session history saved to JSON files
+- **Authentication** - HMAC-SHA256 token with 24h expiry
 
 ## Project Structure
 
 ```
 den/
-├── src/
+├── src/                    # Rust backend
 │   ├── lib.rs              # App builder (create_app)
 │   ├── main.rs             # Entrypoint
 │   ├── config.rs           # Config + Environment
-│   ├── auth.rs             # Login + token auth middleware
-│   ├── assets.rs           # Static file serving (rust-embed)
-│   ├── ws.rs               # Terminal WebSocket handler
-│   ├── claude/
-│   │   ├── ws.rs           # Claude WebSocket handler
-│   │   ├── session.rs      # Claude PTY session management
-│   │   ├── connection.rs   # Local/SSH connection + directory listing
-│   │   └── ssh_config.rs   # SSH config parser
-│   ├── pty/
-│   │   ├── manager.rs      # PTY spawn + session
-│   │   └── session.rs      # PTY session types
-│   └── filer/              # v0.3 (planned)
-├── frontend/
-│   ├── index.html
-│   ├── css/style.css
+│   ├── auth.rs             # HMAC token auth + middleware
+│   ├── store.rs            # JSON file persistence
+│   ├── store_api.rs        # Settings/Sessions REST API
+│   ├── claude/             # Claude Code integration
+│   └── pty/                # PTY management
+├── frontend/               # Browser UI
 │   ├── js/                 # App modules (IIFE pattern)
-│   ├── vendor/             # xterm.js v6
-│   └── test/               # Frontend tests
-├── tests/
-│   └── api_test.rs         # Integration tests
-├── rustfmt.toml
-├── eslint.config.mjs
-└── package.json
+│   ├── css/
+│   └── vendor/             # xterm.js v6
+├── data/                   # Runtime data (gitignored)
+└── tests/                  # Integration tests
 ```
 
 ## Version Roadmap
 
 - **v0.1** Web terminal + touch keybar + auth
-- **v0.2** Claude Code UI (streaming-json) + multi-session + SSH
+- **v0.2** Claude Code UI + persistence + security
 - **v0.3** File manager (tree + editor) *(planned)*
