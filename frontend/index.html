@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Den</title>
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- ログイン画面 -->
+  <div id="login-screen" class="screen">
+    <div class="login-box">
+      <h1>Den</h1>
+      <p class="login-subtitle">Personal Workstation</p>
+      <form id="login-form">
+        <input type="password" id="password-input" placeholder="Password" autocomplete="current-password">
+        <button type="submit">Enter</button>
+      </form>
+      <p id="login-error" class="error" hidden>Incorrect password</p>
+    </div>
+  </div>
+
+  <!-- メイン画面 -->
+  <div id="main-screen" class="screen" hidden>
+    <!-- タブバー -->
+    <div id="tab-bar">
+      <button class="tab active" data-tab="terminal">Terminal</button>
+      <!-- v0.2: <button class="tab" data-tab="claude">Claude</button> -->
+      <!-- v0.3: <button class="tab" data-tab="filer">Files</button> -->
+    </div>
+
+    <!-- ターミナル -->
+    <div id="terminal-pane" class="pane">
+      <div id="terminal-container"></div>
+    </div>
+
+    <!-- キーバー (タッチ用) -->
+    <div id="keybar"></div>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/vendor/xterm-addon-webgl.js"></script>
+  <script src="/js/auth.js"></script>
+  <script src="/js/terminal.js"></script>
+  <script src="/js/keybar.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

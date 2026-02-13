@@ -1,0 +1,224 @@
+/* Den - スタイルシート */
+:root {
+  --bg: #1a1b26;
+  --fg: #c0caf5;
+  --accent: #7aa2f7;
+  --surface: #24283b;
+  --border: #3b4261;
+  --error: #f7768e;
+  --keybar-bg: #1f2335;
+  --keybar-key: #3b4261;
+  --keybar-key-active: #565f89;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-text-size-adjust: none;
+  touch-action: manipulation;
+}
+
+/* スクリーン */
+.screen {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* ログイン */
+.login-box {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  width: 90%;
+  max-width: 320px;
+}
+
+.login-box h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.login-subtitle {
+  color: var(--border);
+  margin-bottom: 2rem;
+  font-size: 0.9rem;
+}
+
+#login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#login-form input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: var(--fg);
+  font-size: 1rem;
+  outline: none;
+}
+
+#login-form input:focus {
+  border-color: var(--accent);
+}
+
+#login-form button {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#login-form button:active {
+  opacity: 0.8;
+}
+
+.error {
+  color: var(--error);
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+}
+
+/* タブバー */
+#tab-bar {
+  display: flex;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 0.5rem;
+  height: 40px;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab {
+  background: none;
+  border: none;
+  color: var(--border);
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+  transition: color 0.15s;
+}
+
+.tab.active {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+/* ペイン */
+.pane {
+  position: absolute;
+  top: 40px;        /* タブバー */
+  left: 0;
+  right: 0;
+  bottom: 0;        /* キーバーがあれば上書き */
+}
+
+#terminal-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* xterm.js のオーバーライド */
+.xterm {
+  padding: 4px;
+}
+
+/* キーバー */
+#keybar {
+  display: none; /* タッチデバイスのみ表示 */
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--keybar-bg);
+  border-top: 1px solid var(--border);
+  padding: 6px 4px;
+  gap: 4px;
+  z-index: 100;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#keybar.visible {
+  display: flex;
+}
+
+.key-btn {
+  flex-shrink: 0;
+  background: var(--keybar-key);
+  color: var(--fg);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-family: monospace;
+  cursor: pointer;
+  min-width: 40px;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.key-btn:active {
+  background: var(--keybar-key-active);
+}
+
+.key-btn.modifier {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.key-btn.modifier.active {
+  background: var(--error);
+}
+
+/* キーバー表示時のペイン調整 */
+#keybar.visible ~ #main-screen .pane,
+.keybar-active .pane {
+  bottom: 52px;
+}
+
+/* タッチデバイス検出 */
+@media (hover: none) and (pointer: coarse) {
+  #keybar {
+    display: flex;
+  }
+  .pane {
+    bottom: 52px;
+  }
+}
+
+/* Safe area 対応 (iPhone ノッチ等) */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  #keybar {
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  }
+  @media (hover: none) and (pointer: coarse) {
+    .pane {
+      bottom: calc(52px + env(safe-area-inset-bottom));
+    }
+  }
+}
