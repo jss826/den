@@ -37,13 +37,18 @@ const DenTerminal = (() => {
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    // WebGL レンダラー（対応していなければフォールバック）
-    try {
-      const webglAddon = new WebglAddon.WebglAddon();
-      webglAddon.onContextLost(() => webglAddon.dispose());
-      term.loadAddon(webglAddon);
-    } catch (_e) {
-      console.warn('WebGL not available, using canvas renderer');
+    // WebGL レンダラー（Safari/iOS では不安定なためスキップ）
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isSafari = !isIOS && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    if (!isIOS && !isSafari) {
+      try {
+        const webglAddon = new WebglAddon.WebglAddon();
+        webglAddon.onContextLost(() => webglAddon.dispose());
+        term.loadAddon(webglAddon);
+      } catch (_e) {
+        console.warn('WebGL not available, using canvas renderer');
+      }
     }
 
     term.open(container);
