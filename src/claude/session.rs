@@ -20,19 +20,6 @@ pub fn new_session_map() -> SessionMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-/// working_dir が cmd.exe に安全か検証（メタ文字を拒否）
-fn validate_working_dir(dir: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if dir.is_empty() {
-        return Err("working_dir is empty".into());
-    }
-    // cmd.exe のメタ文字を拒否
-    const DANGEROUS_CHARS: &[char] = &['&', '|', '>', '<', '^', '%', '!', '`', '"', '\'', ';'];
-    if dir.chars().any(|c| DANGEROUS_CHARS.contains(&c)) {
-        return Err(format!("working_dir contains unsafe characters: {}", dir).into());
-    }
-    Ok(())
-}
-
 /// Claude CLI コマンドを組み立て、PTY で起動
 pub fn spawn_claude_session(
     connection: &ConnectionTarget,
@@ -41,49 +28,34 @@ pub fn spawn_claude_session(
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
-    // claude CLI の引数
-    let claude_args = format!(
-        "claude -p {} --output-format stream-json --verbose",
-        shell_escape_prompt(prompt),
-    );
-
-    let (shell, args) = match connection {
+    match connection {
         ConnectionTarget::Local => {
-            if cfg!(windows) {
-                validate_working_dir(working_dir)?;
-                (
-                    "cmd.exe".to_string(),
-                    vec![
-                        "/C".to_string(),
-                        format!("cd /d {} && {}", working_dir, claude_args),
-                    ],
-                )
-            } else {
-                (
-                    "sh".to_string(),
-                    vec![
-                        "-c".to_string(),
-                        format!("cd {} && {}", shell_escape(working_dir), claude_args),
-                    ],
-                )
-            }
+            // ローカル: claude を直接起動（cmd.exe/sh を経由しない）
+            let args = vec![
+                "-p".to_string(),
+                prompt.to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--verbose".to_string(),
+            ];
+            spawn_command_pty("claude", &args, working_dir, cols, rows)
         }
         ConnectionTarget::Ssh { host } => {
+            let claude_args = format!(
+                "claude -p {} --output-format stream-json --verbose",
+                shell_escape_prompt(prompt),
+            );
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-            (
-                "ssh".to_string(),
-                vec![
-                    "-t".to_string(),
-                    "-o".to_string(),
-                    "BatchMode=yes".to_string(),
-                    host.clone(),
-                    remote_cmd,
-                ],
-            )
+            let args = vec![
+                "-t".to_string(),
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                host.clone(),
+                remote_cmd,
+            ];
+            spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
-    };
-
-    spawn_command_pty(&shell, &args, cols, rows)
+    }
 }
 
 /// 継続プロンプト送信用：既存セッションの PTY に書き込む
@@ -100,6 +72,7 @@ pub fn send_to_session(
 fn spawn_command_pty(
     command: &str,
     args: &[String],
+    cwd: &str,
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
@@ -119,11 +92,7 @@ fn spawn_command_pty(
     for arg in args {
         cmd.arg(arg);
     }
-
-    // ホームディレクトリで起動（cd は引数側で処理）
-    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-        cmd.cwd(home);
-    }
+    cmd.cwd(cwd);
 
     let child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
@@ -139,11 +108,11 @@ fn spawn_command_pty(
     })
 }
 
+/// シングルクォートエスケープ（SSH リモートコマンド用）
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn shell_escape_prompt(s: &str) -> String {
-    // プロンプトをシングルクォートでエスケープ
     format!("'{}'", s.replace('\'', "'\\''"))
 }
