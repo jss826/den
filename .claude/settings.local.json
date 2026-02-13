@@ -1,6 +1,7 @@
 {
   "env": {
-    "CLAUDE_CODE_TASK_LIST_ID": "dev"
+    "CLAUDE_CODE_TASK_LIST_ID": "den",
+    "CCPLUGINS_REPO": "D:\\Documents\\git\\ccplugins"
   },
   "permissions": {
     "allow": [
@@ -23,10 +24,13 @@
       "Bash(git tag:*)",
       "Bash(gh release:*)",
       "Bash(gh issue:*)",
+      "Bash(netstat:*)",
+      "Bash(wmic process:*)",
+      "Bash(powershell:*)",
       "Skill(develop)",
       "Skill(ship)",
       "Skill(release)",
-      "Bash(git -C \"D:/Documents/git/Den\" add .claude/agents/checker.md .claude/commands/develop.md .claude/commands/release.md .claude/commands/ship.md .claude/rules/development.md .claude/settings.local.json)"
+      "Bash(git -C \"D:/Documents/git/Den\" add .claude/rules/development.md .claude/settings.local.json)"
     ]
   }
 }
