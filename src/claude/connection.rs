@@ -48,7 +48,7 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
     let canonical = dir
         .canonicalize()
         .map_err(|e| format!("Cannot resolve path: {}", e))?;
-    let canonical_str = canonical.to_string_lossy().to_string();
+    let canonical_str = strip_verbatim_prefix(&canonical.to_string_lossy());
 
     let mut entries = Vec::new();
     let read_dir = std::fs::read_dir(&canonical).map_err(|e| e.to_string())?;
@@ -72,7 +72,7 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
     let parent = canonical
         .parent()
         .filter(|p| !p.as_os_str().is_empty() && *p != canonical)
-        .map(|p| p.to_string_lossy().to_string());
+        .map(|p| strip_verbatim_prefix(&p.to_string_lossy()));
 
     Ok(DirListing {
         path: canonical_str,
@@ -159,6 +159,11 @@ fn home_dir() -> String {
     } else {
         std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
     }
+}
+
+/// Windows の `\\?\` プレフィックスを除去
+fn strip_verbatim_prefix(s: &str) -> String {
+    s.strip_prefix(r"\\?\").unwrap_or(s).to_string()
 }
 
 fn shell_escape(s: &str) -> String {

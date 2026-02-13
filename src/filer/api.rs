@@ -133,9 +133,9 @@ fn resolve_path(raw: &str) -> Result<PathBuf, ApiError> {
     let expanded = expand_home(raw);
     let path = PathBuf::from(&expanded);
 
-    if path.exists() {
+    let result = if path.exists() {
         path.canonicalize()
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "Cannot resolve path"))
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "Cannot resolve path"))?
     } else {
         // 新規作成系: 既存の祖先ディレクトリまで遡り正規化して子を結合
         let mut components_to_add = Vec::new();
@@ -159,7 +159,20 @@ fn resolve_path(raw: &str) -> Result<PathBuf, ApiError> {
         for component in components_to_add.into_iter().rev() {
             result = result.join(component);
         }
-        Ok(result)
+        result
+    };
+
+    // Windows の \\?\ プレフィックスを除去
+    Ok(strip_verbatim_prefix(&result))
+}
+
+/// Windows の `\\?\` verbatim プレフィックスを除去した PathBuf を返す
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
     }
 }
 
