@@ -1,3 +1,4 @@
+/* global Auth, DenSettings, DenTerminal, Keybar, DenClaude, DenFiler */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -7,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginError = document.getElementById('login-error');
 
   let claudeInitialized = false;
+  let filerInitialized = false;
 
   // ログイン処理
   loginForm.addEventListener('submit', async (e) => {
@@ -81,6 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ペイン表示切り替え
     document.getElementById('terminal-pane').hidden = tabName !== 'terminal';
     document.getElementById('claude-pane').hidden = tabName !== 'claude';
+    document.getElementById('filer-pane').hidden = tabName !== 'filer';
 
     // キーバーはターミナル時のみ
     const keybar = document.getElementById('keybar');
@@ -95,6 +98,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tabName === 'claude' && !claudeInitialized) {
       claudeInitialized = true;
       DenClaude.init(Auth.getToken());
+    }
+
+    // Filer 初期化（初回のみ）
+    if (tabName === 'filer' && !filerInitialized) {
+      filerInitialized = true;
+      DenFiler.init(Auth.getToken());
     }
   }
 });

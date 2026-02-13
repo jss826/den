@@ -5,7 +5,9 @@ const ClaudeSession = (() => {
   let activeSessionId = null;
   let selectedConnection = { type: 'local' };
   let currentDirPath = '~';
+  let currentDirParent = null; // 親ディレクトリ（サーバーレスポンスから取得）
   let onEvent = null;        // コールバック: (sessionId, event) => void
+  let pendingSend = [];      // WebSocket 接続前のメッセージキュー
 
   function init(token, eventCallback) {
     onEvent = eventCallback;
@@ -21,6 +23,12 @@ const ClaudeSession = (() => {
     ws.onopen = () => {
       // SSH ホスト一覧を取得
       send({ type: 'get_ssh_hosts' });
+      // 接続前にキューされたメッセージを送信
+      const pending = [...pendingSend];
+      pendingSend = [];
+      for (const msg of pending) {
+        send(msg);
+      }
     };
 
     ws.onmessage = (e) => {
@@ -43,6 +51,8 @@ const ClaudeSession = (() => {
   function send(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
+    } else {
+      pendingSend.push(obj);
     }
   }
 
@@ -112,6 +122,19 @@ const ClaudeSession = (() => {
     document.getElementById('modal-start').addEventListener('click', startSession);
     document.getElementById('dir-up').addEventListener('click', navigateUp);
 
+    // パス直接入力
+    document.getElementById('dir-go').addEventListener('click', () => {
+      const input = document.getElementById('dir-path-input');
+      const path = input.value.trim();
+      if (path) navigateToPath(path);
+    });
+    document.getElementById('dir-path-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const path = e.target.value.trim();
+        if (path) navigateToPath(path);
+      }
+    });
+
     // モーダル外クリックで閉じる
     document.getElementById('claude-modal').addEventListener('click', (e) => {
       if (e.target.id === 'claude-modal') closeModal();
@@ -173,12 +196,22 @@ const ClaudeSession = (() => {
   }
 
   function navigateUp() {
-    send({ type: 'list_dirs', connection: selectedConnection, path: currentDirPath + '/..' });
+    if (currentDirParent) {
+      send({ type: 'list_dirs', connection: selectedConnection, path: currentDirParent });
+    }
   }
 
   function navigateDir(name) {
-    const newPath = currentDirPath === '/' ? '/' + name : currentDirPath + '/' + name;
+    // Windows パスかどうかをカレントパスから判定
+    const sep = currentDirPath.includes('\\') ? '\\' : '/';
+    const newPath = currentDirPath.endsWith(sep)
+      ? currentDirPath + name
+      : currentDirPath + sep + name;
     send({ type: 'list_dirs', connection: selectedConnection, path: newPath });
+  }
+
+  function navigateToPath(path) {
+    send({ type: 'list_dirs', connection: selectedConnection, path: path });
   }
 
   function renderSshHosts(hosts) {
@@ -202,7 +235,13 @@ const ClaudeSession = (() => {
 
   function renderDirList(listing) {
     currentDirPath = listing.path;
-    document.getElementById('dir-current').textContent = listing.path;
+    currentDirParent = listing.parent || null;
+    document.getElementById('dir-path-input').value = listing.path;
+
+    // 親がない場合は上移動ボタンを無効化
+    const upBtn = document.getElementById('dir-up');
+    upBtn.disabled = !currentDirParent;
+    upBtn.style.opacity = currentDirParent ? '1' : '0.4';
 
     const container = document.getElementById('dir-list');
     container.innerHTML = '';

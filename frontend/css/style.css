@@ -615,11 +615,21 @@ html, body {
   cursor: pointer;
 }
 
-#dir-current {
+.dir-path-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  font-family: monospace;
+  outline: none;
+  padding: 2px 4px;
+  min-width: 0;
+}
+
+.dir-path-input:focus {
+  border-bottom-color: var(--accent);
 }
 
 .dir-list {
@@ -855,4 +865,297 @@ html, body {
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* === ファイラ UI === */
+
+.filer-layout {
+  display: flex;
+  height: 100%;
+}
+
+.filer-sidebar {
+  width: 260px;
+  min-width: 200px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.filer-toolbar {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filer-tool-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--border);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.filer-tool-btn:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.filer-search {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filer-search input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--fg);
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.filer-search input:focus {
+  border-color: var(--accent);
+}
+
+.filer-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-size: 0.8rem;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.tree-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.tree-item.selected {
+  background: rgba(122,162,247,0.15);
+}
+
+.tree-toggle {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--border);
+}
+
+.tree-icon {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-name.dir {
+  color: var(--accent);
+}
+
+.tree-children {
+  display: none;
+}
+
+.tree-children.expanded {
+  display: block;
+}
+
+/* 右クリックメニュー */
+.context-menu {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 160px;
+  z-index: 300;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+.context-menu-item {
+  padding: 6px 16px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--fg);
+}
+
+.context-menu-item:hover {
+  background: rgba(122,162,247,0.15);
+}
+
+.context-menu-item.danger {
+  color: var(--error);
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ファイラ メインエリア */
+.filer-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.filer-tabs {
+  display: flex;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  min-height: 32px;
+}
+
+.filer-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  max-width: 180px;
+  color: var(--border);
+}
+
+.filer-tab:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.filer-tab.active {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.filer-tab .dirty {
+  color: var(--accent);
+}
+
+.filer-tab-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.5;
+  line-height: 1;
+}
+
+.filer-tab-close:hover {
+  opacity: 1;
+  color: var(--error);
+}
+
+.filer-editor {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.filer-welcome {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--border);
+  font-size: 0.9rem;
+}
+
+/* CodeMirror ダークテーマ調整 */
+.filer-editor .cm-editor {
+  height: 100%;
+  font-size: 14px;
+}
+
+.filer-editor .cm-editor .cm-scroller {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+}
+
+/* 検索結果 */
+.modal-content-wide {
+  max-width: 640px;
+}
+
+.filer-search-results {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.search-result-item {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-result-item:hover {
+  background: rgba(122,162,247,0.1);
+}
+
+.search-result-path {
+  color: var(--accent);
+  font-family: monospace;
+  font-size: 0.75rem;
+}
+
+.search-result-context {
+  color: var(--border);
+  font-family: monospace;
+  font-size: 0.7rem;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-line {
+  color: var(--fg);
+  font-size: 0.7rem;
+}
+
+/* モバイル対応 */
+@media (max-width: 640px) {
+  .filer-sidebar {
+    width: 50px;
+    min-width: 50px;
+  }
+  .filer-toolbar {
+    flex-direction: column;
+    padding: 4px;
+  }
+  .filer-search {
+    display: none;
+  }
+  .tree-name {
+    display: none;
+  }
 }

@@ -44,8 +44,14 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
         return Err(format!("Not a directory: {}", resolved));
     }
 
+    // 正規化（シンボリックリンク解決 + .. 解決）
+    let canonical = dir
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve path: {}", e))?;
+    let canonical_str = canonical.to_string_lossy().to_string();
+
     let mut entries = Vec::new();
-    let read_dir = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let read_dir = std::fs::read_dir(&canonical).map_err(|e| e.to_string())?;
 
     for entry in read_dir.flatten() {
         let metadata = match entry.metadata() {
@@ -62,12 +68,14 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
     }
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    let parent = Path::new(&resolved)
+    // 親ディレクトリ（ドライブルートでは None）
+    let parent = canonical
         .parent()
+        .filter(|p| !p.as_os_str().is_empty() && *p != canonical)
         .map(|p| p.to_string_lossy().to_string());
 
     Ok(DirListing {
-        path: resolved,
+        path: canonical_str,
         parent,
         entries,
     })

@@ -29,7 +29,7 @@
     <div id="tab-bar">
       <button class="tab active" data-tab="terminal">Terminal</button>
       <button class="tab" data-tab="claude">Claude</button>
-      <!-- v0.3: <button class="tab" data-tab="filer">Files</button> -->
+      <button class="tab" data-tab="filer">Files</button>
       <div class="tab-spacer"></div>
       <button id="settings-btn" class="tab-icon-btn" title="Settings">&#9881;</button>
     </div>
@@ -62,6 +62,64 @@
       </div>
     </div>
 
+    <!-- ファイラ -->
+    <div id="filer-pane" class="pane" hidden>
+      <div class="filer-layout">
+        <!-- サイドバー: ツリービュー -->
+        <div class="filer-sidebar">
+          <div class="filer-toolbar">
+            <button id="filer-new-file" class="filer-tool-btn" title="New File">+&#128196;</button>
+            <button id="filer-new-folder" class="filer-tool-btn" title="New Folder">+&#128193;</button>
+            <button id="filer-upload" class="filer-tool-btn" title="Upload">&#8593;</button>
+            <button id="filer-refresh" class="filer-tool-btn" title="Refresh">&#8635;</button>
+          </div>
+          <div class="filer-search">
+            <input type="text" id="filer-search-input" placeholder="Search files..." />
+          </div>
+          <div id="filer-tree" class="filer-tree"></div>
+        </div>
+        <!-- メインエリア: エディタ -->
+        <div class="filer-main">
+          <div id="filer-tabs" class="filer-tabs"></div>
+          <div id="filer-editor" class="filer-editor">
+            <div class="filer-welcome">
+              <p>Select a file to edit</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- アップロードモーダル -->
+    <div id="filer-upload-modal" class="modal" hidden>
+      <div class="modal-content">
+        <h3>Upload File</h3>
+        <div class="modal-section">
+          <label>Destination</label>
+          <input type="text" id="upload-dest" class="settings-input" readonly />
+        </div>
+        <div class="modal-section">
+          <label>File</label>
+          <input type="file" id="upload-file-input" />
+        </div>
+        <div class="modal-actions">
+          <button id="upload-cancel" class="modal-btn">Cancel</button>
+          <button id="upload-submit" class="modal-btn primary">Upload</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 検索結果モーダル -->
+    <div id="filer-search-modal" class="modal" hidden>
+      <div class="modal-content modal-content-wide">
+        <h3>Search Results</h3>
+        <div id="filer-search-results" class="filer-search-results"></div>
+        <div class="modal-actions">
+          <button id="search-close" class="modal-btn">Close</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 新規セッションモーダル -->
     <div id="claude-modal" class="modal" hidden>
       <div class="modal-content">
@@ -77,7 +135,8 @@
           <div id="modal-dir-browser" class="dir-browser">
             <div class="dir-path">
               <button id="dir-up" class="dir-up-btn">..</button>
-              <span id="dir-current"></span>
+              <input type="text" id="dir-path-input" class="dir-path-input" placeholder="Type path (e.g. D:\)" />
+              <button id="dir-go" class="dir-up-btn">Go</button>
             </div>
             <div id="dir-list" class="dir-list"></div>
           </div>
@@ -120,6 +179,7 @@
     <div id="keybar"></div>
   </div>
 
+  <script src="/vendor/codemirror.js"></script>
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
   <script src="/vendor/xterm-addon-webgl.js"></script>
@@ -131,6 +191,9 @@
   <script src="/js/claude-parser.js"></script>
   <script src="/js/claude-session.js"></script>
   <script src="/js/claude.js"></script>
+  <script src="/js/filer-tree.js"></script>
+  <script src="/js/filer-editor.js"></script>
+  <script src="/js/filer.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

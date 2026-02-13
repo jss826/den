@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::generate_token;
+use crate::auth::validate_token;
 use crate::pty::manager::PtyManager;
 
 #[derive(Deserialize)]
@@ -27,8 +27,7 @@ pub async fn ws_handler(
     Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let expected = generate_token(&state.config.password);
-    if query.token != expected {
+    if !validate_token(&query.token, &state.config.password) {
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 

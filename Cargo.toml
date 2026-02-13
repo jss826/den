@@ -12,7 +12,7 @@ name = "den"
 path = "src/main.rs"
 
 [dependencies]
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 portable-pty = "0.9"
 rust-embed = "8"

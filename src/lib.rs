@@ -10,7 +10,7 @@ pub mod ws;
 
 use axum::{
     Router, middleware,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use config::Config;
 use std::sync::Arc;
@@ -45,6 +45,16 @@ pub fn create_app(config: Config) -> Router {
             "/api/sessions/{id}/events",
             get(store_api::get_session_events),
         )
+        // Filer API
+        .route("/api/filer/list", get(filer::api::list))
+        .route("/api/filer/read", get(filer::api::read))
+        .route("/api/filer/write", put(filer::api::write))
+        .route("/api/filer/mkdir", post(filer::api::mkdir))
+        .route("/api/filer/rename", post(filer::api::rename))
+        .route("/api/filer/delete", delete(filer::api::delete))
+        .route("/api/filer/download", get(filer::api::download))
+        .route("/api/filer/upload", post(filer::api::upload))
+        .route("/api/filer/search", get(filer::api::search))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::auth_middleware,
