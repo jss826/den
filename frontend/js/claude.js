@@ -20,6 +20,16 @@ const DenClaude = (() => {
         updateHeader(sessionId);
         break;
 
+      case 'turn_started':
+        updateHeader(sessionId);
+        setInputEnabled(false);
+        break;
+
+      case 'turn_completed':
+        updateHeader(sessionId);
+        setInputEnabled(true);
+        break;
+
       case 'claude_event':
         handleClaudeEvent(sessionId, msg.event);
         break;
@@ -71,15 +81,21 @@ const DenClaude = (() => {
     const container = document.getElementById('claude-messages');
     container.innerHTML = '';
 
-    // 入力エリアを再有効化
-    document.getElementById('claude-input').disabled = false;
-    document.getElementById('claude-send').disabled = false;
+    // セッション状態に応じて入力を有効化/無効化
+    const session = ClaudeSession.getSession(sessionId);
+    const canInput = session && (session.status === 'idle' || session.status === 'running');
+    setInputEnabled(canInput && session.status !== 'running');
 
     const history = messageHistory[sessionId] || [];
     for (const el of history) {
       container.appendChild(el);
     }
     scrollToBottom();
+  }
+
+  function setInputEnabled(enabled) {
+    document.getElementById('claude-input').disabled = !enabled;
+    document.getElementById('claude-send').disabled = !enabled;
   }
 
   function updateHeader(sessionId) {
@@ -158,12 +174,24 @@ const DenClaude = (() => {
     }
 
     const session = ClaudeSession.getSession(sessionId);
-    if (session && session.status !== 'running') {
-      // セッション完了後は新規セッションとして扱う
+    if (!session) {
       ClaudeSession.openModal();
       return;
     }
 
+    // 処理中の場合は Toast で通知
+    if (session.status === 'running') {
+      Toast.info('Processing a previous prompt...');
+      return;
+    }
+
+    // completed/stopped の場合はモーダルで新規セッション
+    if (session.status === 'completed' || session.status === 'stopped') {
+      ClaudeSession.openModal();
+      return;
+    }
+
+    // idle の場合は send_prompt で新ターンを開始
     // ユーザーメッセージを表示
     const container = document.getElementById('claude-messages');
     const userMsg = document.createElement('div');
@@ -176,6 +204,7 @@ const DenClaude = (() => {
 
     ClaudeSession.sendPrompt(sessionId, prompt);
     input.value = '';
+    setInputEnabled(false);
     scrollToBottom();
   }
 
@@ -202,8 +231,7 @@ const DenClaude = (() => {
     header.append(connSpan, dirSpan, statusSpan, replaySpan);
 
     // 入力エリアを無効化
-    document.getElementById('claude-input').disabled = true;
-    document.getElementById('claude-send').disabled = true;
+    setInputEnabled(false);
 
     // イベントを順番にレンダリング
     for (const eventStr of events) {

@@ -147,7 +147,14 @@ async fn handle_socket(
 
 /// GET /api/terminal/sessions
 pub async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
-    Json(state.registry.list().await)
+    let sessions = state
+        .registry
+        .list()
+        .await
+        .into_iter()
+        .filter(|s| !s.name.starts_with("claude-"))
+        .collect();
+    Json(sessions)
 }
 
 /// POST /api/terminal/sessions { "name": "..." }

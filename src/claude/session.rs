@@ -3,30 +3,40 @@ use crate::pty::manager::PtySession;
 use super::connection::ConnectionTarget;
 
 /// Claude CLI コマンドを組み立て、PTY で起動
+///
+/// `is_continuation` が true の場合 `--continue` フラグを追加し、
+/// 同一 cwd での前回セッションを継続する。
 pub fn spawn_claude_session(
     connection: &ConnectionTarget,
     working_dir: &str,
     prompt: &str,
+    is_continuation: bool,
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
     match connection {
         ConnectionTarget::Local => {
             // ローカル: claude を直接起動（cmd.exe/sh を経由しない）
-            let args = vec![
+            let mut args = vec![
                 "-p".to_string(),
                 prompt.to_string(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
-                "--verbose".to_string(),
+                "--dangerously-skip-permissions".to_string(),
             ];
+            if is_continuation {
+                args.push("--continue".to_string());
+            }
             spawn_command_pty("claude", &args, working_dir, cols, rows)
         }
         ConnectionTarget::Ssh { host } => {
-            let claude_args = format!(
-                "claude -p {} --output-format stream-json --verbose",
+            let mut claude_args = format!(
+                "claude -p {} --output-format stream-json --dangerously-skip-permissions",
                 shell_escape_prompt(prompt),
             );
+            if is_continuation {
+                claude_args.push_str(" --continue");
+            }
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
             let args = vec![
                 "-t".to_string(),
@@ -99,20 +109,35 @@ mod tests {
 
     #[test]
     fn local_args_structure() {
-        // Verify the local command arg pattern
         let prompt = "hello world";
         let args = vec![
             "-p".to_string(),
             prompt.to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
-            "--verbose".to_string(),
+            "--dangerously-skip-permissions".to_string(),
         ];
         assert_eq!(args.len(), 5);
         assert_eq!(args[0], "-p");
         assert_eq!(args[1], prompt);
         assert_eq!(args[2], "--output-format");
         assert_eq!(args[3], "stream-json");
+        assert_eq!(args[4], "--dangerously-skip-permissions");
+    }
+
+    #[test]
+    fn local_args_continuation() {
+        let prompt = "follow up";
+        let mut args = vec![
+            "-p".to_string(),
+            prompt.to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+        ];
+        args.push("--continue".to_string());
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[5], "--continue");
     }
 
     #[test]
@@ -121,7 +146,7 @@ mod tests {
         let prompt = "test prompt";
         let working_dir = "/home/user";
         let claude_args = format!(
-            "claude -p {} --output-format stream-json --verbose",
+            "claude -p {} --output-format stream-json --dangerously-skip-permissions",
             shell_escape_prompt(prompt),
         );
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
@@ -137,6 +162,19 @@ mod tests {
         assert_eq!(args[3], host);
         assert!(args[4].contains("cd '/home/user'"));
         assert!(args[4].contains("claude -p"));
+        assert!(args[4].contains("--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn ssh_args_continuation() {
+        let prompt = "follow up";
+        let mut claude_args = format!(
+            "claude -p {} --output-format stream-json --dangerously-skip-permissions",
+            shell_escape_prompt(prompt),
+        );
+        claude_args.push_str(" --continue");
+        assert!(claude_args.contains("--continue"));
+        assert!(claude_args.contains("--dangerously-skip-permissions"));
     }
 
     #[test]

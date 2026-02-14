@@ -824,6 +824,12 @@ html, body {
   border-color: var(--accent);
 }
 
+.label-optional {
+  font-weight: normal;
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

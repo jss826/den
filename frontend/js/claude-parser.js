@@ -24,6 +24,8 @@ const ClaudeParser = (() => {
         return renderToolResult(event);
       case 'result':
         return renderResult(event);
+      case 'user_prompt':
+        return renderUserPrompt(event);
       default:
         return null;
     }
@@ -138,6 +140,12 @@ const ClaudeParser = (() => {
     const status = event.is_error ? 'Error' : 'Done';
     div.innerHTML = `<span class="result-status ${event.is_error ? 'error' : ''}">${status}</span>
       <span class="result-meta">${turns} turns | ${duration} | ${cost}</span>`;
+    return div;
+  }
+
+  function renderUserPrompt(event) {
+    const div = el('div', 'msg msg-user');
+    div.textContent = event.prompt || '';
     return div;
   }
 

@@ -72,11 +72,29 @@ const ClaudeSession = (() => {
           connection: msg.connection,
           dir: msg.dir,
           prompt: msg.prompt || '',
-          status: 'running',
+          status: msg.status || 'idle',
         };
         activeSessionId = msg.session_id;
         renderSessionList();
         if (onEvent) onEvent(msg.session_id, msg);
+        break;
+
+      case 'turn_started':
+        if (sessions[msg.session_id]) {
+          sessions[msg.session_id].status = 'running';
+          renderSessionList();
+        }
+        if (onEvent) onEvent(msg.session_id, msg);
+        break;
+
+      case 'turn_completed':
+        if (sessions[msg.session_id]) {
+          sessions[msg.session_id].status = 'idle';
+          renderSessionList();
+        }
+        if (onEvent) onEvent(msg.session_id, msg);
+        // 履歴を再取得
+        loadHistory();
         break;
 
       case 'claude_event':
@@ -89,7 +107,6 @@ const ClaudeSession = (() => {
           renderSessionList();
         }
         if (onEvent) onEvent(msg.session_id, msg);
-        // 履歴を再取得
         loadHistory();
         break;
 
@@ -174,8 +191,8 @@ const ClaudeSession = (() => {
   }
 
   function startSession() {
+    // プロンプトは任意（空でも OK）
     const prompt = document.getElementById('modal-prompt').value.trim();
-    if (!prompt) return;
 
     send({
       type: 'start_session',
@@ -286,7 +303,12 @@ const ClaudeSession = (() => {
 
       const connLabel = s.connection.type === 'local' ? 'Local' : s.connection.host;
       const shortDir = s.dir.split(/[/\\]/).pop() || s.dir;
-      const statusDot = s.status === 'running' ? '\u25CF' : '\u25CB';
+
+      // idle=○ running=● completed/stopped=—
+      let statusDot;
+      if (s.status === 'running') statusDot = '\u25CF';
+      else if (s.status === 'idle') statusDot = '\u25CB';
+      else statusDot = '\u2014';
 
       const statusSpan = document.createElement('span');
       statusSpan.className = 'session-status';
