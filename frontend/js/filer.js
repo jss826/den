@@ -133,6 +133,7 @@ const DenFiler = (() => {
     const fullPath = joinPath(dir, name);
     apiCall('/api/filer/write', 'PUT', { path: fullPath, content: '' }).then((ok) => {
       if (ok) {
+        Toast.success('File created');
         FilerTree.refresh();
         FilerEditor.openFile(fullPath);
       }
@@ -145,7 +146,10 @@ const DenFiler = (() => {
     if (!name) return;
     const fullPath = joinPath(dir, name);
     apiCall('/api/filer/mkdir', 'POST', { path: fullPath }).then((ok) => {
-      if (ok) FilerTree.refresh();
+      if (ok) {
+        Toast.success('Folder created');
+        FilerTree.refresh();
+      }
     });
   }
 
@@ -157,21 +161,22 @@ const DenFiler = (() => {
     const newPath = joinPath(parentDir, newName);
     apiCall('/api/filer/rename', 'POST', { from: path, to: newPath }).then((ok) => {
       if (ok) {
+        Toast.success('Renamed');
         FilerEditor.notifyRenamed(path, newPath);
         FilerTree.refresh();
       }
     });
   }
 
-  function doDelete(path) {
+  async function doDelete(path) {
     const name = path.split(/[/\\]/).pop();
-    if (!confirm(`Delete "${name}"?`)) return;
-    apiCallDelete(`/api/filer/delete?path=${enc(path)}`).then((ok) => {
-      if (ok) {
-        FilerEditor.notifyDeleted(path);
-        FilerTree.refresh();
-      }
-    });
+    if (!(await Toast.confirm(`Delete "${name}"?`))) return;
+    const ok = await apiCallDelete(`/api/filer/delete?path=${enc(path)}`);
+    if (ok) {
+      Toast.success('Deleted');
+      FilerEditor.notifyDeleted(path);
+      FilerTree.refresh();
+    }
   }
 
   async function downloadFile(path) {
@@ -181,7 +186,7 @@ const DenFiler = (() => {
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: 'Download failed' }));
-        alert(err.error || 'Download failed');
+        Toast.error(err.error || 'Download failed');
         return;
       }
       const blob = await resp.blob();
@@ -194,7 +199,7 @@ const DenFiler = (() => {
       a.remove();
       URL.revokeObjectURL(url);
     } catch {
-      alert('Download failed');
+      Toast.error('Download failed');
     }
   }
 
@@ -224,13 +229,14 @@ const DenFiler = (() => {
       });
       if (resp.ok) {
         document.getElementById('filer-upload-modal').hidden = true;
+        Toast.success('Uploaded');
         FilerTree.refresh();
       } else {
         const err = await resp.json().catch(() => ({ error: 'Upload failed' }));
-        alert(err.error || 'Upload failed');
+        Toast.error(err.error || 'Upload failed');
       }
     } catch {
-      alert('Upload failed');
+      Toast.error('Upload failed');
     }
   }
 
@@ -305,7 +311,7 @@ const DenFiler = (() => {
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => null);
-        if (err) alert(err.error);
+        if (err) Toast.error(err.error);
         return null;
       }
       return resp.json();
@@ -326,7 +332,7 @@ const DenFiler = (() => {
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => null);
-        if (err) alert(err.error);
+        if (err) Toast.error(err.error);
         return false;
       }
       return true;
@@ -343,7 +349,7 @@ const DenFiler = (() => {
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => null);
-        if (err) alert(err.error);
+        if (err) Toast.error(err.error);
         return false;
       }
       return true;

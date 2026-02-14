@@ -1349,3 +1349,92 @@ html, body {
     display: none;
   }
 }
+
+/* === Toast 通知 === */
+
+#toast-container {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  z-index: 400;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  transform: translateX(calc(100% + 16px));
+  transition: transform 0.3s ease;
+  pointer-events: auto;
+  max-width: 320px;
+  word-break: break-word;
+}
+
+.toast.show {
+  transform: translateX(0);
+}
+
+.toast-success { border-left: 3px solid #9ece6a; }
+.toast-error   { border-left: 3px solid var(--error); }
+.toast-warn    { border-left: 3px solid #e0af68; }
+.toast-info    { border-left: 3px solid var(--accent); }
+
+/* Confirm dialog */
+.confirm-dialog {
+  max-width: 360px;
+}
+
+.confirm-dialog p {
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* === コードブロック コピーボタン === */
+
+.code-block-wrapper {
+  position: relative;
+  margin: 8px 0;
+}
+
+.code-block-wrapper .code-block {
+  margin: 0;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--border);
+  color: var(--fg);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.code-block-wrapper:hover .code-copy-btn {
+  opacity: 1;
+}
+
+.code-copy-btn:active {
+  opacity: 0.7;
+}
+
+/* タッチデバイスでは常に表示 */
+@media (hover: none) and (pointer: coarse) {
+  .code-copy-btn {
+    opacity: 0.7;
+  }
+}

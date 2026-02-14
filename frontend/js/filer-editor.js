@@ -33,7 +33,7 @@ const FilerEditor = (() => {
     if (!data) return;
 
     if (data.is_binary) {
-      alert('Binary files cannot be edited');
+      Toast.warn('Binary files cannot be edited');
       return;
     }
 
@@ -93,12 +93,12 @@ const FilerEditor = (() => {
     renderTabs();
   }
 
-  function closeFile(filePath) {
+  async function closeFile(filePath) {
     const file = openFiles.get(filePath);
     if (!file) return;
 
     if (file.dirty) {
-      if (!confirm(`"${fileName(filePath)}" has unsaved changes. Close anyway?`)) {
+      if (!(await Toast.confirm(`"${fileName(filePath)}" has unsaved changes. Close anyway?`))) {
         return;
       }
     }
@@ -150,9 +150,10 @@ const FilerEditor = (() => {
       file.content = content;
       file.dirty = false;
       renderTabs();
+      Toast.success('Saved');
     } else {
       const err = await resp.json().catch(() => ({ error: 'Save failed' }));
-      alert(err.error || 'Save failed');
+      Toast.error(err.error || 'Save failed');
     }
   }
 

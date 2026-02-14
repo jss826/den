@@ -52,6 +52,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Esc キーで開いているモーダルを閉じる
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    // confirm-modal は Toast.confirm 内で独自にハンドルするのでスキップ
+    const modals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'claude-modal'];
+    for (const id of modals) {
+      const modal = document.getElementById(id);
+      if (modal && !modal.hidden) {
+        modal.hidden = true;
+        e.stopPropagation();
+        return;
+      }
+    }
+  });
+
   async function showMain() {
     loginScreen.hidden = true;
     mainScreen.hidden = false;

@@ -126,6 +126,23 @@ const DenClaude = (() => {
         sendMessage();
       }
     });
+
+    // コードブロック コピーボタン（イベント委譲）
+    const container = document.getElementById('claude-messages');
+    container.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('code-copy-btn')) return;
+      const wrapper = e.target.closest('.code-block-wrapper');
+      if (!wrapper) return;
+      const code = wrapper.querySelector('code');
+      if (!code) return;
+      navigator.clipboard.writeText(code.textContent).then(() => {
+        Toast.success('Copied!');
+        e.target.textContent = 'Copied!';
+        setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+      }).catch(() => {
+        Toast.error('Copy failed');
+      });
+    });
   }
 
   function sendMessage() {

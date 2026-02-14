@@ -143,7 +143,8 @@ const ClaudeParser = (() => {
 
     // コードブロック ```lang\n...\n```
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-      return `<pre class="code-block"><code>${code}</code></pre>`;
+      return '<div class="code-block-wrapper"><pre class="code-block"><code>' +
+        code + '</code></pre><button class="code-copy-btn">Copy</button></div>';
     });
 
     // インラインコード

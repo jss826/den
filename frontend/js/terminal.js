@@ -321,16 +321,16 @@ const DenTerminal = (() => {
         if (!name || !name.trim()) return;
         const trimmed = name.trim();
         if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {
-          alert('Session name must be alphanumeric + hyphens only');
+          Toast.error('Session name must be alphanumeric + hyphens only');
           return;
         }
         if (trimmed.length > 64) {
-          alert('Session name too long (max 64 characters)');
+          Toast.error('Session name too long (max 64 characters)');
           return;
         }
         const ok = await createSession(trimmed);
         if (!ok) {
-          alert('Failed to create session');
+          Toast.error('Failed to create session');
           return;
         }
         await refreshSessionList();
@@ -340,7 +340,7 @@ const DenTerminal = (() => {
 
     if (killBtn) {
       killBtn.addEventListener('click', async () => {
-        if (!confirm(`Kill session "${currentSession}"?`)) return;
+        if (!(await Toast.confirm(`Kill session "${currentSession}"?`))) return;
         await destroySession(currentSession);
         currentSession = 'default';
         term.clear();
