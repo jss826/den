@@ -339,7 +339,10 @@ const DenFiler = (() => {
     const data = await Spinner.wrap(resultsEl, () =>
       apiFetch(`/api/filer/search?path=${enc(currentDir)}&query=${enc(query)}&content=true`)
     );
-    if (!data) return;
+    if (!data) {
+      modal.hidden = true;
+      return;
+    }
 
     if (data.length === 0) {
       resultsEl.innerHTML = '<div style="padding:16px;color:var(--border);text-align:center">No results</div>';
