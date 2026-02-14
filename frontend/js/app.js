@@ -74,6 +74,16 @@ document.addEventListener('DOMContentLoaded', () => {
       tab.addEventListener('click', () => switchTab(tab.dataset.tab));
     });
 
+    // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
+    if (window.visualViewport) {
+      const update = () => {
+        const vh = window.visualViewport.height;
+        document.documentElement.style.setProperty('--viewport-height', vh + 'px');
+      };
+      window.visualViewport.addEventListener('resize', update);
+      window.visualViewport.addEventListener('scroll', update);
+      update();
+    }
   }
 
   function switchTab(tabName) {

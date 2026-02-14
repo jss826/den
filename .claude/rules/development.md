@@ -24,6 +24,11 @@ paths: ['src/**/*.rs', 'frontend/**']
 - `cargo run` でサーバーを起動した場合、作業完了時に必ずプロセスを停止する
 - 停止し忘れるとポート占有やディレクトリロックの原因になる
 
+## タスク管理
+
+- タスク番号（#54 など）は Claude Code の TaskCreate/TaskUpdate で管理するローカル番号
+- GitHub Issues は使用していない。`gh issue` コマンドや GitHub API を叩かないこと
+
 ## エスカレーション
 
 - コンパイルエラーは最大3回修正を試みる

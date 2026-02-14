@@ -231,11 +231,72 @@ const DenSettings = (() => {
     return editingKeybarButtons.map(k => ({ ...k }));
   }
 
+  // --- 設定用ディレクトリブラウザ ---
+  let settingsDirPath = '~';
+  let settingsDirUserModified = false;
+
+  async function loadSettingsDir(path) {
+    try {
+      const resp = await fetch(`/api/filer/list?path=${encodeURIComponent(path)}&show_hidden=false`, {
+        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+      });
+      if (!resp.ok) return;
+      const listing = await resp.json();
+      settingsDirPath = listing.path;
+      document.getElementById('setting-default-dir').value = listing.path;
+
+      // ドライブボタン
+      const drivesContainer = document.getElementById('settings-dir-drives');
+      drivesContainer.innerHTML = '';
+      if (listing.drives && listing.drives.length > 0) {
+        listing.drives.forEach(d => {
+          const btn = document.createElement('button');
+          btn.className = 'dir-drive-btn';
+          btn.textContent = d;
+          btn.addEventListener('click', () => { settingsDirUserModified = true; loadSettingsDir(d); });
+          drivesContainer.appendChild(btn);
+        });
+      }
+
+      // 上移動ボタン
+      const upBtn = document.getElementById('settings-dir-up');
+      upBtn.disabled = !listing.parent;
+      upBtn.style.opacity = listing.parent ? '1' : '0.4';
+      upBtn._parent = listing.parent || null;
+
+      // ディレクトリ一覧
+      const listContainer = document.getElementById('settings-dir-list');
+      listContainer.innerHTML = '';
+      listing.entries.forEach(entry => {
+        if (!entry.is_dir) return;
+        const div = document.createElement('div');
+        div.className = 'dir-item';
+        div.textContent = entry.name;
+        div.addEventListener('click', () => {
+          settingsDirUserModified = true;
+          const sep = settingsDirPath.includes('\\') ? '\\' : '/';
+          const newPath = settingsDirPath.endsWith(sep)
+            ? settingsDirPath + entry.name
+            : settingsDirPath + sep + entry.name;
+          loadSettingsDir(newPath);
+        });
+        listContainer.appendChild(div);
+      });
+    } catch (e) {
+      console.warn('Failed to load settings dir:', e);
+    }
+  }
+
   function openModal() {
     const modal = document.getElementById('settings-modal');
     document.getElementById('setting-font-size').value = current.font_size;
     document.getElementById('setting-scrollback').value = current.terminal_scrollback;
+
+    // ディレクトリブラウザ初期化
+    settingsDirPath = current.claude_default_dir || '~';
+    settingsDirUserModified = false;
     document.getElementById('setting-default-dir').value = current.claude_default_dir || '';
+    loadSettingsDir(settingsDirPath);
 
     // キーバー設定の初期化
     if (current.keybar_buttons && current.keybar_buttons.length > 0) {
@@ -279,11 +340,32 @@ const DenSettings = (() => {
     const cancelBtn = document.getElementById('settings-cancel');
     if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
 
+    // 設定ディレクトリブラウザ
+    const settingsDirUp = document.getElementById('settings-dir-up');
+    if (settingsDirUp) settingsDirUp.addEventListener('click', () => {
+      if (settingsDirUp._parent) { settingsDirUserModified = true; loadSettingsDir(settingsDirUp._parent); }
+    });
+    const settingsDirGo = document.getElementById('settings-dir-go');
+    if (settingsDirGo) settingsDirGo.addEventListener('click', () => {
+      const path = document.getElementById('setting-default-dir').value.trim();
+      if (path) { settingsDirUserModified = true; loadSettingsDir(path); }
+    });
+    const settingsDirInput = document.getElementById('setting-default-dir');
+    if (settingsDirInput) settingsDirInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const path = e.target.value.trim();
+        if (path) { settingsDirUserModified = true; loadSettingsDir(path); }
+      }
+    });
+
     const saveBtn = document.getElementById('settings-save');
     if (saveBtn) saveBtn.addEventListener('click', async () => {
       const fontSize = parseInt(document.getElementById('setting-font-size').value, 10) || 14;
       const scrollback = parseInt(document.getElementById('setting-scrollback').value, 10) || 1000;
-      const defaultDir = document.getElementById('setting-default-dir').value.trim() || null;
+      // ユーザーがディレクトリを変更していなければ元の設定値を保持
+      const defaultDir = settingsDirUserModified
+        ? (document.getElementById('setting-default-dir').value.trim() || null)
+        : current.claude_default_dir;
 
       // キーバーボタン: 保存用に send をリテラルに変換
       const keybarButtons = getEditingButtons();

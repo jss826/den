@@ -243,6 +243,26 @@ const ClaudeSession = (() => {
     upBtn.disabled = !currentDirParent;
     upBtn.style.opacity = currentDirParent ? '1' : '0.4';
 
+    // ドライブボタン（既存の drives コンテナがなければ作成）
+    let drivesContainer = document.getElementById('modal-dir-drives');
+    if (!drivesContainer) {
+      drivesContainer = document.createElement('div');
+      drivesContainer.id = 'modal-dir-drives';
+      drivesContainer.className = 'dir-drives';
+      const dirList = document.getElementById('dir-list');
+      dirList.parentNode.insertBefore(drivesContainer, dirList);
+    }
+    drivesContainer.innerHTML = '';
+    if (listing.drives && listing.drives.length > 0) {
+      listing.drives.forEach(d => {
+        const btn = document.createElement('button');
+        btn.className = 'dir-drive-btn';
+        btn.textContent = d;
+        btn.addEventListener('click', () => navigateToPath(d));
+        drivesContainer.appendChild(btn);
+      });
+    }
+
     const container = document.getElementById('dir-list');
     container.innerHTML = '';
     listing.entries.forEach(entry => {

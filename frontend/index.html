@@ -166,7 +166,15 @@
         </div>
         <div class="modal-section">
           <label>Default Working Directory</label>
-          <input type="text" id="setting-default-dir" class="settings-input" placeholder="~ (default)">
+          <div id="settings-dir-browser" class="dir-browser">
+            <div class="dir-path">
+              <button id="settings-dir-up" class="dir-up-btn">..</button>
+              <input type="text" id="setting-default-dir" class="dir-path-input" placeholder="~ (default)" />
+              <button id="settings-dir-go" class="dir-up-btn">Go</button>
+            </div>
+            <div id="settings-dir-drives" class="dir-drives"></div>
+            <div id="settings-dir-list" class="dir-list"></div>
+          </div>
         </div>
         <div class="modal-section">
           <label>Keybar Buttons</label>

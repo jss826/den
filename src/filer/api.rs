@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::{fs, io};
 
 use crate::AppState;
+use crate::claude::connection::list_drives;
 
 // --- 定数 ---
 
@@ -44,6 +45,8 @@ pub struct FilerListing {
     path: String,
     parent: Option<String>,
     entries: Vec<FilerEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    drives: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -254,12 +257,24 @@ pub async fn list(
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
-    let parent = path.parent().map(|p| p.to_string_lossy().to_string());
+    // 親ディレクトリ（ドライブルート "C:\" の parent は "C:" → Some("") 相当を None に）
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty() && *p != path)
+        .map(|p| p.to_string_lossy().to_string());
+
+    // ドライブルート（parent が None）のときドライブ一覧を付与
+    let drives = if parent.is_none() {
+        list_drives()
+    } else {
+        Vec::new()
+    };
 
     Ok(Json(FilerListing {
         path: path.to_string_lossy().to_string(),
         parent,
         entries,
+        drives,
     }))
 }
 

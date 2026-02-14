@@ -22,6 +22,8 @@ pub struct DirListing {
     pub path: String,
     pub parent: Option<String>,
     pub entries: Vec<DirEntry>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drives: Vec<String>,
 }
 
 /// ディレクトリ一覧を取得（ローカルまたは SSH 先）
@@ -74,10 +76,18 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
         .filter(|p| !p.as_os_str().is_empty() && *p != canonical)
         .map(|p| strip_verbatim_prefix(&p.to_string_lossy()));
 
+    // ドライブルート（parent が None）のときドライブ一覧を付与
+    let drives = if parent.is_none() {
+        list_drives()
+    } else {
+        Vec::new()
+    };
+
     Ok(DirListing {
         path: canonical_str,
         parent,
         entries,
+        drives,
     })
 }
 
@@ -150,7 +160,27 @@ fn list_ssh_dirs(host: &str, path: &str) -> Result<DirListing, String> {
         path: resolved_path,
         parent,
         entries,
+        drives: Vec::new(),
     })
+}
+
+/// Windows: GetLogicalDrives で接続済みドライブ一覧を返す。非 Windows は空。
+#[cfg(windows)]
+pub fn list_drives() -> Vec<String> {
+    let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+    let mut drives = Vec::new();
+    for i in 0..26u32 {
+        if mask & (1 << i) != 0 {
+            let letter = (b'A' + i as u8) as char;
+            drives.push(format!("{}:\\", letter));
+        }
+    }
+    drives
+}
+
+#[cfg(not(windows))]
+pub fn list_drives() -> Vec<String> {
+    Vec::new()
 }
 
 fn home_dir() -> String {

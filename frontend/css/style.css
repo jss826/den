@@ -9,6 +9,7 @@
   --keybar-bg: #1f2335;
   --keybar-key: #3b4261;
   --keybar-key-active: #565f89;
+  --viewport-height: 100%;
 }
 
 * {
@@ -150,7 +151,7 @@ html, body {
 /* キーバー */
 #keybar {
   display: none; /* タッチデバイスのみ表示 */
-  position: fixed;
+  position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
@@ -632,6 +633,34 @@ html, body {
   border-bottom-color: var(--accent);
 }
 
+.dir-drives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dir-drives:empty {
+  display: none;
+}
+
+.dir-drive-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  cursor: pointer;
+}
+
+.dir-drive-btn:hover {
+  background: rgba(122,162,247,0.15);
+  border-color: var(--accent);
+}
+
 .dir-list {
   max-height: 200px;
   overflow-y: auto;
@@ -708,14 +737,12 @@ html, body {
   }
 }
 
-/* キーバー表示時のペイン調整 */
-#keybar.visible ~ #main-screen .pane,
-.keybar-active .pane {
-  bottom: 52px;
-}
-
 /* タッチデバイス検出 */
 @media (hover: none) and (pointer: coarse) {
+  #main-screen {
+    height: var(--viewport-height);
+    overflow: hidden;
+  }
   #keybar {
     display: flex;
   }
