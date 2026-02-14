@@ -73,7 +73,7 @@ const DenFiler = (() => {
       if (overlay) return;
       overlay = document.createElement('div');
       overlay.className = 'filer-drop-overlay';
-      overlay.innerHTML = '<div class="filer-drop-content"><div class="filer-drop-icon">\u2B07</div><div>Drop files to upload</div></div>';
+      overlay.innerHTML = '<div class="filer-drop-content"><div class="filer-drop-icon">' + DenIcons.download(40) + '</div><div>Drop files to upload</div></div>';
       filerPane.appendChild(overlay);
     }
 

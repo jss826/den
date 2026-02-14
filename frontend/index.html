@@ -26,28 +26,28 @@
   <!-- メイン画面 -->
   <div id="main-screen" class="screen" hidden data-1p-ignore>
     <!-- タブバー -->
-    <div id="tab-bar">
-      <button class="tab active" data-tab="terminal">Terminal</button>
-      <button class="tab" data-tab="claude">Claude</button>
-      <button class="tab" data-tab="filer">Files</button>
+    <div id="tab-bar" role="tablist" aria-label="Main navigation">
+      <button class="tab active" data-tab="terminal" role="tab" aria-selected="true">Terminal</button>
+      <button class="tab" data-tab="claude" role="tab" aria-selected="false">Claude</button>
+      <button class="tab" data-tab="filer" role="tab" aria-selected="false">Files</button>
       <div class="tab-spacer"></div>
-      <button id="settings-btn" class="tab-icon-btn" data-tooltip="Settings">&#9881;</button>
+      <button id="settings-btn" class="tab-icon-btn" data-tooltip="Settings" aria-label="Settings"></button>
     </div>
 
     <!-- ターミナル -->
-    <div id="terminal-pane" class="pane">
+    <div id="terminal-pane" class="pane" role="tabpanel" aria-label="Terminal">
       <div id="terminal-session-bar" class="terminal-session-bar">
-        <select id="session-select" class="session-select"></select>
-        <button id="session-new-btn" class="session-bar-btn" data-tooltip="New Session">+</button>
-        <span id="session-clients" class="session-clients"></span>
+        <select id="session-select" class="session-select" aria-label="Terminal session"></select>
+        <button id="session-new-btn" class="session-bar-btn" data-tooltip="New Session" aria-label="New session">+</button>
+        <span id="session-clients" class="session-clients" aria-hidden="true"></span>
         <div class="session-spacer"></div>
-        <button id="session-kill-btn" class="session-bar-btn danger" data-tooltip="Kill Session">x</button>
+        <button id="session-kill-btn" class="session-bar-btn danger" data-tooltip="Kill Session" aria-label="Kill session">x</button>
       </div>
       <div id="terminal-container"></div>
     </div>
 
     <!-- Claude -->
-    <div id="claude-pane" class="pane" hidden>
+    <div id="claude-pane" class="pane" hidden role="tabpanel" aria-label="Claude">
       <div class="claude-layout">
         <!-- サイドバー -->
         <div class="claude-sidebar">
@@ -62,35 +62,35 @@
           <div id="claude-header" class="claude-header"></div>
           <div id="claude-messages" class="claude-messages"></div>
           <div class="claude-input-area">
-            <textarea id="claude-input" class="claude-input" placeholder="Message..." rows="3"></textarea>
-            <button id="claude-send" class="claude-send-btn">Send</button>
+            <textarea id="claude-input" class="claude-input" placeholder="Message..." rows="3" aria-label="Message to Claude"></textarea>
+            <button id="claude-send" class="claude-send-btn" aria-label="Send message">Send</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ファイラ -->
-    <div id="filer-pane" class="pane" hidden>
+    <div id="filer-pane" class="pane" hidden role="tabpanel" aria-label="Files">
       <div class="filer-layout">
         <!-- サイドバー: ツリービュー -->
         <div class="filer-sidebar">
           <div class="filer-toolbar">
-            <button id="filer-new-file" class="filer-tool-btn" data-tooltip="New File">+&#128196;</button>
-            <button id="filer-new-folder" class="filer-tool-btn" data-tooltip="New Folder">+&#128193;</button>
-            <button id="filer-upload" class="filer-tool-btn" data-tooltip="Upload">&#8593;</button>
-            <button id="filer-refresh" class="filer-tool-btn" data-tooltip="Refresh">&#8635;</button>
+            <button id="filer-new-file" class="filer-tool-btn" data-tooltip="New File" aria-label="New file"></button>
+            <button id="filer-new-folder" class="filer-tool-btn" data-tooltip="New Folder" aria-label="New folder"></button>
+            <button id="filer-upload" class="filer-tool-btn" data-tooltip="Upload" aria-label="Upload file"></button>
+            <button id="filer-refresh" class="filer-tool-btn" data-tooltip="Refresh" aria-label="Refresh tree"></button>
           </div>
           <div class="filer-search">
-            <input type="text" id="filer-search-input" placeholder="Search files..." />
+            <input type="text" id="filer-search-input" placeholder="Search files..." aria-label="Search files" />
           </div>
-          <div id="filer-tree" class="filer-tree"></div>
+          <div id="filer-tree" class="filer-tree" role="tree" aria-label="File tree"></div>
         </div>
         <!-- メインエリア: エディタ -->
         <div class="filer-main">
           <div class="filer-tabs-wrapper">
-            <button class="filer-tabs-scroll left" hidden>&lsaquo;</button>
-            <div id="filer-tabs" class="filer-tabs"></div>
-            <button class="filer-tabs-scroll right" hidden>&rsaquo;</button>
+            <button class="filer-tabs-scroll left" hidden aria-label="Scroll tabs left"></button>
+            <div id="filer-tabs" class="filer-tabs" role="tablist" aria-label="Open files"></div>
+            <button class="filer-tabs-scroll right" hidden aria-label="Scroll tabs right"></button>
           </div>
           <div id="filer-editor" class="filer-editor">
             <div class="filer-welcome">
@@ -102,7 +102,7 @@
     </div>
 
     <!-- アップロードモーダル -->
-    <div id="filer-upload-modal" class="modal" hidden>
+    <div id="filer-upload-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Upload file">
       <div class="modal-content">
         <h3>Upload File</h3>
         <div class="modal-section">
@@ -121,7 +121,7 @@
     </div>
 
     <!-- 検索結果モーダル -->
-    <div id="filer-search-modal" class="modal" hidden>
+    <div id="filer-search-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Search results">
       <div class="modal-content modal-content-wide">
         <h3>Search Results</h3>
         <div id="filer-search-results" class="filer-search-results"></div>
@@ -132,7 +132,7 @@
     </div>
 
     <!-- クイックオープンモーダル -->
-    <div id="filer-quickopen-modal" class="modal" hidden>
+    <div id="filer-quickopen-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Quick open">
       <div class="modal-content modal-content-wide">
         <input type="text" id="quickopen-input" class="quickopen-input" placeholder="File name..." autocomplete="off" />
         <div id="quickopen-results" class="quickopen-results"></div>
@@ -140,7 +140,7 @@
     </div>
 
     <!-- 新規セッションモーダル -->
-    <div id="claude-modal" class="modal" hidden>
+    <div id="claude-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="New Claude session">
       <div class="modal-content">
         <h3>New Claude Session</h3>
         <div class="modal-section">
@@ -172,9 +172,17 @@
     </div>
 
     <!-- 設定モーダル -->
-    <div id="settings-modal" class="modal" hidden>
+    <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-content">
         <h3>Settings</h3>
+        <div class="modal-section">
+          <label>Theme</label>
+          <select id="setting-theme" class="settings-input">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">System</option>
+          </select>
+        </div>
         <div class="modal-section">
           <label>Font Size</label>
           <input type="number" id="setting-font-size" class="settings-input" min="8" max="32" value="14">
@@ -239,7 +247,7 @@
     </div>
 
     <!-- キーバー (タッチ用) -->
-    <div id="keybar"></div>
+    <div id="keybar" role="toolbar" aria-label="Touch keyboard"></div>
   </div>
 
   <script src="/vendor/codemirror.js"></script>
@@ -247,6 +255,7 @@
   <script src="/vendor/xterm-addon-fit.js"></script>
   <script src="/vendor/xterm-addon-webgl.js"></script>
   <script src="/vendor/xterm-addon-canvas.js"></script>
+  <script src="/js/icons.js"></script>
   <script src="/js/toast.js"></script>
   <script src="/js/spinner.js"></script>
   <script src="/js/auth.js"></script>

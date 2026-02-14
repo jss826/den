@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, Keybar, DenClaude, DenFiler */
+/* global Auth, DenSettings, DenTerminal, Keybar, DenClaude, DenFiler, DenIcons */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -101,9 +101,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // SVG アイコンを静的ボタンに注入
+  function initIcons() {
+    const map = {
+      'filer-new-file': DenIcons.filePlus,
+      'filer-new-folder': DenIcons.folderPlus,
+      'filer-upload': DenIcons.upload,
+      'filer-refresh': DenIcons.refresh,
+      'settings-btn': DenIcons.gear,
+    };
+    for (const [id, fn] of Object.entries(map)) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = fn();
+    }
+    // タブスクロールボタン
+    const scrollL = document.querySelector('.filer-tabs-scroll.left');
+    const scrollR = document.querySelector('.filer-tabs-scroll.right');
+    if (scrollL) scrollL.innerHTML = DenIcons.chevronLeft();
+    if (scrollR) scrollR.innerHTML = DenIcons.chevronRight();
+  }
+
   async function showMain() {
     loginScreen.hidden = true;
     mainScreen.hidden = false;
+
+    // SVG アイコン注入
+    initIcons();
 
     // 設定ロード＆適用
     await DenSettings.load();
@@ -139,8 +162,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function switchTab(tabName) {
     // タブボタン更新
-    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-    document.querySelector(`.tab[data-tab="${tabName}"]`).classList.add('active');
+    document.querySelectorAll('.tab').forEach((t) => {
+      t.classList.remove('active');
+      t.setAttribute('aria-selected', 'false');
+    });
+    const activeTab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+    activeTab.classList.add('active');
+    activeTab.setAttribute('aria-selected', 'true');
 
     // ペイン表示切り替え
     document.getElementById('terminal-pane').hidden = tabName !== 'terminal';

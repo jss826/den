@@ -1,4 +1,4 @@
-/* global Auth */
+/* global Auth, DenIcons */
 // Den - ファイラ ツリービュー
 // eslint-disable-next-line no-unused-vars
 const FilerTree = (() => {
@@ -60,6 +60,9 @@ const FilerTree = (() => {
       row.style.paddingLeft = `${8 + depth * 16}px`;
       row.dataset.path = fullPath;
       row.dataset.isDir = entry.is_dir;
+      row.setAttribute('role', 'treeitem');
+      row.setAttribute('aria-label', entry.name);
+      if (entry.is_dir) row.setAttribute('aria-expanded', String(expanded.has(fullPath)));
 
       if (fullPath === selectedPath) row.classList.add('selected');
 
@@ -74,7 +77,7 @@ const FilerTree = (() => {
       // アイコン
       const icon = document.createElement('span');
       icon.className = 'tree-icon';
-      icon.textContent = entry.is_dir ? '\uD83D\uDCC1' : fileIcon(entry.name);
+      icon.innerHTML = entry.is_dir ? DenIcons.folder(14) : DenIcons.file(14);
       row.appendChild(icon);
 
       // 名前
@@ -137,6 +140,7 @@ const FilerTree = (() => {
     if (row) {
       const toggle = row.querySelector('.tree-toggle');
       if (toggle) toggle.textContent = isExpanded ? '\u25BE' : '\u25B8';
+      row.setAttribute('aria-expanded', String(isExpanded));
     }
   }
 
@@ -188,19 +192,6 @@ const FilerTree = (() => {
       node = node.parentElement;
     }
     return depth;
-  }
-
-  function fileIcon(name) {
-    const ext = name.split('.').pop().toLowerCase();
-    const icons = {
-      rs: '\uD83E\uDD80', js: '\uD83D\uDFE8', ts: '\uD83D\uDD35', py: '\uD83D\uDC0D',
-      html: '\uD83C\uDF10', css: '\uD83C\uDFA8', json: '{}', md: '\uD83D\uDCDD',
-      toml: '\u2699\uFE0F', yaml: '\u2699\uFE0F', yml: '\u2699\uFE0F',
-      txt: '\uD83D\uDCC4', sh: '\uD83D\uDCDC', ps1: '\uD83D\uDCDC',
-      png: '\uD83D\uDDBC\uFE0F', jpg: '\uD83D\uDDBC\uFE0F', svg: '\uD83D\uDDBC\uFE0F',
-      lock: '\uD83D\uDD12',
-    };
-    return icons[ext] || '\uD83D\uDCC4';
   }
 
   function enc(s) {

@@ -80,8 +80,33 @@ const DenSettings = (() => {
     }
   }
 
+  let mediaQuery = null;
+
   function apply() {
     document.documentElement.style.setProperty('--den-font-size', current.font_size + 'px');
+    applyTheme();
+  }
+
+  function applyTheme() {
+    const theme = current.theme || 'dark';
+    // 既存の mediaQuery リスナーを破棄
+    if (mediaQuery) {
+      mediaQuery.removeEventListener('change', onSystemThemeChange);
+      mediaQuery = null;
+    }
+
+    if (theme === 'system') {
+      mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+      mediaQuery.addEventListener('change', onSystemThemeChange);
+      const resolved = mediaQuery.matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', resolved);
+    } else {
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+  }
+
+  function onSystemThemeChange(e) {
+    document.documentElement.setAttribute('data-theme', e.matches ? 'light' : 'dark');
   }
 
   function get(key) {
@@ -291,6 +316,8 @@ const DenSettings = (() => {
     const modal = document.getElementById('settings-modal');
     document.getElementById('setting-font-size').value = current.font_size;
     document.getElementById('setting-scrollback').value = current.terminal_scrollback;
+    const themeSelect = document.getElementById('setting-theme');
+    if (themeSelect) themeSelect.value = current.theme || 'dark';
 
     // ディレクトリブラウザ初期化
     settingsDirPath = current.claude_default_dir || '~';
@@ -362,6 +389,8 @@ const DenSettings = (() => {
     if (saveBtn) saveBtn.addEventListener('click', async () => {
       const fontSize = parseInt(document.getElementById('setting-font-size').value, 10) || 14;
       const scrollback = parseInt(document.getElementById('setting-scrollback').value, 10) || 1000;
+      const themeSelect = document.getElementById('setting-theme');
+      const theme = themeSelect ? themeSelect.value : 'dark';
       // ユーザーがディレクトリを変更していなければ元の設定値を保持
       const defaultDir = settingsDirUserModified
         ? (document.getElementById('setting-default-dir').value.trim() || null)
@@ -373,6 +402,7 @@ const DenSettings = (() => {
       await save({
         font_size: Math.max(8, Math.min(32, fontSize)),
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
+        theme: theme,
         claude_default_dir: defaultDir,
         keybar_buttons: keybarButtons,
       });

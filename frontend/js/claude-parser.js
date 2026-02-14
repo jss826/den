@@ -56,7 +56,7 @@ const ClaudeParser = (() => {
   function renderToolUse(block) {
     const div = el('div', 'tool-use');
     const header = el('div', 'tool-header');
-    header.innerHTML = `<span class="tool-icon">⚡</span><span class="tool-name">${esc(block.name)}</span>`;
+    header.innerHTML = `<span class="tool-icon">${DenIcons.zap(14)}</span><span class="tool-name">${esc(block.name)}</span>`;
 
     const body = el('div', 'tool-body collapsed');
     body.setAttribute('data-tool-id', block.id);
@@ -118,7 +118,10 @@ const ClaudeParser = (() => {
         const header = toolBody.previousElementSibling;
         if (header) {
           const icon = header.querySelector('.tool-icon');
-          if (icon) icon.textContent = block.is_error ? '❌' : '✅';
+          if (icon) {
+            icon.innerHTML = block.is_error ? DenIcons.xCircle(14) : DenIcons.checkCircle(14);
+            icon.classList.add(block.is_error ? 'error' : 'success');
+          }
         }
       }
     }

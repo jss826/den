@@ -10,6 +10,8 @@ const Toast = (() => {
     // Toast container
     container = document.createElement('div');
     container.id = 'toast-container';
+    container.setAttribute('aria-live', 'polite');
+    container.setAttribute('role', 'status');
     document.body.appendChild(container);
 
     // Confirm dialog
@@ -17,6 +19,9 @@ const Toast = (() => {
     confirmModal.id = 'confirm-modal';
     confirmModal.className = 'modal';
     confirmModal.hidden = true;
+    confirmModal.setAttribute('role', 'dialog');
+    confirmModal.setAttribute('aria-modal', 'true');
+    confirmModal.setAttribute('aria-label', 'Confirm action');
     confirmModal.innerHTML =
       '<div class="modal-content confirm-dialog">' +
         '<p id="confirm-message"></p>' +
