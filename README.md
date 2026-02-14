@@ -91,17 +91,20 @@ $env:DEN_SSH_PORT="2222"
 接続:
 
 ```bash
-# セッション一覧
-ssh -p 2222 -o PubkeyAuthentication=no -o IdentityAgent=none den@localhost list
+SSH_OPTS="-o PubkeyAuthentication=no -o IdentityAgent=none"
 
-# セッションに接続（なければ作成）
-ssh -p 2222 -o PubkeyAuthentication=no -o IdentityAgent=none den@localhost attach default
+# セッション一覧
+ssh -p 2222 $SSH_OPTS den@localhost list
+
+# セッションに接続（なければ作成） — -t で PTY 割当が必要
+ssh -t -p 2222 $SSH_OPTS den@localhost attach default
 
 # 新規セッション作成
-ssh -p 2222 -o PubkeyAuthentication=no -o IdentityAgent=none den@localhost new mysession
+ssh -t -p 2222 $SSH_OPTS den@localhost new mysession
 ```
 
 - ユーザー名は任意（パスワード認証のみ、`DEN_PASSWORD` と同じ）
+- `attach` / `new` は対話セッションなので **`-t`（PTY 割当）が必須**
 - `-o PubkeyAuthentication=no -o IdentityAgent=none` で SSH agent をバイパス
 - ホストキーは初回起動時に `DEN_DATA_DIR/ssh_host_key` に自動生成
 
