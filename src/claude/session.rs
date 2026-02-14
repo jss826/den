@@ -14,6 +14,7 @@ pub struct ClaudeSessionHandle {
     pub working_dir: String,
     pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     pub stop_tx: tokio::sync::oneshot::Sender<()>,
+    pub task_handle: tokio::task::JoinHandle<()>,
 }
 
 pub fn new_session_map() -> SessionMap {
@@ -97,6 +98,9 @@ fn spawn_command_pty(
     let child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
 
+    #[cfg(windows)]
+    let job = crate::pty::manager::create_job_for_child(&*child);
+
     let reader = pair.master.try_clone_reader()?;
     let writer = pair.master.take_writer()?;
 
@@ -105,6 +109,8 @@ fn spawn_command_pty(
         writer,
         child,
         master: pair.master,
+        #[cfg(windows)]
+        job,
     })
 }
 

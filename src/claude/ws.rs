@@ -173,10 +173,27 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                 let pty_writer = pty.writer;
                 let child = pty.child;
                 let master = pty.master;
+                #[cfg(windows)]
+                let job = pty.job;
 
                 // writer をセッションマップに格納
                 let writer = Arc::new(Mutex::new(pty_writer));
                 let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+
+                // PTY 読み取りタスクを起動（child と master の所有権を渡してセッション中生存させる）
+                let task_handle = tokio::spawn(stream_pty_output(
+                    session_id.clone(),
+                    pty_reader,
+                    Arc::clone(&ws_tx),
+                    Arc::clone(&sessions),
+                    stop_rx,
+                    store.clone(),
+                    meta,
+                    child,
+                    master,
+                    #[cfg(windows)]
+                    job,
+                ));
 
                 {
                     let mut map = sessions.lock().await;
@@ -187,22 +204,10 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                             working_dir: dir,
                             writer: Arc::clone(&writer),
                             stop_tx,
+                            task_handle,
                         },
                     );
                 }
-
-                // PTY 読み取りタスクを起動（child と master の所有権を渡してセッション中生存させる）
-                tokio::spawn(stream_pty_output(
-                    session_id.clone(),
-                    pty_reader,
-                    Arc::clone(&ws_tx),
-                    Arc::clone(&sessions),
-                    stop_rx,
-                    store.clone(),
-                    meta,
-                    child,
-                    master,
-                ));
             }
 
             Some("send_prompt") => {
@@ -233,8 +238,11 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                     Some(id) => id.to_string(),
                     None => continue,
                 };
-                let mut map = sessions.lock().await;
-                if let Some(handle) = map.remove(&session_id) {
+                let handle = {
+                    let mut map = sessions.lock().await;
+                    map.remove(&session_id)
+                };
+                if let Some(handle) = handle {
                     let _ = handle.stop_tx.send(());
                     let resp = json!({ "type": "session_stopped", "session_id": session_id });
                     let _ = ws_tx
@@ -242,6 +250,8 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                         .await
                         .send(Message::Text(resp.to_string().into()))
                         .await;
+                    // タスクの完全終了を待つ（プロセス cleanup 含む）
+                    let _ = handle.task_handle.await;
                 }
             }
 
@@ -249,10 +259,18 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
         }
     }
 
-    // WebSocket 切断時に全セッション停止
-    let mut map = sessions.lock().await;
-    for (_, handle) in map.drain() {
-        let _ = handle.stop_tx.send(());
+    // WebSocket 切断時に全セッション停止 + 完全待機
+    let handles: Vec<_> = {
+        let mut map = sessions.lock().await;
+        map.drain()
+            .map(|(_, handle)| {
+                let _ = handle.stop_tx.send(());
+                handle.task_handle
+            })
+            .collect()
+    };
+    for h in handles {
+        let _ = h.await;
     }
 }
 
@@ -268,6 +286,7 @@ async fn stream_pty_output(
     mut meta: SessionMeta,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     _master: Box<dyn portable_pty::MasterPty + Send>,
+    #[cfg(windows)] job: Option<crate::pty::job::PtyJobObject>,
 ) {
     let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
@@ -352,17 +371,31 @@ async fn stream_pty_output(
     };
 
     forward.await;
-    read_task.abort();
 
-    // 子プロセスを明示的に終了してゾンビ化を防ぐ
+    // ① Job Object terminate: 子プロセス + OpenConsole.exe を一括 kill
+    #[cfg(windows)]
+    if let Some(job) = job
+        && let Err(e) = job.terminate()
+    {
+        tracing::warn!("Claude Job Object terminate failed: {e}");
+    }
+
+    // ② 子プロセスを kill + wait、master を drop して PTY を閉じる
     tokio::task::spawn_blocking(move || {
         let mut child = child;
-        let _ = child.kill();
-        let _ = child.wait();
+        if let Err(e) = child.kill() {
+            tracing::debug!("Claude PTY child kill failed (may already be terminated): {e}");
+        }
+        if let Err(e) = child.wait() {
+            tracing::warn!("Claude PTY child wait failed: {e}");
+        }
         drop(_master);
     })
     .await
     .ok();
+
+    // ③ read_task: PTY 閉鎖で自然終了するはず。abort は safety net
+    read_task.abort();
 
     // セッション完了 → メタデータ更新
     meta.status = "completed".to_string();

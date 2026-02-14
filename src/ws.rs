@@ -59,6 +59,8 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
     let mut pty_writer = pty.writer;
     let master = pty.master;
     let child = pty.child;
+    #[cfg(windows)]
+    let job = pty.job;
 
     // PTY → WS: blocking read を spawn_blocking で非同期化
     let (pty_data_tx, mut pty_data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
@@ -144,18 +146,41 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
         _ = pty_to_ws => {},
         _ = ws_to_pty => {},
     }
+    // select! 終了時点で resize_tx は drop 済み → resize_task は自然終了開始
 
-    read_task.abort();
-    resize_task.abort();
+    // ① Job Object terminate: cmd.exe + OpenConsole.exe を一括 kill
+    #[cfg(windows)]
+    if let Some(job) = job
+        && let Err(e) = job.terminate()
+    {
+        tracing::warn!("Job Object terminate failed: {e}");
+    }
 
-    // 子プロセスを明示的に終了してゾンビ化を防ぐ
+    // ② 子プロセスを kill + wait（Job Object で既に死んでいる場合もある）
     tokio::task::spawn_blocking(move || {
         let mut child = child;
-        let _ = child.kill();
-        let _ = child.wait();
+        if let Err(e) = child.kill() {
+            tracing::debug!("PTY child kill failed (may already be terminated): {e}");
+        }
+        if let Err(e) = child.wait() {
+            tracing::warn!("PTY child wait failed: {e}");
+        }
     })
     .await
     .ok();
+
+    // ③ resize_task 完了を待つ（master drop → PTY close）
+    if let Err(e) = resize_task.await {
+        tracing::warn!("Resize task did not finish cleanly: {e}");
+    }
+
+    // ④ read_task: PTY 閉鎖 + child 死亡 → read() が EOF を返して自然終了するはず
+    //    3秒タイムアウト付きで待ち、超過時は abort (safety net)
+    match tokio::time::timeout(std::time::Duration::from_secs(3), read_task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("Read task finished with error: {e}"),
+        Err(_) => tracing::warn!("Read task did not finish within 3s timeout"),
+    }
 
     tracing::info!("WebSocket session ended");
 }
