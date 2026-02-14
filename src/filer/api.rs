@@ -105,7 +105,7 @@ pub struct SearchResult {
     context: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     error: String,
 }
@@ -658,5 +658,72 @@ mod tests {
     fn resolve_home_dir() {
         let result = resolve_path("~");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolve_existing_dir() {
+        // temp_dir should always exist
+        let tmp = std::env::temp_dir();
+        let result = resolve_path(&tmp.to_string_lossy());
+        assert!(result.is_ok());
+        let p = result.unwrap();
+        assert!(p.is_dir());
+    }
+
+    #[test]
+    fn resolve_nonexistent_child() {
+        let tmp = std::env::temp_dir();
+        let child = tmp.join("nonexistent-test-child-abc123");
+        let result = resolve_path(&child.to_string_lossy());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolve_deep_nonexistent() {
+        let tmp = std::env::temp_dir();
+        let deep = tmp.join("a").join("b").join("c");
+        let result = resolve_path(&deep.to_string_lossy());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolve_tilde_subpath() {
+        let result = resolve_path("~/some-subdir");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn strip_verbatim_with_prefix() {
+        let path = std::path::PathBuf::from(r"\\?\C:\Users");
+        let result = strip_verbatim_prefix(&path);
+        assert_eq!(result, std::path::PathBuf::from(r"C:\Users"));
+    }
+
+    #[test]
+    fn strip_verbatim_without_prefix() {
+        let path = std::path::PathBuf::from(r"C:\Users");
+        let result = strip_verbatim_prefix(&path);
+        assert_eq!(result, std::path::PathBuf::from(r"C:\Users"));
+    }
+
+    #[test]
+    fn io_err_not_found() {
+        let e = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let (status, _) = io_err(e);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn io_err_permission_denied() {
+        let e = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope");
+        let (status, _) = io_err(e);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn io_err_other() {
+        let e = std::io::Error::new(std::io::ErrorKind::Other, "fail");
+        let (status, _) = io_err(e);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

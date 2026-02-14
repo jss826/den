@@ -241,4 +241,24 @@ mod tests {
         let target: ConnectionTarget = serde_json::from_str(json).unwrap();
         assert!(matches!(target, ConnectionTarget::Local));
     }
+
+    #[test]
+    fn connection_target_ssh_deserialize() {
+        let json = r#"{"type":"ssh","host":"user@server"}"#;
+        let target: ConnectionTarget = serde_json::from_str(json).unwrap();
+        match target {
+            ConnectionTarget::Ssh { host } => assert_eq!(host, "user@server"),
+            _ => panic!("Expected SSH variant"),
+        }
+    }
+
+    #[test]
+    fn strip_verbatim_with_prefix() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users"), r"C:\Users");
+    }
+
+    #[test]
+    fn strip_verbatim_without_prefix() {
+        assert_eq!(strip_verbatim_prefix(r"C:\Users"), r"C:\Users");
+    }
 }

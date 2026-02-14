@@ -29,4 +29,24 @@ test.describe('Terminal', () => {
     await expect(page.locator('#terminal-pane')).toBeVisible();
     await expect(page.locator('#claude-pane')).toBeHidden();
   });
+
+  test('terminal receives command output', async ({ page }) => {
+    await login(page);
+
+    // Wait for terminal to be ready
+    await expect(page.locator('#terminal-container .xterm-rows')).toContainText('Connected', {
+      timeout: 15_000,
+    });
+
+    // Type 'echo hello123' and press Enter via xterm
+    await page.locator('#terminal-container .xterm-helper-textarea').fill('');
+    await page.locator('#terminal-container .xterm-helper-textarea').type('echo hello123\n', {
+      delay: 50,
+    });
+
+    // Should see the output in terminal
+    await expect(page.locator('#terminal-container .xterm-rows')).toContainText('hello123', {
+      timeout: 10_000,
+    });
+  });
 });

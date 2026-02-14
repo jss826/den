@@ -66,3 +66,37 @@ pub async fn get_session_events(
     let events = state.store.load_session_events(&id);
     Json(events).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_id_normal() {
+        assert!(is_valid_id("abc123"));
+    }
+
+    #[test]
+    fn valid_id_with_hyphen() {
+        assert!(is_valid_id("session-1"));
+    }
+
+    #[test]
+    fn invalid_id_empty() {
+        assert!(!is_valid_id(""));
+    }
+
+    #[test]
+    fn invalid_id_path_traversal() {
+        assert!(!is_valid_id("../etc/passwd"));
+        assert!(!is_valid_id("hello/world"));
+        assert!(!is_valid_id(".."));
+    }
+
+    #[test]
+    fn invalid_id_too_long() {
+        assert!(!is_valid_id(&"a".repeat(65)));
+        // exactly 64 should be fine
+        assert!(is_valid_id(&"a".repeat(64)));
+    }
+}

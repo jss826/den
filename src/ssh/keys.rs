@@ -37,3 +37,46 @@ pub fn load_or_generate_host_key(data_dir: &Path) -> anyhow::Result<PrivateKey> 
         Ok(key)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn generate_key_creates_file() {
+        let tmp = TempDir::new().unwrap();
+        let key_path = tmp.path().join("ssh_host_key");
+        assert!(!key_path.exists());
+
+        let _key = load_or_generate_host_key(tmp.path()).unwrap();
+        assert!(key_path.exists());
+    }
+
+    #[test]
+    fn generate_then_reload_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+
+        // Generate
+        let key1 = load_or_generate_host_key(tmp.path()).unwrap();
+        // Reload
+        let key2 = load_or_generate_host_key(tmp.path()).unwrap();
+
+        // Both should be valid Ed25519 keys with the same public key
+        assert_eq!(
+            key1.public_key().to_bytes().unwrap(),
+            key2.public_key().to_bytes().unwrap()
+        );
+    }
+
+    #[test]
+    fn auto_creates_data_dir() {
+        let tmp = TempDir::new().unwrap();
+        let nested = tmp.path().join("sub").join("dir");
+        assert!(!nested.exists());
+
+        let _key = load_or_generate_host_key(&nested).unwrap();
+        assert!(nested.exists());
+        assert!(nested.join("ssh_host_key").exists());
+    }
+}

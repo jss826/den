@@ -373,3 +373,23 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         .fold(0u8, |acc, (x, y)| acc | (x ^ y))
         == 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constant_time_eq_same() {
+        assert!(constant_time_eq("password123", "password123"));
+    }
+
+    #[test]
+    fn constant_time_eq_different() {
+        assert!(!constant_time_eq("password123", "password456"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_length() {
+        assert!(!constant_time_eq("short", "longer-string"));
+    }
+}

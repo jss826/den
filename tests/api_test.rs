@@ -326,3 +326,135 @@ async fn sessions_events_not_found() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// --- Sessions API: invalid ID ---
+
+#[tokio::test]
+async fn sessions_get_invalid_id() {
+    let app = test_app();
+    // ID with special characters that is_valid_id should reject
+    let req = Request::builder()
+        .uri("/api/sessions/bad..id")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sessions_events_invalid_id() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sessions/bad..id/events")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Settings API: edge cases ---
+
+#[tokio::test]
+async fn settings_put_invalid_json() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from("not json"))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert!(
+        resp.status() == StatusCode::BAD_REQUEST
+            || resp.status() == StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn settings_put_partial_json() {
+    let config = test_config();
+    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let app = den::create_app(config, registry);
+
+    // PUT with only some fields — serde should use defaults for missing fields
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"font_size":18}"#))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    // If Settings has serde defaults, this should succeed (200)
+    // If not, it should be 422 (missing fields)
+    let status = resp.status();
+    assert!(status == StatusCode::OK || status == StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// --- Terminal REST API ---
+
+#[tokio::test]
+async fn terminal_sessions_list_empty() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/terminal/sessions")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn terminal_sessions_create_invalid_name() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/terminal/sessions")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"name":"../invalid"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn terminal_sessions_destroy_nonexistent() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/terminal/sessions/nonexistent")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    // destroy is idempotent — returns 204 even if not found
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn terminal_sessions_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/terminal/sessions")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}

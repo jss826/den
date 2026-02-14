@@ -210,6 +210,63 @@ test.describe('Filer UI', () => {
     await expect(page.locator('#filer-upload-modal')).toBeHidden();
   });
 
+  test('navigate to parent directory via breadcrumb', async ({ page, request }) => {
+    await login(page);
+    await page.click('.tab[data-tab="filer"]');
+
+    const token = await getToken(request);
+    const api = filerApi(request, token);
+    const listResp = await api.list(TEST_DIR);
+    const listing = await listResp.json();
+    const resolvedDir = listing.path;
+
+    // Navigate tree to the test directory
+    await page.evaluate(async (dirPath) => {
+      // @ts-expect-error global
+      await FilerTree.navigateTo(dirPath);
+    }, resolvedDir);
+
+    // Wait for tree to load the test dir entries
+    await expect(page.locator('.tree-item')).not.toHaveCount(0, { timeout: 5_000 });
+
+    // Click parent button (if exists) — the ".." or up button
+    const parentBtn = page.locator('#filer-parent-btn');
+    if (await parentBtn.isVisible()) {
+      await parentBtn.click();
+      // After going up, we should be in a different directory
+      await expect(page.locator('#filer-path-display')).not.toContainText('filer-ui-test', {
+        timeout: 5_000,
+      });
+    }
+  });
+
+  test('search shows results', async ({ page, request }) => {
+    await login(page);
+    await page.click('.tab[data-tab="filer"]');
+
+    const token = await getToken(request);
+    const api = filerApi(request, token);
+    const listResp = await api.list(TEST_DIR);
+    const listing = await listResp.json();
+    const resolvedDir = listing.path;
+
+    // Navigate to test dir
+    await page.evaluate(async (dirPath) => {
+      // @ts-expect-error global
+      await FilerTree.navigateTo(dirPath);
+    }, resolvedDir);
+
+    // Type in search input
+    const searchInput = page.locator('#filer-search-input');
+    await searchInput.fill('hello');
+    await searchInput.press('Enter');
+
+    // Wait for search results to appear
+    await expect(page.locator('.search-result, .tree-item')).not.toHaveCount(0, {
+      timeout: 10_000,
+    });
+  });
+
   test('tab switching preserves filer state', async ({ page, request }) => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');

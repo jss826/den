@@ -586,4 +586,26 @@ mod tests {
         assert!(!is_valid_session_name("hello/world"));
         assert!(!is_valid_session_name(&"x".repeat(65)));
     }
+
+    #[test]
+    fn session_name_max_length() {
+        // Exactly 64 characters should be valid
+        assert!(is_valid_session_name(&"a".repeat(64)));
+        // 65 should be invalid
+        assert!(!is_valid_session_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn session_name_underscore_invalid() {
+        assert!(!is_valid_session_name("has_underscore"));
+        assert!(!is_valid_session_name("_leading"));
+    }
+
+    #[test]
+    fn session_name_special_chars_invalid() {
+        assert!(!is_valid_session_name("hello@world"));
+        assert!(!is_valid_session_name("test!"));
+        assert!(!is_valid_session_name("name.with.dots"));
+        assert!(!is_valid_session_name("tab\there"));
+    }
 }

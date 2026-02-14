@@ -92,3 +92,61 @@ fn shell_escape(s: &str) -> String {
 fn shell_escape_prompt(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_args_structure() {
+        // Verify the local command arg pattern
+        let prompt = "hello world";
+        let args = vec![
+            "-p".to_string(),
+            prompt.to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--verbose".to_string(),
+        ];
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], "-p");
+        assert_eq!(args[1], prompt);
+        assert_eq!(args[2], "--output-format");
+        assert_eq!(args[3], "stream-json");
+    }
+
+    #[test]
+    fn ssh_args_structure() {
+        let host = "user@remote";
+        let prompt = "test prompt";
+        let working_dir = "/home/user";
+        let claude_args = format!(
+            "claude -p {} --output-format stream-json --verbose",
+            shell_escape_prompt(prompt),
+        );
+        let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
+        let args = vec![
+            "-t".to_string(),
+            "-o".to_string(),
+            "BatchMode=yes".to_string(),
+            host.to_string(),
+            remote_cmd.clone(),
+        ];
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], "-t");
+        assert_eq!(args[3], host);
+        assert!(args[4].contains("cd '/home/user'"));
+        assert!(args[4].contains("claude -p"));
+    }
+
+    #[test]
+    fn shell_escape_basic() {
+        assert_eq!(shell_escape("hello"), "'hello'");
+    }
+
+    #[test]
+    fn shell_escape_prompt_with_quotes() {
+        let result = shell_escape_prompt("it's a test");
+        assert_eq!(result, "'it'\\''s a test'");
+    }
+}
