@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Esc キーで開いているモーダルを閉じる + Ctrl+1/2/3 タブ切替
   document.addEventListener('keydown', (e) => {
     // confirm-modal は Toast.confirm 内で独自にハンドルするので Esc 対象外
-    const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'claude-modal'];
+    const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'claude-modal', 'filer-quickopen-modal'];
     // ショートカット抑止にはすべてのモーダルを含める
     const allModals = ['confirm-modal', ...escModals];
 
@@ -72,6 +72,22 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
       }
+    }
+
+    // Ctrl+Shift+F: ファイラ検索フォーカス（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key === 'F' && !anyModalOpen) {
+      e.preventDefault();
+      switchTab('filer');
+      DenFiler.focusSearch();
+      return;
+    }
+
+    // Ctrl+P: クイックオープン（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'p' && !anyModalOpen) {
+      e.preventDefault();
+      switchTab('filer');
+      DenFiler.showQuickOpen();
+      return;
     }
 
     // Ctrl+1/2/3 タブ切替（モーダル中はスキップ）

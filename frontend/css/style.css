@@ -334,6 +334,14 @@ html, body {
   font-size: 0.7rem;
 }
 
+.session-prompt-preview {
+  color: var(--border);
+  font-size: 0.65rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .claude-main {
   flex: 1;
   display: flex;
@@ -1045,6 +1053,25 @@ html, body {
   margin-top: 1px;
 }
 
+.history-load-more {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 8px auto;
+  padding: 6px 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 0.7rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.history-load-more:hover {
+  background: rgba(122,162,247,0.1);
+  border-color: var(--accent);
+}
+
 /* === Replay ヘッダー === */
 
 .header-replay {
@@ -1284,6 +1311,17 @@ html, body {
   color: var(--accent);
 }
 
+.filer-tab-icon {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(122,162,247,0.15);
+  border-radius: 3px;
+  padding: 1px 3px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
 .filer-tab-close {
   background: none;
   border: none;
@@ -1323,6 +1361,62 @@ html, body {
 
 .filer-editor .cm-editor .cm-scroller {
   font-family: "Cascadia Code", "Fira Code", monospace;
+}
+
+/* CodeMirror 検索パネル ダークテーマ */
+.filer-editor .cm-editor .cm-search {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.filer-editor .cm-editor .cm-search input,
+.filer-editor .cm-editor .cm-search select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.filer-editor .cm-editor .cm-search input:focus {
+  border-color: var(--accent);
+}
+
+.filer-editor .cm-editor .cm-search button {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.filer-editor .cm-editor .cm-search button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.filer-editor .cm-editor .cm-search label {
+  color: var(--fg);
+  font-size: 0.75rem;
+}
+
+.filer-editor .cm-editor .cm-search br {
+  display: none;
+}
+
+.filer-editor .cm-editor .cm-searchMatch {
+  background: rgba(122,162,247,0.3);
+}
+
+.filer-editor .cm-editor .cm-searchMatch-selected {
+  background: rgba(122,162,247,0.6);
 }
 
 /* 検索結果 */
@@ -1531,6 +1625,88 @@ html, body {
 @keyframes drop-bounce {
   from { transform: translateY(-4px); }
   to   { transform: translateY(4px); }
+}
+
+/* === クイックオープン (Ctrl+P) === */
+
+.quickopen-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--fg);
+  font-size: 0.9rem;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.quickopen-input:focus {
+  border-color: var(--accent);
+}
+
+.quickopen-results {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.quickopen-item {
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  cursor: pointer;
+  color: var(--fg);
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quickopen-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.quickopen-item.selected {
+  background: rgba(122,162,247,0.2);
+  color: var(--accent);
+}
+
+/* === CSS-only ツールチップ === */
+
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1b26;
+  color: #c0caf5;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  z-index: 500;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  transition-delay: 0s;
+}
+
+[data-tooltip]:hover::after {
+  opacity: 1;
+  transition-delay: 300ms;
+}
+
+@media (hover: none) {
+  [data-tooltip]::after {
+    display: none;
+  }
 }
 
 .btn-loading {

@@ -71,6 +71,7 @@ const ClaudeSession = (() => {
           id: msg.session_id,
           connection: msg.connection,
           dir: msg.dir,
+          prompt: msg.prompt || '',
           status: 'running',
         };
         activeSessionId = msg.session_id;
@@ -295,10 +296,19 @@ const ClaudeSession = (() => {
       const nameSpan = document.createElement('span');
       nameSpan.className = 'session-name';
       nameSpan.textContent = shortDir;
+      nameSpan.title = s.dir;
       const connSpan = document.createElement('span');
       connSpan.className = 'session-conn';
       connSpan.textContent = connLabel;
       infoSpan.append(nameSpan, connSpan);
+
+      if (s.prompt) {
+        const previewSpan = document.createElement('span');
+        previewSpan.className = 'session-prompt-preview';
+        previewSpan.textContent = s.prompt.length > 30 ? s.prompt.slice(0, 30) + '...' : s.prompt;
+        infoSpan.appendChild(previewSpan);
+      }
+
       div.append(statusSpan, infoSpan);
 
       div.addEventListener('click', () => {

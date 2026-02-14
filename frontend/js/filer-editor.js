@@ -58,6 +58,7 @@ const FilerEditor = (() => {
     const extensions = [
       ...CM.denSetup,
       CM.oneDark,
+      CM.search(),
       CM.EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           markDirty(filePath);
@@ -175,11 +176,34 @@ const FilerEditor = (() => {
     });
   }
 
+  function fileTypeIcon(path) {
+    const ext = path.split('.').pop().toLowerCase();
+    const map = {
+      js: 'JS', mjs: 'JS', jsx: 'JX', ts: 'TS', tsx: 'TX',
+      rs: 'RS', py: 'PY', go: 'GO', rb: 'RB', java: 'JV',
+      css: '#', scss: '#', less: '#',
+      html: '<>', htm: '<>', xml: '<>', svg: '<>',
+      json: '{}', yaml: 'YM', yml: 'YM', toml: 'TM',
+      md: '\u00b6', txt: 'Tx',
+      sh: '$', bash: '$', zsh: '$', ps1: 'PS',
+      sql: 'SQ', graphql: 'GQ',
+    };
+    return map[ext] || null;
+  }
+
   function renderTabs() {
     tabsContainer.innerHTML = '';
     for (const [path, file] of openFiles) {
       const tab = document.createElement('div');
       tab.className = `filer-tab${path === activePath ? ' active' : ''}`;
+
+      const icon = fileTypeIcon(path);
+      if (icon) {
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'filer-tab-icon';
+        iconSpan.textContent = icon;
+        tab.appendChild(iconSpan);
+      }
 
       const name = document.createElement('span');
       name.textContent = fileName(path);

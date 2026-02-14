@@ -1,13 +1,20 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::store::Settings;
+
+#[derive(Debug, Deserialize)]
+pub struct PaginationParams {
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
 
 /// セッション ID が安全な文字列か検証
 fn is_valid_id(id: &str) -> bool {
@@ -34,8 +41,15 @@ pub async fn put_settings(
 }
 
 /// GET /api/sessions
-pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.store.list_sessions())
+pub async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<PaginationParams>,
+) -> impl IntoResponse {
+    let all = state.store.list_sessions();
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(20);
+    let page: Vec<_> = all.into_iter().skip(offset).take(limit).collect();
+    Json(page)
 }
 
 /// GET /api/sessions/{id}

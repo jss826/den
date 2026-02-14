@@ -31,17 +31,17 @@
       <button class="tab" data-tab="claude">Claude</button>
       <button class="tab" data-tab="filer">Files</button>
       <div class="tab-spacer"></div>
-      <button id="settings-btn" class="tab-icon-btn" title="Settings">&#9881;</button>
+      <button id="settings-btn" class="tab-icon-btn" data-tooltip="Settings">&#9881;</button>
     </div>
 
     <!-- ターミナル -->
     <div id="terminal-pane" class="pane">
       <div id="terminal-session-bar" class="terminal-session-bar">
         <select id="session-select" class="session-select"></select>
-        <button id="session-new-btn" class="session-bar-btn" title="New Session">+</button>
+        <button id="session-new-btn" class="session-bar-btn" data-tooltip="New Session">+</button>
         <span id="session-clients" class="session-clients"></span>
         <div class="session-spacer"></div>
-        <button id="session-kill-btn" class="session-bar-btn danger" title="Kill Session">x</button>
+        <button id="session-kill-btn" class="session-bar-btn danger" data-tooltip="Kill Session">x</button>
       </div>
       <div id="terminal-container"></div>
     </div>
@@ -75,10 +75,10 @@
         <!-- サイドバー: ツリービュー -->
         <div class="filer-sidebar">
           <div class="filer-toolbar">
-            <button id="filer-new-file" class="filer-tool-btn" title="New File">+&#128196;</button>
-            <button id="filer-new-folder" class="filer-tool-btn" title="New Folder">+&#128193;</button>
-            <button id="filer-upload" class="filer-tool-btn" title="Upload">&#8593;</button>
-            <button id="filer-refresh" class="filer-tool-btn" title="Refresh">&#8635;</button>
+            <button id="filer-new-file" class="filer-tool-btn" data-tooltip="New File">+&#128196;</button>
+            <button id="filer-new-folder" class="filer-tool-btn" data-tooltip="New Folder">+&#128193;</button>
+            <button id="filer-upload" class="filer-tool-btn" data-tooltip="Upload">&#8593;</button>
+            <button id="filer-refresh" class="filer-tool-btn" data-tooltip="Refresh">&#8635;</button>
           </div>
           <div class="filer-search">
             <input type="text" id="filer-search-input" placeholder="Search files..." />
@@ -128,6 +128,14 @@
         <div class="modal-actions">
           <button id="search-close" class="modal-btn">Close</button>
         </div>
+      </div>
+    </div>
+
+    <!-- クイックオープンモーダル -->
+    <div id="filer-quickopen-modal" class="modal" hidden>
+      <div class="modal-content modal-content-wide">
+        <input type="text" id="quickopen-input" class="quickopen-input" placeholder="File name..." autocomplete="off" />
+        <div id="quickopen-results" class="quickopen-results"></div>
       </div>
     </div>
 

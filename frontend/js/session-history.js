@@ -1,15 +1,24 @@
 // Den - セッション履歴モジュール
 const SessionHistory = (() => {
+  const PAGE_SIZE = 20;
   let sessions = [];
+  let hasMore = false;
   let onReplay = null; // (sessionMeta, events[]) => void
 
-  async function load() {
+  async function load(append) {
     try {
-      const resp = await fetch('/api/sessions', {
+      const offset = append ? sessions.length : 0;
+      const resp = await fetch(`/api/sessions?offset=${offset}&limit=${PAGE_SIZE}`, {
         headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
       });
       if (resp.ok) {
-        sessions = await resp.json();
+        const data = await resp.json();
+        if (append) {
+          sessions = sessions.concat(data);
+        } else {
+          sessions = data;
+        }
+        hasMore = data.length >= PAGE_SIZE;
       }
     } catch (e) {
       console.warn('Failed to load session history:', e);
@@ -63,12 +72,12 @@ const SessionHistory = (() => {
       const shortPrompt = (s.prompt || '').slice(0, 40) + (s.prompt?.length > 40 ? '...' : '');
       const date = new Date(s.created_at);
       const dateStr = formatDate(date);
-      const statusIcon = s.status === 'completed' ? '✓' : s.status === 'running' ? '●' : '✗';
+      const statusIcon = s.status === 'completed' ? '\u2713' : s.status === 'running' ? '\u25CF' : '\u2717';
 
       div.innerHTML = `
         <div class="history-header">
           <span class="history-status">${statusIcon}</span>
-          <span class="history-dir">${esc(shortDir)}</span>
+          <span class="history-dir" title="${esc(s.working_dir || '').replace(/"/g, '&quot;')}">${esc(shortDir)}</span>
           <span class="history-date">${dateStr}</span>
         </div>
         <div class="history-prompt">${esc(shortPrompt)}</div>
@@ -76,6 +85,18 @@ const SessionHistory = (() => {
 
       div.addEventListener('click', () => replaySession(s.id));
       container.appendChild(div);
+    }
+
+    if (hasMore) {
+      const btn = document.createElement('button');
+      btn.className = 'history-load-more';
+      btn.textContent = 'Load more...';
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await load(true);
+        render(container);
+      });
+      container.appendChild(btn);
     }
   }
 

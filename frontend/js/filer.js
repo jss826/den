@@ -447,5 +447,129 @@ const DenFiler = (() => {
     }
   }
 
-  return { init };
+  function focusSearch() {
+    const input = document.getElementById('filer-search-input');
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
+
+  // --- クイックオープン (Ctrl+P) ---
+
+  let quickOpenCleanup = null;
+
+  function showQuickOpen() {
+    // 前回のリスナーが残っていれば除去（Esc で閉じた場合のリーク防止）
+    if (quickOpenCleanup) {
+      quickOpenCleanup();
+      quickOpenCleanup = null;
+    }
+
+    const modal = document.getElementById('filer-quickopen-modal');
+    const input = document.getElementById('quickopen-input');
+    const results = document.getElementById('quickopen-results');
+
+    modal.hidden = false;
+    input.value = '';
+    results.innerHTML = '';
+    input.focus();
+
+    let debounceTimer = null;
+    let selectedIdx = -1;
+    let items = [];
+
+    function renderResults(data) {
+      results.innerHTML = '';
+      items = data || [];
+      selectedIdx = items.length > 0 ? 0 : -1;
+
+      for (let i = 0; i < items.length; i++) {
+        const r = items[i];
+        const div = document.createElement('div');
+        div.className = 'quickopen-item' + (i === selectedIdx ? ' selected' : '');
+        div.textContent = r.path;
+        div.addEventListener('click', () => {
+          openAndClose(r.path);
+        });
+        results.appendChild(div);
+      }
+    }
+
+    function updateSelection() {
+      const els = results.querySelectorAll('.quickopen-item');
+      els.forEach((el, i) => el.classList.toggle('selected', i === selectedIdx));
+      if (els[selectedIdx]) {
+        els[selectedIdx].scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function openAndClose(path) {
+      modal.hidden = true;
+      cleanup();
+      if (!path.endsWith('/') && !path.endsWith('\\')) {
+        FilerEditor.openFile(path);
+      }
+    }
+
+    function onInput() {
+      clearTimeout(debounceTimer);
+      const q = input.value.trim();
+      if (q.length < 1) {
+        results.innerHTML = '';
+        items = [];
+        selectedIdx = -1;
+        return;
+      }
+      debounceTimer = setTimeout(async () => {
+        const data = await apiFetch(
+          `/api/filer/search?path=${enc(currentDir)}&query=${enc(q)}&content=false`
+        );
+        renderResults(data);
+      }, 300);
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (items.length > 0) {
+          selectedIdx = (selectedIdx + 1) % items.length;
+          updateSelection();
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (items.length > 0) {
+          selectedIdx = (selectedIdx - 1 + items.length) % items.length;
+          updateSelection();
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (selectedIdx >= 0 && items[selectedIdx]) {
+          openAndClose(items[selectedIdx].path);
+        }
+      }
+    }
+
+    function onModalClick(e) {
+      if (e.target === modal) {
+        modal.hidden = true;
+        cleanup();
+      }
+    }
+
+    function cleanup() {
+      clearTimeout(debounceTimer);
+      input.removeEventListener('input', onInput);
+      input.removeEventListener('keydown', onKeydown);
+      modal.removeEventListener('click', onModalClick);
+    }
+
+    input.addEventListener('input', onInput);
+    input.addEventListener('keydown', onKeydown);
+    modal.addEventListener('click', onModalClick);
+
+    quickOpenCleanup = cleanup;
+  }
+
+  return { init, focusSearch, showQuickOpen };
 })();
