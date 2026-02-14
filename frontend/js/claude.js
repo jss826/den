@@ -34,7 +34,6 @@ const DenClaude = (() => {
         handleClaudeEvent(sessionId, msg.event);
         break;
 
-      case 'session_completed':
       case 'session_stopped':
         updateHeader(sessionId);
         break;

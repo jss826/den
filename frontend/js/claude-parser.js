@@ -107,7 +107,9 @@ const ClaudeParser = (() => {
       if (block.type !== 'tool_result') continue;
 
       // 対応する tool_use の body を探す
-      const toolBody = document.querySelector(`[data-tool-id="${block.tool_use_id}"]`);
+      const toolBody = block.tool_use_id
+        ? document.querySelector(`[data-tool-id="${CSS.escape(block.tool_use_id)}"]`)
+        : null;
       if (toolBody) {
         const resultDiv = el('div', 'tool-result' + (block.is_error ? ' error' : ''));
         const pre = el('pre', 'tool-output');

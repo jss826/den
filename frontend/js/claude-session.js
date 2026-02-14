@@ -101,15 +101,6 @@ const ClaudeSession = (() => {
         if (onEvent) onEvent(msg.session_id, msg);
         break;
 
-      case 'session_completed':
-        if (sessions[msg.session_id]) {
-          sessions[msg.session_id].status = 'completed';
-          renderSessionList();
-        }
-        if (onEvent) onEvent(msg.session_id, msg);
-        loadHistory();
-        break;
-
       case 'session_stopped':
         if (sessions[msg.session_id]) {
           sessions[msg.session_id].status = 'stopped';

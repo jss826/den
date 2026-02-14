@@ -165,6 +165,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     "session_id": &session_id,
                     "connection": &conn,
                     "dir": &dir,
+                    "prompt": &prompt,
                     "status": status,
                 });
                 let _ = ws_tx
@@ -175,6 +176,13 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
 
                 // プロンプトがあればすぐにターンを開始
                 if has_prompt {
+                    // is_running を事前に設定（spawn_claude_turn の前提条件）
+                    {
+                        let mut map = state_map.lock().await;
+                        if let Some(state) = map.get_mut(&session_id) {
+                            state.is_running = true;
+                        }
+                    }
                     spawn_claude_turn(
                         &session_id,
                         &prompt,
@@ -203,10 +211,24 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     continue;
                 }
 
-                let (is_running, is_continuation) = {
-                    let map = state_map.lock().await;
-                    match map.get(&session_id) {
-                        Some(state) => (state.is_running, !state.is_first_prompt),
+                // is_running チェックと is_running = true を同一ロック内で行う（TOCTOU 防止）
+                let is_continuation = {
+                    let mut map = state_map.lock().await;
+                    match map.get_mut(&session_id) {
+                        Some(state) => {
+                            if state.is_running {
+                                drop(map);
+                                send_error(
+                                    &ws_tx,
+                                    "Session is busy (processing a previous prompt)",
+                                )
+                                .await;
+                                continue;
+                            }
+                            let cont = !state.is_first_prompt;
+                            state.is_running = true;
+                            cont
+                        }
                         None => {
                             drop(map);
                             send_error(&ws_tx, "Session not found").await;
@@ -214,11 +236,6 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                         }
                     }
                 };
-
-                if is_running {
-                    send_error(&ws_tx, "Session is busy (processing a previous prompt)").await;
-                    continue;
-                }
 
                 spawn_claude_turn(
                     &session_id,
@@ -271,6 +288,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
 }
 
 /// Claude の1ターン（1プロセス）を起動
+/// 呼び出し前に state_map で is_running = true に設定済みであること
 async fn spawn_claude_turn(
     session_id: &str,
     prompt: &str,
@@ -280,14 +298,6 @@ async fn spawn_claude_turn(
     ws_tx: &WsSink,
     state_map: &SessionStateMap,
 ) {
-    // 状態を running に更新
-    {
-        let mut map = state_map.lock().await;
-        if let Some(state) = map.get_mut(session_id) {
-            state.is_running = true;
-        }
-    }
-
     // ユーザープロンプトを events.jsonl に記録
     let user_prompt_event = json!({ "type": "user_prompt", "prompt": prompt }).to_string();
     if let Err(e) = store.append_event(session_id, &user_prompt_event) {
@@ -449,16 +459,20 @@ async fn run_claude_turn_processor(
     }
 
     // セッション状態を idle に戻す（次のターンの準備）
-    {
+    // state_map にエントリがない場合は stop_session で削除済み → Store 更新をスキップ
+    let session_still_active = {
         let mut map = state_map.lock().await;
         if let Some(state) = map.get_mut(&session_id) {
             state.is_running = false;
             state.is_first_prompt = false;
+            true
+        } else {
+            false
         }
-    }
+    };
 
-    // Store メタを idle に更新
-    if let Some(mut meta) = store.load_session_meta(&session_id) {
+    // stop_session で削除されていなければ Store メタを idle に更新
+    if session_still_active && let Some(mut meta) = store.load_session_meta(&session_id) {
         meta.status = "idle".to_string();
         let _ = store.update_session_meta(&meta);
     }
