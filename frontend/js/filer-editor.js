@@ -8,9 +8,25 @@ const FilerEditor = (() => {
   const openFiles = new Map();
   let activePath = null;
 
+  let scrollLeftBtn;
+  let scrollRightBtn;
+
   function init(editorEl, tabsEl) {
     editorContainer = editorEl;
     tabsContainer = tabsEl;
+
+    // スクロールボタン
+    const wrapper = tabsContainer.parentElement;
+    scrollLeftBtn = wrapper.querySelector('.filer-tabs-scroll.left');
+    scrollRightBtn = wrapper.querySelector('.filer-tabs-scroll.right');
+
+    scrollLeftBtn.addEventListener('click', () => {
+      tabsContainer.scrollLeft -= 120;
+    });
+    scrollRightBtn.addEventListener('click', () => {
+      tabsContainer.scrollLeft += 120;
+    });
+    tabsContainer.addEventListener('scroll', updateScrollButtons);
 
     // Ctrl+S 保存
     document.addEventListener('keydown', (e) => {
@@ -137,24 +153,26 @@ const FilerEditor = (() => {
 
     const content = file.view.state.doc.toString();
 
-    const resp = await fetch('/api/filer/write', {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${Auth.getToken()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ path: activePath, content }),
-    });
+    await Spinner.wrap(editorContainer, async () => {
+      const resp = await fetch('/api/filer/write', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${Auth.getToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ path: activePath, content }),
+      });
 
-    if (resp.ok) {
-      file.content = content;
-      file.dirty = false;
-      renderTabs();
-      Toast.success('Saved');
-    } else {
-      const err = await resp.json().catch(() => ({ error: 'Save failed' }));
-      Toast.error(err.error || 'Save failed');
-    }
+      if (resp.ok) {
+        file.content = content;
+        file.dirty = false;
+        renderTabs();
+        Toast.success('Saved');
+      } else {
+        const err = await resp.json().catch(() => ({ error: 'Save failed' }));
+        Toast.error(err.error || 'Save failed');
+      }
+    });
   }
 
   function renderTabs() {
@@ -185,6 +203,23 @@ const FilerEditor = (() => {
       tab.addEventListener('click', () => setActive(path));
       tabsContainer.appendChild(tab);
     }
+
+    // アクティブタブを可視領域にスクロール
+    requestAnimationFrame(() => {
+      const activeTab = tabsContainer.querySelector('.filer-tab.active');
+      if (activeTab) {
+        activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      updateScrollButtons();
+    });
+  }
+
+  function updateScrollButtons() {
+    if (!scrollLeftBtn || !scrollRightBtn) return;
+    const { scrollLeft, scrollWidth, clientWidth } = tabsContainer;
+    const hasOverflow = scrollWidth > clientWidth;
+    scrollLeftBtn.hidden = !hasOverflow || scrollLeft <= 0;
+    scrollRightBtn.hidden = !hasOverflow || scrollLeft >= scrollWidth - clientWidth - 1;
   }
 
   function hasUnsavedChanges() {

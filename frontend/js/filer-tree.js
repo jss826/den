@@ -27,20 +27,25 @@ const FilerTree = (() => {
   }
 
   async function loadDir(dirPath) {
-    const data = await apiFetch(`/api/filer/list?path=${enc(dirPath)}&show_hidden=false`);
-    if (!data) return;
-    // ルートの場合はツリー全体を描画
-    if (dirPath === rootPath) {
-      treeEl.innerHTML = '';
-      renderEntries(treeEl, data.entries, data.path, 0);
-      if (onRootResolved) onRootResolved(data.path);
-    } else {
-      // サブディレクトリの場合は子要素のみ更新
-      const childrenEl = treeEl.querySelector(`[data-children="${CSS.escape(dirPath)}"]`);
-      if (childrenEl) {
-        childrenEl.innerHTML = '';
-        renderEntries(childrenEl, data.entries, dirPath, getDepth(childrenEl));
+    // ルート読込時はスピナー表示
+    const isRoot = dirPath === rootPath;
+    if (isRoot) Spinner.show(treeEl);
+    try {
+      const data = await apiFetch(`/api/filer/list?path=${enc(dirPath)}&show_hidden=false`);
+      if (!data) return;
+      if (isRoot) {
+        treeEl.innerHTML = '';
+        renderEntries(treeEl, data.entries, data.path, 0);
+        if (onRootResolved) onRootResolved(data.path);
+      } else {
+        const childrenEl = treeEl.querySelector(`[data-children="${CSS.escape(dirPath)}"]`);
+        if (childrenEl) {
+          childrenEl.innerHTML = '';
+          renderEntries(childrenEl, data.entries, dirPath, getDepth(childrenEl));
+        }
       }
+    } finally {
+      if (isRoot) Spinner.hide(treeEl);
     }
   }
 

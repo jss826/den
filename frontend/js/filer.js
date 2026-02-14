@@ -57,6 +57,89 @@ const DenFiler = (() => {
 
     // グローバルクリックでコンテキストメニュー閉じる
     document.addEventListener('click', hideContextMenu);
+
+    // ドラッグ&ドロップ アップロード
+    initDragDrop();
+  }
+
+  // --- ドラッグ&ドロップ アップロード ---
+
+  function initDragDrop() {
+    const filerPane = document.getElementById('filer-pane');
+    let dragCounter = 0;
+    let overlay = null;
+
+    function showDropOverlay() {
+      if (overlay) return;
+      overlay = document.createElement('div');
+      overlay.className = 'filer-drop-overlay';
+      overlay.innerHTML = '<div class="filer-drop-content"><div class="filer-drop-icon">\u2B07</div><div>Drop files to upload</div></div>';
+      filerPane.appendChild(overlay);
+    }
+
+    function hideDropOverlay() {
+      if (overlay) {
+        overlay.remove();
+        overlay = null;
+      }
+    }
+
+    filerPane.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      if (dragCounter === 1) showDropOverlay();
+    });
+
+    filerPane.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+
+    filerPane.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        hideDropOverlay();
+      }
+    });
+
+    filerPane.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      hideDropOverlay();
+
+      const files = e.dataTransfer.files;
+      if (!files || files.length === 0) return;
+
+      let uploaded = 0;
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('path', currentDir);
+        formData.append('file', file);
+
+        try {
+          const resp = await fetch('/api/filer/upload', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData,
+          });
+          if (resp.ok) {
+            uploaded++;
+          } else {
+            const err = await resp.json().catch(() => ({ error: 'Upload failed' }));
+            Toast.error(`${file.name}: ${err.error || 'Upload failed'}`);
+          }
+        } catch {
+          Toast.error(`${file.name}: Upload failed`);
+        }
+      }
+
+      if (uploaded > 0) {
+        Toast.success(`Uploaded ${uploaded} file${uploaded > 1 ? 's' : ''}`);
+        FilerTree.refresh();
+      }
+    });
   }
 
   // --- コンテキストメニュー ---
@@ -217,27 +300,30 @@ const DenFiler = (() => {
     const file = fileInput.files[0];
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append('path', dest);
-    formData.append('file', file);
+    const submitBtn = document.getElementById('upload-submit');
+    await Spinner.button(submitBtn, async () => {
+      const formData = new FormData();
+      formData.append('path', dest);
+      formData.append('file', file);
 
-    try {
-      const resp = await fetch('/api/filer/upload', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-      if (resp.ok) {
-        document.getElementById('filer-upload-modal').hidden = true;
-        Toast.success('Uploaded');
-        FilerTree.refresh();
-      } else {
-        const err = await resp.json().catch(() => ({ error: 'Upload failed' }));
-        Toast.error(err.error || 'Upload failed');
+      try {
+        const resp = await fetch('/api/filer/upload', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData,
+        });
+        if (resp.ok) {
+          document.getElementById('filer-upload-modal').hidden = true;
+          Toast.success('Uploaded');
+          FilerTree.refresh();
+        } else {
+          const err = await resp.json().catch(() => ({ error: 'Upload failed' }));
+          Toast.error(err.error || 'Upload failed');
+        }
+      } catch {
+        Toast.error('Upload failed');
       }
-    } catch {
-      Toast.error('Upload failed');
-    }
+    });
   }
 
   // --- 検索 ---
@@ -245,13 +331,15 @@ const DenFiler = (() => {
   async function doSearch(query) {
     if (!query) return;
 
-    const data = await apiFetch(
-      `/api/filer/search?path=${enc(currentDir)}&query=${enc(query)}&content=true`
+    const resultsEl = document.getElementById('filer-search-results');
+    const modal = document.getElementById('filer-search-modal');
+    // 検索中はモーダルを開いてスピナー表示
+    resultsEl.innerHTML = '';
+    modal.hidden = false;
+    const data = await Spinner.wrap(resultsEl, () =>
+      apiFetch(`/api/filer/search?path=${enc(currentDir)}&query=${enc(query)}&content=true`)
     );
     if (!data) return;
-
-    const resultsEl = document.getElementById('filer-search-results');
-    resultsEl.innerHTML = '';
 
     if (data.length === 0) {
       resultsEl.innerHTML = '<div style="padding:16px;color:var(--border);text-align:center">No results</div>';
@@ -289,8 +377,6 @@ const DenFiler = (() => {
         resultsEl.appendChild(item);
       }
     }
-
-    document.getElementById('filer-search-modal').hidden = false;
   }
 
   // --- ユーティリティ ---

@@ -52,16 +52,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Esc キーで開いているモーダルを閉じる
+  // Esc キーで開いているモーダルを閉じる + Ctrl+1/2/3 タブ切替
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    // confirm-modal は Toast.confirm 内で独自にハンドルするのでスキップ
+    // モーダルが開いている場合は Esc のみ処理
     const modals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'claude-modal'];
-    for (const id of modals) {
-      const modal = document.getElementById(id);
-      if (modal && !modal.hidden) {
-        modal.hidden = true;
-        return;
+    const modalOpen = modals.some((id) => {
+      const m = document.getElementById(id);
+      return m && !m.hidden;
+    });
+
+    if (e.key === 'Escape' && modalOpen) {
+      for (const id of modals) {
+        const modal = document.getElementById(id);
+        if (modal && !modal.hidden) {
+          modal.hidden = true;
+          return;
+        }
+      }
+    }
+
+    // Ctrl+1/2/3 タブ切替（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !modalOpen) {
+      const tabs = { '1': 'terminal', '2': 'claude', '3': 'filer' };
+      const tab = tabs[e.key];
+      if (tab) {
+        e.preventDefault();
+        switchTab(tab);
       }
     }
   });
