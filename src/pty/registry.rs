@@ -393,6 +393,13 @@ impl SessionRegistry {
                 let rx = session.subscribe();
                 let replay = session.replay_buf.lock().unwrap().read_all();
 
+                // ConPTY は同一サイズの resize を無視するため、
+                // 異なるサイズで一度 resize してから正しいサイズに戻す。
+                // これにより ConPTY の画面バッファが再描画され、初期出力がフラッシュされる。
+                let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
+                let _ = inner.resize_tx.send((nudge_cols, rows));
+                let _ = inner.resize_tx.send((cols, rows));
+
                 tracing::info!("Client {client_id} ({kind:?}) created+attached to session {name}");
                 Ok((Arc::clone(&session), rx, replay, client_id))
             }

@@ -221,6 +221,7 @@ impl Handler for DenSshHandler {
         match parts.first().copied() {
             Some("list") => {
                 // セッション一覧をテキストで返す
+                session.channel_success(channel)?;
                 let sessions = self.registry.list().await;
                 let mut output = String::new();
                 if sessions.is_empty() {
@@ -242,6 +243,7 @@ impl Handler for DenSshHandler {
 
             Some("attach") => {
                 let name = parts.get(1).unwrap_or(&"default").trim();
+                session.channel_success(channel)?;
                 if name.is_empty() {
                     session.data(
                         channel,
@@ -250,13 +252,13 @@ impl Handler for DenSshHandler {
                     session.close(channel)?;
                     return Ok(());
                 }
-                session.channel_success(channel)?;
                 self.start_bridge(name, session).await?;
                 Ok(())
             }
 
             Some("new") => {
                 let name = parts.get(1).unwrap_or(&"default").trim();
+                session.channel_success(channel)?;
                 if name.is_empty() {
                     session.data(
                         channel,
@@ -272,7 +274,6 @@ impl Handler for DenSshHandler {
                     session.close(channel)?;
                     return Ok(());
                 }
-                session.channel_success(channel)?;
                 self.start_bridge(name, session).await?;
                 Ok(())
             }
@@ -292,11 +293,14 @@ impl Handler for DenSshHandler {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // stdin データ → PTY writer
+        // stdin データ → PTY writer（ターミナル応答シーケンスを除去）
         if let Some(ref name) = self.session_name
             && let Some(session) = self.registry.get(name).await
         {
-            let _ = session.write_input(data).await;
+            let filtered = filter_terminal_responses(data);
+            if !filtered.is_empty() {
+                let _ = session.write_input(&filtered).await;
+            }
         }
         Ok(())
     }
@@ -361,6 +365,60 @@ impl Drop for DenSshHandler {
     }
 }
 
+/// SSH クライアントのターミナルが返す応答シーケンスをフィルタする。
+///
+/// ConPTY は初期化時にクエリを送信し、ターミナルが応答を返す。
+/// CPR (Cursor Position Report: `ESC[n;mR`) は ConPTY が必要とするので通過させるが、
+/// DA (Device Attributes: `ESC[?...c` / `ESC[>...c`) はシェルに生入力として渡されて
+/// 文字化けを起こすため除去する。
+fn filter_terminal_responses(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+
+    while i < data.len() {
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'[' {
+            // CSI sequence: ESC [
+            let start = i;
+            i += 2;
+
+            // Optional private prefix: ? > =
+            let has_private_prefix =
+                i < data.len() && (data[i] == b'?' || data[i] == b'>' || data[i] == b'=');
+            if has_private_prefix {
+                i += 1;
+            }
+
+            // Parameters: digits and semicolons
+            while i < data.len() && (data[i].is_ascii_digit() || data[i] == b';') {
+                i += 1;
+            }
+
+            // Final byte
+            if i < data.len() && data[i].is_ascii_alphabetic() {
+                let final_byte = data[i];
+                i += 1;
+
+                // DA 応答のみ除去（CPR は ConPTY が必要とするので通過させる）
+                let is_da_response = final_byte == b'c' && has_private_prefix;
+
+                if is_da_response {
+                    continue;
+                }
+
+                result.extend_from_slice(&data[start..i]);
+            } else {
+                // 不完全なシーケンス → 保持
+                result.extend_from_slice(&data[start..i]);
+            }
+        } else {
+            result.push(data[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
+
 /// タイミング攻撃防止用の定数時間文字列比較
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let a = a.as_bytes();
@@ -391,5 +449,73 @@ mod tests {
     #[test]
     fn constant_time_eq_different_length() {
         assert!(!constant_time_eq("short", "longer-string"));
+    }
+
+    #[test]
+    fn keep_cpr_response() {
+        // ESC [ 1 ; 1 R → CPR (Cursor Position Report) → ConPTY が必要 → 保持
+        let data = b"\x1b[1;1R";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_cpr_large_numbers() {
+        let data = b"\x1b[24;80R";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn filter_da1_response() {
+        // ESC [ ? 1 ; 2 c → DA1 → 除去
+        let data = b"\x1b[?1;2c";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn filter_da2_response() {
+        // ESC [ > 0 ; 1 3 6 ; 0 c → DA2 → 除去
+        let data = b"\x1b[>0;136;0c";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn keep_arrow_keys() {
+        // ESC [ A/B/C/D → 矢印キー → 保持
+        let data = b"\x1b[A\x1b[B\x1b[C\x1b[D";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_function_keys() {
+        // ESC [ 1 5 ~ → F5 → 保持
+        let data = b"\x1b[15~";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_plain_text() {
+        let data = b"hello world";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn filter_da_mixed_input() {
+        // DA1 + 通常テキスト → DA のみ除去
+        let data = b"\x1b[?1;2chello";
+        assert_eq!(filter_terminal_responses(data), b"hello".to_vec());
+    }
+
+    #[test]
+    fn keep_cpr_filter_da() {
+        // CPR + DA1 → CPR は保持、DA は除去
+        let data = b"\x1b[24;80R\x1b[?1;2c";
+        assert_eq!(filter_terminal_responses(data), b"\x1b[24;80R".to_vec());
+    }
+
+    #[test]
+    fn keep_text_between_responses() {
+        // テキスト + DA → テキスト保持
+        let data = b"abc\x1b[?1;2c";
+        assert_eq!(filter_terminal_responses(data), b"abc".to_vec());
     }
 }
