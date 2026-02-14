@@ -14,10 +14,11 @@ use tokio::sync::Mutex;
 
 use crate::AppState;
 use crate::auth::validate_token;
+use crate::pty::registry::SessionRegistry;
 use crate::store::{SessionMeta, Store};
 
 use super::connection::{self, ConnectionTarget};
-use super::session::{self, SessionMap};
+use super::session;
 use super::ssh_config;
 
 #[derive(Deserialize)]
@@ -35,12 +36,12 @@ pub async fn ws_handler(
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let sessions = session::new_session_map();
     let store = state.store.clone();
-    ws.on_upgrade(move |socket| handle_claude_ws(socket, sessions, store))
+    let registry = Arc::clone(&state.registry);
+    ws.on_upgrade(move |socket| handle_claude_ws(socket, store, registry))
 }
 
-async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store) {
+async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<SessionRegistry>) {
     let (ws_tx, mut ws_rx) = socket.split();
     let ws_tx = Arc::new(Mutex::new(ws_tx));
 
@@ -55,7 +56,6 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
         };
 
         let ws_tx = Arc::clone(&ws_tx);
-        let sessions = Arc::clone(&sessions);
 
         match cmd["type"].as_str() {
             Some("get_ssh_hosts") => {
@@ -169,45 +169,42 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                     }
                 };
 
-                let pty_reader = pty.reader;
-                let pty_writer = pty.writer;
-                let child = pty.child;
-                let master = pty.master;
-                #[cfg(windows)]
-                let job = pty.job;
+                // SessionRegistry に登録
+                let registry_name = format!("claude-{}", session_id);
+                let shared_session = match registry.create_with_pty(&registry_name, pty).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        send_error(&ws_tx, &format!("Registry error: {}", e)).await;
+                        continue;
+                    }
+                };
 
-                // writer をセッションマップに格納
-                let writer = Arc::new(Mutex::new(pty_writer));
-                let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+                // processor task を spawn（WS ライフサイクルから独立）
+                let processor_store = store.clone();
+                let processor_session_id = session_id.clone();
+                let processor_meta = meta;
+                let processor_registry_name = registry_name.clone();
+                let processor_registry = Arc::clone(&registry);
 
-                // PTY 読み取りタスクを起動（child と master の所有権を渡してセッション中生存させる）
-                let task_handle = tokio::spawn(stream_pty_output(
-                    session_id.clone(),
-                    pty_reader,
-                    Arc::clone(&ws_tx),
-                    Arc::clone(&sessions),
-                    stop_rx,
-                    store.clone(),
-                    meta,
-                    child,
-                    master,
-                    #[cfg(windows)]
-                    job,
-                ));
+                tokio::spawn(async move {
+                    run_claude_processor(
+                        processor_session_id,
+                        processor_registry_name,
+                        processor_store,
+                        processor_meta,
+                        processor_registry,
+                    )
+                    .await;
+                });
 
-                {
-                    let mut map = sessions.lock().await;
-                    map.insert(
-                        session_id.clone(),
-                        session::ClaudeSessionHandle {
-                            connection: conn,
-                            working_dir: dir,
-                            writer: Arc::clone(&writer),
-                            stop_tx,
-                            task_handle,
-                        },
-                    );
-                }
+                // WS にリアルタイム出力を転送する output task を spawn
+                let output_rx = shared_session.subscribe();
+                let ws_tx_for_output = Arc::clone(&ws_tx);
+                let sid_for_output = session_id.clone();
+
+                tokio::spawn(async move {
+                    forward_claude_output(sid_for_output, output_rx, ws_tx_for_output).await;
+                });
             }
 
             Some("send_prompt") => {
@@ -219,13 +216,11 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                     }
                 };
                 let prompt = cmd["prompt"].as_str().unwrap_or("").to_string();
+                let registry_name = format!("claude-{}", session_id);
 
-                let map = sessions.lock().await;
-                if let Some(handle) = map.get(&session_id) {
-                    let mut writer = handle.writer.lock().await;
-                    if let Err(e) = session::send_to_session(&mut **writer, &prompt) {
-                        drop(writer);
-                        drop(map);
+                if let Some(session) = registry.get(&registry_name).await {
+                    let input = format!("{}\n", prompt);
+                    if let Err(e) = session.write_input(input.as_bytes()).await {
                         send_error(&ws_tx, &format!("Write failed: {}", e)).await;
                     }
                 } else {
@@ -238,164 +233,82 @@ async fn handle_claude_ws(socket: WebSocket, sessions: SessionMap, store: Store)
                     Some(id) => id.to_string(),
                     None => continue,
                 };
-                let handle = {
-                    let mut map = sessions.lock().await;
-                    map.remove(&session_id)
-                };
-                if let Some(handle) = handle {
-                    let _ = handle.stop_tx.send(());
-                    let resp = json!({ "type": "session_stopped", "session_id": session_id });
-                    let _ = ws_tx
-                        .lock()
-                        .await
-                        .send(Message::Text(resp.to_string().into()))
-                        .await;
-                    // タスクの完全終了を待つ（プロセス cleanup 含む）
-                    let _ = handle.task_handle.await;
-                }
+                let registry_name = format!("claude-{}", session_id);
+
+                registry.destroy(&registry_name).await;
+
+                let resp = json!({ "type": "session_stopped", "session_id": session_id });
+                let _ = ws_tx
+                    .lock()
+                    .await
+                    .send(Message::Text(resp.to_string().into()))
+                    .await;
             }
 
             _ => {}
         }
     }
 
-    // WebSocket 切断時に全セッション停止 + 完全待機
-    let handles: Vec<_> = {
-        let mut map = sessions.lock().await;
-        map.drain()
-            .map(|(_, handle)| {
-                let _ = handle.stop_tx.send(());
-                handle.task_handle
-            })
-            .collect()
-    };
-    for h in handles {
-        let _ = h.await;
-    }
+    // WS 切断 — processor は続行（WS ライフサイクルから独立）
+    tracing::info!("Claude WebSocket disconnected");
 }
 
-/// PTY の出力を WebSocket に中継 + Store に永続化
-#[allow(clippy::too_many_arguments)]
-async fn stream_pty_output(
+/// Claude プロセッサー: broadcast から出力を読み、JSON パースして Store に永続化
+/// WS から独立したタスクとして実行
+async fn run_claude_processor(
     session_id: String,
-    mut reader: Box<dyn std::io::Read + Send>,
-    ws_tx: Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
-    sessions: SessionMap,
-    mut stop_rx: tokio::sync::oneshot::Receiver<()>,
+    registry_name: String,
     store: Store,
     mut meta: SessionMeta,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
-    _master: Box<dyn portable_pty::MasterPty + Send>,
-    #[cfg(windows)] job: Option<crate::pty::job::PtyJobObject>,
+    registry: Arc<SessionRegistry>,
 ) {
-    let (data_tx, mut data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-
-    // Blocking read task
-    let read_task = tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            match std::io::Read::read(&mut reader, &mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if data_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // 出力を WebSocket に転送
-    let forward = async {
-        // PTY 出力をバッファに蓄積し、NDJSON の行単位で送信
-        let mut line_buf = String::new();
-
-        loop {
-            tokio::select! {
-                data = data_rx.recv() => {
-                    match data {
-                        Some(bytes) => {
-                            let text = String::from_utf8_lossy(&bytes);
-                            line_buf.push_str(&text);
-
-                            // 改行ごとに JSON イベントとして送信
-                            while let Some(pos) = line_buf.find('\n') {
-                                let line = line_buf[..pos].trim().to_string();
-                                line_buf.drain(..=pos);
-
-                                if line.is_empty() {
-                                    continue;
-                                }
-
-                                // Store にイベント追記
-                                if let Err(e) = store.append_event(&session_id, &line) {
-                                    tracing::warn!("Failed to append event: {}", e);
-                                }
-
-                                let event = json!({
-                                    "type": "claude_event",
-                                    "session_id": &session_id,
-                                    "event": Value::String(line),
-                                });
-                                let _ = ws_tx.lock().await
-                                    .send(Message::Text(event.to_string().into()))
-                                    .await;
-                            }
-                        }
-                        None => break,
-                    }
-                }
-                _ = &mut stop_rx => break,
-            }
-        }
-
-        // 残りのバッファを送信
-        let remaining = line_buf.trim().to_string();
-        if !remaining.is_empty() {
-            if let Err(e) = store.append_event(&session_id, &remaining) {
-                tracing::warn!("Failed to append final event: {}", e);
-            }
-
-            let event = json!({
-                "type": "claude_event",
-                "session_id": &session_id,
-                "event": Value::String(remaining),
-            });
-            let _ = ws_tx
-                .lock()
-                .await
-                .send(Message::Text(event.to_string().into()))
-                .await;
-        }
+    // broadcast receiver を取得
+    let mut output_rx = {
+        let Some(session) = registry.get(&registry_name).await else {
+            return;
+        };
+        session.subscribe()
     };
 
-    forward.await;
+    let mut line_buf = String::new();
 
-    // ① Job Object terminate: 子プロセス + OpenConsole.exe を一括 kill
-    #[cfg(windows)]
-    if let Some(job) = job
-        && let Err(e) = job.terminate()
-    {
-        tracing::warn!("Claude Job Object terminate failed: {e}");
+    loop {
+        match output_rx.recv().await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                line_buf.push_str(&text);
+
+                // 改行ごとに JSON イベントとして処理
+                while let Some(pos) = line_buf.find('\n') {
+                    let line = line_buf[..pos].trim().to_string();
+                    line_buf.drain(..=pos);
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    // Store にイベント追記
+                    if let Err(e) = store.append_event(&session_id, &line) {
+                        tracing::warn!("Failed to append event: {}", e);
+                    }
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("Claude processor lagged {n} messages for session {session_id}");
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                break;
+            }
+        }
     }
 
-    // ② 子プロセスを kill + wait、master を drop して PTY を閉じる
-    tokio::task::spawn_blocking(move || {
-        let mut child = child;
-        if let Err(e) = child.kill() {
-            tracing::debug!("Claude PTY child kill failed (may already be terminated): {e}");
-        }
-        if let Err(e) = child.wait() {
-            tracing::warn!("Claude PTY child wait failed: {e}");
-        }
-        drop(_master);
-    })
-    .await
-    .ok();
-
-    // ③ read_task: PTY 閉鎖で自然終了するはず。abort は safety net
-    read_task.abort();
+    // 残りのバッファを処理
+    let remaining = line_buf.trim().to_string();
+    if !remaining.is_empty()
+        && let Err(e) = store.append_event(&session_id, &remaining)
+    {
+        tracing::warn!("Failed to append final event: {}", e);
+    }
 
     // セッション完了 → メタデータ更新
     meta.status = "completed".to_string();
@@ -413,16 +326,81 @@ async fn stream_pty_output(
         tracing::error!("Failed to update session meta: {}", e);
     }
 
-    // セッション完了通知
-    let resp = json!({ "type": "session_completed", "session_id": &session_id });
-    let _ = ws_tx
-        .lock()
-        .await
-        .send(Message::Text(resp.to_string().into()))
-        .await;
+    // registry から削除
+    registry.remove_dead(&registry_name).await;
 
-    // セッションマップから削除
-    sessions.lock().await.remove(&session_id);
+    tracing::info!("Claude processor completed for session {session_id}");
+}
+
+/// broadcast → WS 転送（セッション出力をリアルタイムで WS に送信）
+async fn forward_claude_output(
+    session_id: String,
+    mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    ws_tx: Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
+) {
+    let mut line_buf = String::new();
+
+    loop {
+        match output_rx.recv().await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                line_buf.push_str(&text);
+
+                while let Some(pos) = line_buf.find('\n') {
+                    let line = line_buf[..pos].trim().to_string();
+                    line_buf.drain(..=pos);
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    let event = json!({
+                        "type": "claude_event",
+                        "session_id": &session_id,
+                        "event": Value::String(line),
+                    });
+
+                    if ws_tx
+                        .lock()
+                        .await
+                        .send(Message::Text(event.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        return; // WS closed
+                    }
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                // continue
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                // セッション完了通知
+                let resp = json!({ "type": "session_completed", "session_id": &session_id });
+                let _ = ws_tx
+                    .lock()
+                    .await
+                    .send(Message::Text(resp.to_string().into()))
+                    .await;
+                break;
+            }
+        }
+    }
+
+    // 残りのバッファを送信
+    let remaining = line_buf.trim().to_string();
+    if !remaining.is_empty() {
+        let event = json!({
+            "type": "claude_event",
+            "session_id": &session_id,
+            "event": Value::String(remaining),
+        });
+        let _ = ws_tx
+            .lock()
+            .await
+            .send(Message::Text(event.to_string().into()))
+            .await;
+    }
 }
 
 async fn send_error(

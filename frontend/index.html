@@ -36,6 +36,13 @@
 
     <!-- ターミナル -->
     <div id="terminal-pane" class="pane">
+      <div id="terminal-session-bar" class="terminal-session-bar">
+        <select id="session-select" class="session-select"></select>
+        <button id="session-new-btn" class="session-bar-btn" title="New Session">+</button>
+        <span id="session-clients" class="session-clients"></span>
+        <div class="session-spacer"></div>
+        <button id="session-kill-btn" class="session-bar-btn danger" title="Kill Session">x</button>
+      </div>
       <div id="terminal-container"></div>
     </div>
 

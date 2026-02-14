@@ -3,6 +3,9 @@ const DenTerminal = (() => {
   let term = null;
   let fitAddon = null;
   let ws = null;
+  let currentSession = 'default';
+  let authToken = null;
+  let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
 
   /** fit + refresh + resize 通知をまとめて実行 */
   let fitRetryCount = 0;
@@ -72,7 +75,6 @@ const DenTerminal = (() => {
       }
     } else {
       // iOS/Safari: Canvas レンダラーを明示的にロード
-      // xterm.js v6 は WebGL/Canvas アドオン未ロードだと DOM レンダラーになり描画されない
       try {
         term.loadAddon(new CanvasAddon.CanvasAddon());
       } catch (_e) {
@@ -115,15 +117,24 @@ const DenTerminal = (() => {
     return term;
   }
 
-  function connect(token) {
+  function connect(token, sessionName) {
+    authToken = token;
+    currentSession = sessionName || 'default';
+    doConnect();
+  }
+
+  function doConnect() {
+    const generation = ++connectGeneration;
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(token)}&cols=${cols}&rows=${rows}`;
+    const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(authToken)}&cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
     let retries = 0;
 
-    const doConnect = () => {
+    const attemptConnect = () => {
+      // 世代チェック: 新しい doConnect() が呼ばれていたら中断
+      if (generation !== connectGeneration) return;
       // 古い接続を破棄
       if (ws) {
         ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
@@ -136,16 +147,26 @@ const DenTerminal = (() => {
 
       ws.onopen = () => {
         retries = 0;
-        term.writeln('\x1b[32mConnected.\x1b[0m');
         term.focus();
         fitAndRefresh();
       };
 
       ws.onmessage = (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(event.data));
-        } else {
+        if (typeof event.data === 'string') {
+          // JSON メッセージ
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'session_ended') {
+              term.writeln('\r\n\x1b[33mSession ended.\x1b[0m');
+              refreshSessionList();
+              return;
+            }
+          } catch (_) {
+            // テキストデータとして扱う
+          }
           term.write(event.data);
+        } else if (event.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(event.data));
         }
       };
 
@@ -157,15 +178,24 @@ const DenTerminal = (() => {
 
       // Safari: WebSocket が CONNECTING のまま stall する問題のリトライ
       setTimeout(() => {
+        if (generation !== connectGeneration) return;
         if (ws && ws.readyState === WebSocket.CONNECTING && retries < 3) {
           retries++;
-          doConnect();
+          attemptConnect();
         }
       }, 3000);
     };
 
     // 少し遅延させてから接続（Safari の初回 WS stall 軽減）
-    setTimeout(doConnect, 200);
+    setTimeout(attemptConnect, 200);
+  }
+
+  /** セッションを切り替え */
+  function switchSession(name) {
+    if (name === currentSession) return;
+    currentSession = name;
+    term.clear();
+    doConnect();
   }
 
   function sendResize() {
@@ -193,5 +223,138 @@ const DenTerminal = (() => {
     return term;
   }
 
-  return { init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal };
+  function getCurrentSession() {
+    return currentSession;
+  }
+
+  // --- Session management ---
+
+  async function fetchSessions() {
+    if (!authToken) return [];
+    try {
+      const resp = await fetch('/api/terminal/sessions', {
+        headers: { 'Authorization': `Bearer ${authToken}` },
+      });
+      if (resp.ok) return await resp.json();
+    } catch (_) { /* ignore */ }
+    return [];
+  }
+
+  async function createSession(name) {
+    if (!authToken) return false;
+    try {
+      const resp = await fetch('/api/terminal/sessions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name }),
+      });
+      return resp.ok || resp.status === 201;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function destroySession(name) {
+    if (!authToken) return false;
+    try {
+      const resp = await fetch(`/api/terminal/sessions/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` },
+      });
+      return resp.ok || resp.status === 204;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function refreshSessionList() {
+    const select = document.getElementById('session-select');
+    const clientsSpan = document.getElementById('session-clients');
+    if (!select) return;
+
+    const sessions = await fetchSessions();
+
+    select.innerHTML = '';
+    if (sessions.length === 0) {
+      // No sessions — just show "default" as placeholder
+      const opt = document.createElement('option');
+      opt.value = 'default';
+      opt.textContent = 'default';
+      select.appendChild(opt);
+    } else {
+      for (const s of sessions) {
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        const status = s.alive ? '' : ' (dead)';
+        opt.textContent = `${s.name}${status}`;
+        if (s.name === currentSession) opt.selected = true;
+        select.appendChild(opt);
+      }
+    }
+
+    // Update client count display
+    const current = sessions.find(s => s.name === currentSession);
+    if (current) {
+      clientsSpan.textContent = `${current.client_count} client${current.client_count !== 1 ? 's' : ''}`;
+    } else {
+      clientsSpan.textContent = '';
+    }
+  }
+
+  function initSessionBar() {
+    const select = document.getElementById('session-select');
+    const newBtn = document.getElementById('session-new-btn');
+    const killBtn = document.getElementById('session-kill-btn');
+
+    if (select) {
+      select.addEventListener('change', () => {
+        switchSession(select.value);
+      });
+    }
+
+    if (newBtn) {
+      newBtn.addEventListener('click', async () => {
+        const name = prompt('Session name:');
+        if (!name || !name.trim()) return;
+        const trimmed = name.trim();
+        if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {
+          alert('Session name must be alphanumeric + hyphens only');
+          return;
+        }
+        if (trimmed.length > 64) {
+          alert('Session name too long (max 64 characters)');
+          return;
+        }
+        const ok = await createSession(trimmed);
+        if (!ok) {
+          alert('Failed to create session');
+          return;
+        }
+        await refreshSessionList();
+        switchSession(trimmed);
+      });
+    }
+
+    if (killBtn) {
+      killBtn.addEventListener('click', async () => {
+        if (!confirm(`Kill session "${currentSession}"?`)) return;
+        await destroySession(currentSession);
+        currentSession = 'default';
+        term.clear();
+        doConnect();
+        await refreshSessionList();
+      });
+    }
+
+    // 定期更新
+    setInterval(refreshSessionList, 5000);
+  }
+
+  return {
+    init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
+    getCurrentSession, switchSession, refreshSessionList, initSessionBar,
+  };
 })();

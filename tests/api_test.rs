@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use den::auth::generate_token;
 use den::config::{Config, Environment};
+use den::pty::registry::SessionRegistry;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -20,11 +21,13 @@ fn test_config() -> Config {
         log_level: "debug".to_string(),
         data_dir: tmp.to_string_lossy().to_string(),
         bind_address: "127.0.0.1".to_string(),
+        ssh_port: 0,
     }
 }
 
 fn test_app() -> axum::Router {
-    den::create_app(test_config())
+    let registry = SessionRegistry::new("cmd.exe".to_string());
+    den::create_app(test_config(), registry)
 }
 
 fn auth_header() -> String {
@@ -234,7 +237,8 @@ async fn settings_get_default() {
 #[tokio::test]
 async fn settings_put_and_get() {
     let config = test_config();
-    let app = den::create_app(config);
+    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let app = den::create_app(config, registry);
 
     // PUT
     let req = Request::builder()

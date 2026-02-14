@@ -65,6 +65,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('terminal-container');
     DenTerminal.init(container);
     DenTerminal.connect(Auth.getToken());
+    DenTerminal.initSessionBar();
+    DenTerminal.refreshSessionList();
 
     // キーバー初期化（カスタムキー設定があればそれを使用）
     Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'));

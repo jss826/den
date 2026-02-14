@@ -138,9 +138,66 @@ html, body {
   bottom: 0;        /* キーバーがあれば上書き */
 }
 
+/* Terminal session bar */
+.terminal-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  height: 32px;
+}
+
+.session-select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  outline: none;
+  cursor: pointer;
+  min-width: 100px;
+}
+
+.session-select:focus {
+  border-color: var(--accent);
+}
+
+.session-bar-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 0.8rem;
+  padding: 2px 8px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.session-bar-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.session-bar-btn.danger:hover {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.session-clients {
+  font-size: 0.7rem;
+  color: var(--border);
+}
+
+.session-spacer {
+  flex: 1;
+}
+
 #terminal-container {
   width: 100%;
-  height: 100%;
+  height: calc(100% - 32px);
 }
 
 /* xterm.js のオーバーライド */

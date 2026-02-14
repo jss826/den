@@ -1,25 +1,6 @@
 use crate::pty::manager::PtySession;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use super::connection::ConnectionTarget;
-
-pub type SessionMap = Arc<Mutex<HashMap<String, ClaudeSessionHandle>>>;
-
-/// セッションへの外部参照（PTY writer + 制御チャネル）
-#[allow(dead_code)]
-pub struct ClaudeSessionHandle {
-    pub connection: ConnectionTarget,
-    pub working_dir: String,
-    pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
-    pub stop_tx: tokio::sync::oneshot::Sender<()>,
-    pub task_handle: tokio::task::JoinHandle<()>,
-}
-
-pub fn new_session_map() -> SessionMap {
-    Arc::new(Mutex::new(HashMap::new()))
-}
 
 /// Claude CLI コマンドを組み立て、PTY で起動
 pub fn spawn_claude_session(
@@ -57,17 +38,6 @@ pub fn spawn_claude_session(
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
     }
-}
-
-/// 継続プロンプト送信用：既存セッションの PTY に書き込む
-pub fn send_to_session(
-    writer: &mut (dyn std::io::Write + Send),
-    prompt: &str,
-) -> Result<(), std::io::Error> {
-    // claude CLI は stdin からの追加プロンプトを受け付ける
-    writer.write_all(prompt.as_bytes())?;
-    writer.write_all(b"\n")?;
-    writer.flush()
 }
 
 fn spawn_command_pty(

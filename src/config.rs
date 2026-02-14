@@ -37,6 +37,7 @@ pub struct Config {
     pub log_level: String,
     pub data_dir: String,
     pub bind_address: String,
+    pub ssh_port: u16,
 }
 
 impl Config {
@@ -81,6 +82,11 @@ impl Config {
 
         let data_dir = env::var("DEN_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
 
+        let ssh_port = env::var("DEN_SSH_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2222);
+
         let default_bind = match env {
             Environment::Development => "127.0.0.1",
             Environment::Production => "0.0.0.0",
@@ -96,6 +102,7 @@ impl Config {
             log_level,
             data_dir,
             bind_address,
+            ssh_port,
         }
     }
 }
@@ -116,6 +123,7 @@ mod tests {
             env::remove_var("DEN_LOG_LEVEL");
             env::remove_var("DEN_DATA_DIR");
             env::remove_var("DEN_BIND_ADDRESS");
+            env::remove_var("DEN_SSH_PORT");
         }
     }
 

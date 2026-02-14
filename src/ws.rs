@@ -1,24 +1,26 @@
 use axum::{
+    Json,
     extract::{
-        Query, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
+    http::StatusCode,
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
-use portable_pty::PtySize;
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
 use crate::auth::validate_token;
-use crate::pty::manager::PtyManager;
+use crate::pty::registry::{ClientKind, SessionInfo};
 
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub token: String,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    pub session: Option<String>,
 }
 
 /// WebSocket エンドポイント
@@ -33,84 +35,73 @@ pub async fn ws_handler(
 
     let cols = query.cols.unwrap_or(80);
     let rows = query.rows.unwrap_or(24);
-    let shell = state.config.shell.clone();
+    let session_name = query.session.unwrap_or_else(|| "default".to_string());
+    let registry = Arc::clone(&state.registry);
 
-    ws.on_upgrade(move |socket| handle_socket(socket, shell, cols, rows))
+    ws.on_upgrade(move |socket| handle_socket(socket, registry, session_name, cols, rows))
 }
 
-async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
+async fn handle_socket(
+    socket: WebSocket,
+    registry: Arc<crate::pty::registry::SessionRegistry>,
+    session_name: String,
+    cols: u16,
+    rows: u16,
+) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // PTY セッションを起動
-    let pty = match PtyManager::spawn(&shell, cols, rows) {
-        Ok(pty) => pty,
+    // SessionRegistry に attach（なければ create）
+    let (session, mut output_rx, replay, client_id) = match registry
+        .get_or_create(&session_name, ClientKind::WebSocket, cols, rows)
+        .await
+    {
+        Ok(result) => result,
         Err(e) => {
-            tracing::error!("PTY spawn failed: {}", e);
+            tracing::error!("Session attach failed: {e}");
             let _ = ws_tx
-                .send(Message::Text(
-                    format!("\r\nError: PTY spawn failed: {}\r\n", e).into(),
-                ))
+                .send(Message::Text(format!("\r\nError: {e}\r\n").into()))
                 .await;
             return;
         }
     };
 
-    let mut pty_reader = pty.reader;
-    let mut pty_writer = pty.writer;
-    let master = pty.master;
-    let child = pty.child;
-    #[cfg(windows)]
-    let job = pty.job;
+    // replay data を送信
+    if !replay.is_empty() && ws_tx.send(Message::Binary(replay.into())).await.is_err() {
+        registry.detach(&session_name, client_id).await;
+        return;
+    }
 
-    // PTY → WS: blocking read を spawn_blocking で非同期化
-    let (pty_data_tx, mut pty_data_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-
-    let read_task = tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 4096];
+    // broadcast → WS 転送
+    let session_for_output = Arc::clone(&session);
+    let name_for_output = session_name.clone();
+    let pty_to_ws = async {
         loop {
-            match std::io::Read::read(&mut pty_reader, &mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if pty_data_tx.blocking_send(buf[..n].to_vec()).is_err() {
+            match output_rx.recv().await {
+                Ok(data) => {
+                    if ws_tx.send(Message::Binary(data.into())).await.is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("WS client lagged {n} messages on session {name_for_output}");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // セッション終了
+                    let msg = serde_json::json!({"type": "session_ended"}).to_string();
+                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                    break;
+                }
             }
         }
-    });
-
-    // PTY → WS 転送
-    let pty_to_ws = async {
-        while let Some(data) = pty_data_rx.recv().await {
-            if ws_tx.send(Message::Binary(data.into())).await.is_err() {
-                break;
-            }
-        }
+        drop(session_for_output); // keep session alive during output
     };
-
-    // resize コマンドは別チャネル経由で spawn_blocking 内で処理
-    let (resize_tx, resize_rx) = std::sync::mpsc::channel::<(u16, u16)>();
-
-    // master を blocking スレッドに移動 (MasterPty は !Sync)
-    let resize_task = tokio::task::spawn_blocking(move || {
-        while let Ok((cols, rows)) = resize_rx.recv() {
-            let size = PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            };
-            let _ = master.resize(size);
-        }
-    });
 
     // WS → PTY 転送
     let ws_to_pty = async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
-                    if std::io::Write::write_all(&mut pty_writer, &data).is_err() {
+                    if session.write_input(&data).await.is_err() {
                         break;
                     }
                 }
@@ -121,13 +112,12 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
                                 if let (Some(c), Some(r)) =
                                     (cmd["cols"].as_u64(), cmd["rows"].as_u64())
                                 {
-                                    let _ = resize_tx.send((c as u16, r as u16));
+                                    session.resize(client_id, c as u16, r as u16).await;
                                 }
                             }
                             Some("input") => {
                                 if let Some(data) = cmd["data"].as_str()
-                                    && std::io::Write::write_all(&mut pty_writer, data.as_bytes())
-                                        .is_err()
+                                    && session.write_input(data.as_bytes()).await.is_err()
                                 {
                                     break;
                                 }
@@ -146,41 +136,41 @@ async fn handle_socket(socket: WebSocket, shell: String, cols: u16, rows: u16) {
         _ = pty_to_ws => {},
         _ = ws_to_pty => {},
     }
-    // select! 終了時点で resize_tx は drop 済み → resize_task は自然終了開始
 
-    // ① Job Object terminate: cmd.exe + OpenConsole.exe を一括 kill
-    #[cfg(windows)]
-    if let Some(job) = job
-        && let Err(e) = job.terminate()
-    {
-        tracing::warn!("Job Object terminate failed: {e}");
+    // detach（セッションは維持）
+    registry.detach(&session_name, client_id).await;
+
+    tracing::info!("WebSocket client detached from session {session_name}");
+}
+
+// --- REST API for terminal session management ---
+
+/// GET /api/terminal/sessions
+pub async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
+    Json(state.registry.list().await)
+}
+
+/// POST /api/terminal/sessions { "name": "..." }
+#[derive(Deserialize)]
+pub struct CreateSessionRequest {
+    pub name: String,
+}
+
+pub async fn create_session(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSessionRequest>,
+) -> impl IntoResponse {
+    match state.registry.create(&req.name, 80, 24).await {
+        Ok(_) => StatusCode::CREATED.into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
+}
 
-    // ② 子プロセスを kill + wait（Job Object で既に死んでいる場合もある）
-    tokio::task::spawn_blocking(move || {
-        let mut child = child;
-        if let Err(e) = child.kill() {
-            tracing::debug!("PTY child kill failed (may already be terminated): {e}");
-        }
-        if let Err(e) = child.wait() {
-            tracing::warn!("PTY child wait failed: {e}");
-        }
-    })
-    .await
-    .ok();
-
-    // ③ resize_task 完了を待つ（master drop → PTY close）
-    if let Err(e) = resize_task.await {
-        tracing::warn!("Resize task did not finish cleanly: {e}");
-    }
-
-    // ④ read_task: PTY 閉鎖 + child 死亡 → read() が EOF を返して自然終了するはず
-    //    3秒タイムアウト付きで待ち、超過時は abort (safety net)
-    match tokio::time::timeout(std::time::Duration::from_secs(3), read_task).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!("Read task finished with error: {e}"),
-        Err(_) => tracing::warn!("Read task did not finish within 3s timeout"),
-    }
-
-    tracing::info!("WebSocket session ended");
+/// DELETE /api/terminal/sessions/{name}
+pub async fn destroy_session(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> StatusCode {
+    state.registry.destroy(&name).await;
+    StatusCode::NO_CONTENT
 }

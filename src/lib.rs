@@ -4,6 +4,7 @@ pub mod claude;
 pub mod config;
 pub mod filer;
 pub mod pty;
+pub mod ssh;
 pub mod store;
 pub mod store_api;
 pub mod ws;
@@ -13,19 +14,25 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use config::Config;
+use pty::registry::SessionRegistry;
 use std::sync::Arc;
 use store::Store;
 
 pub struct AppState {
     pub config: Config,
     pub store: Store,
+    pub registry: Arc<SessionRegistry>,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
-pub fn create_app(config: Config) -> Router {
+pub fn create_app(config: Config, registry: Arc<SessionRegistry>) -> Router {
     let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
 
-    let state = Arc::new(AppState { config, store });
+    let state = Arc::new(AppState {
+        config,
+        store,
+        registry,
+    });
 
     // 認証不要のルート
     let public_routes = Router::new()
@@ -45,6 +52,12 @@ pub fn create_app(config: Config) -> Router {
             "/api/sessions/{id}/events",
             get(store_api::get_session_events),
         )
+        // Terminal session management API
+        .route(
+            "/api/terminal/sessions",
+            get(ws::list_sessions).post(ws::create_session),
+        )
+        .route("/api/terminal/sessions/{name}", delete(ws::destroy_session))
         // Filer API
         .route("/api/filer/list", get(filer::api::list))
         .route("/api/filer/read", get(filer::api::read))
