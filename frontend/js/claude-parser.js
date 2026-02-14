@@ -1,3 +1,4 @@
+/* global DenIcons */
 // Den - Claude streaming-json パーサー + レンダラー
 const ClaudeParser = (() => {
 
@@ -120,6 +121,7 @@ const ClaudeParser = (() => {
           const icon = header.querySelector('.tool-icon');
           if (icon) {
             icon.innerHTML = block.is_error ? DenIcons.xCircle(14) : DenIcons.checkCircle(14);
+            icon.classList.remove('success', 'error');
             icon.classList.add(block.is_error ? 'error' : 'success');
           }
         }

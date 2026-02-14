@@ -40,6 +40,8 @@ class Element {
   }
   classList = {
     _classes: new Set(),
+    add(...cs) { cs.forEach(c => this._classes.add(c)); },
+    remove(...cs) { cs.forEach(c => this._classes.delete(c)); },
     toggle(c) { this._classes.has(c) ? this._classes.delete(c) : this._classes.add(c); },
   };
 }
@@ -54,6 +56,13 @@ globalThis.document = {
   querySelector() {
     return null;
   },
+};
+
+// DenIcons mock for Node.js test environment
+globalThis.DenIcons = {
+  zap: () => '[zap]',
+  checkCircle: () => '[check]',
+  xCircle: () => '[x]',
 };
 
 const ClaudeParser = require('../../frontend/js/claude-parser.js');
