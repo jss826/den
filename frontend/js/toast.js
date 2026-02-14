@@ -46,7 +46,8 @@ const Toast = (() => {
     // Auto dismiss
     setTimeout(() => {
       toast.classList.remove('show');
-      const onEnd = () => toast.remove();
+      let removed = false;
+      const onEnd = () => { if (removed) return; removed = true; toast.remove(); };
       toast.addEventListener('transitionend', onEnd, { once: true });
       // Fallback removal if transitionend doesn't fire
       setTimeout(onEnd, 400);

@@ -61,7 +61,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const modal = document.getElementById(id);
       if (modal && !modal.hidden) {
         modal.hidden = true;
-        e.stopPropagation();
         return;
       }
     }
