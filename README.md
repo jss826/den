@@ -70,6 +70,7 @@ just prod strongpw    # パスワード上書き指定も可
 | `DEN_SHELL` | `cmd.exe` (Win) / `$SHELL` | Shell for terminal |
 | `DEN_LOG_LEVEL` | `debug` (dev) / `info` (prod) | Log level filter |
 | `DEN_DATA_DIR` | `./data` | Data persistence directory |
+| `DEN_SSH_PORT` | *(disabled)* | SSH server port (opt-in) |
 
 ## Features
 
@@ -77,6 +78,32 @@ just prod strongpw    # パスワード上書き指定も可
 - **Claude Code UI** - streaming-json chat, multi-session, SSH support
 - **Server-side Persistence** - settings and session history saved to JSON files
 - **Authentication** - HMAC-SHA256 token with 24h expiry
+- **Built-in SSH Server** - attach to terminal sessions via SSH
+
+## SSH Server
+
+`DEN_SSH_PORT` を設定すると SSH サーバーが有効になる（opt-in）。
+
+```powershell
+$env:DEN_SSH_PORT="2222"
+```
+
+接続:
+
+```bash
+# セッション一覧
+ssh -p 2222 -o PubkeyAuthentication=no -o IdentityAgent=none den@localhost list
+
+# セッションに接続（なければ作成）
+ssh -p 2222 -o PubkeyAuthentication=no -o IdentityAgent=none den@localhost attach default
+
+# 新規セッション作成
+ssh -p 2222 -o PubkeyAuthentication=no -o IdentityAgent=none den@localhost new mysession
+```
+
+- ユーザー名は任意（パスワード認証のみ、`DEN_PASSWORD` と同じ）
+- `-o PubkeyAuthentication=no -o IdentityAgent=none` で SSH agent をバイパス
+- ホストキーは初回起動時に `DEN_DATA_DIR/ssh_host_key` に自動生成
 
 ## Project Structure
 
