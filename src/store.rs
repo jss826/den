@@ -13,6 +13,19 @@ pub struct Store {
 // --- データモデル ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeybarButton {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub send: String,
+    #[serde(default)]
+    #[serde(rename = "type")]
+    pub btn_type: Option<String>,
+    #[serde(default)]
+    pub mod_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_size")]
     pub font_size: u8,
@@ -24,6 +37,8 @@ pub struct Settings {
     pub claude_default_connection: Option<serde_json::Value>,
     #[serde(default)]
     pub claude_default_dir: Option<String>,
+    #[serde(default)]
+    pub keybar_buttons: Option<Vec<KeybarButton>>,
 }
 
 fn default_font_size() -> u8 {
@@ -44,6 +59,7 @@ impl Default for Settings {
             terminal_scrollback: default_scrollback(),
             claude_default_connection: None,
             claude_default_dir: None,
+            keybar_buttons: None,
         }
     }
 }

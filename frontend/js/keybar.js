@@ -2,17 +2,18 @@
 const Keybar = (() => {
   let container = null;
   let modifiers = { ctrl: false, alt: false };
+  let activeKeys = [];
 
-  // キー定義
-  const keys = [
-    { label: 'Ctrl', type: 'modifier', mod: 'ctrl' },
-    { label: 'Alt', type: 'modifier', mod: 'alt' },
+  // デフォルトキー配列
+  const DEFAULT_KEYS = [
+    { label: 'Ctrl', send: '', type: 'modifier', mod_key: 'ctrl' },
+    { label: 'Alt', send: '', type: 'modifier', mod_key: 'alt' },
     { label: 'Tab', send: '\t' },
     { label: 'Esc', send: '\x1b' },
-    { label: '↑', send: '\x1b[A' },
-    { label: '↓', send: '\x1b[B' },
-    { label: '→', send: '\x1b[C' },
-    { label: '←', send: '\x1b[D' },
+    { label: '\u2191', send: '\x1b[A' },
+    { label: '\u2193', send: '\x1b[B' },
+    { label: '\u2192', send: '\x1b[C' },
+    { label: '\u2190', send: '\x1b[D' },
     { label: '|', send: '|' },
     { label: '~', send: '~' },
     { label: '/', send: '/' },
@@ -23,14 +24,23 @@ const Keybar = (() => {
     { label: 'C-l', send: '\x0c' },
   ];
 
-  function init(el) {
+  function init(el, customKeys) {
     container = el;
+    activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
     render();
 
-    // タッチデバイス検出
     if (isTouchDevice()) {
       container.classList.add('visible');
     }
+  }
+
+  function reload(customKeys) {
+    activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
+    render();
+  }
+
+  function getDefaultKeys() {
+    return DEFAULT_KEYS.map(k => ({ ...k }));
   }
 
   function isTouchDevice() {
@@ -41,17 +51,21 @@ const Keybar = (() => {
 
   function render() {
     container.innerHTML = '';
-    keys.forEach((key) => {
+    modifiers = { ctrl: false, alt: false };
+    activeKeys.forEach((key) => {
       const btn = document.createElement('button');
       btn.className = 'key-btn';
       btn.textContent = key.label;
 
-      if (key.type === 'modifier') {
+      const isModifier = key.type === 'modifier' || key.btn_type === 'modifier';
+
+      if (isModifier) {
+        const modKey = key.mod || key.mod_key;
         btn.classList.add('modifier');
         btn.addEventListener('click', (e) => {
           e.preventDefault();
-          modifiers[key.mod] = !modifiers[key.mod];
-          btn.classList.toggle('active', modifiers[key.mod]);
+          modifiers[modKey] = !modifiers[modKey];
+          btn.classList.toggle('active', modifiers[modKey]);
         });
       } else {
         btn.addEventListener('click', (e) => {
@@ -91,5 +105,5 @@ const Keybar = (() => {
     });
   }
 
-  return { init, isTouchDevice };
+  return { init, reload, getDefaultKeys, isTouchDevice };
 })();

@@ -775,6 +775,112 @@ html, body {
   border-color: var(--accent);
 }
 
+/* === キーバー設定エディタ === */
+
+.keybar-editor {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.keybar-btn-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px;
+}
+
+.keybar-btn-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--keybar-key);
+  border-radius: 6px;
+  padding: 4px 6px 4px 10px;
+  font-size: 0.8rem;
+  font-family: monospace;
+  color: var(--fg);
+  cursor: grab;
+  user-select: none;
+  transition: background 0.15s, transform 0.15s;
+}
+
+.keybar-btn-item.modifier {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.keybar-btn-item.dragging {
+  opacity: 0.5;
+  transform: scale(0.95);
+}
+
+.keybar-btn-item.drag-over {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.keybar-btn-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  opacity: 0.5;
+  line-height: 1;
+}
+
+.keybar-btn-remove:hover {
+  opacity: 1;
+  color: var(--error);
+}
+
+.keybar-editor-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.keybar-editor-actions .modal-btn {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+}
+
+.keybar-add-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.keybar-form-row {
+  margin-bottom: 8px;
+}
+
+.keybar-form-row label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--border);
+  margin-bottom: 4px;
+}
+
+.keybar-form-row .settings-input {
+  margin-top: 4px;
+}
+
+.keybar-form-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.keybar-form-actions .modal-btn {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+}
+
 /* === サイドバー History セクション === */
 
 .sidebar-divider {

@@ -168,6 +168,42 @@
           <label>Default Working Directory</label>
           <input type="text" id="setting-default-dir" class="settings-input" placeholder="~ (default)">
         </div>
+        <div class="modal-section">
+          <label>Keybar Buttons</label>
+          <div id="keybar-editor" class="keybar-editor">
+            <div id="keybar-btn-list" class="keybar-btn-list"></div>
+            <div class="keybar-editor-actions">
+              <button id="keybar-add-btn" class="modal-btn" type="button">Add Button</button>
+              <button id="keybar-reset-btn" class="modal-btn" type="button">Reset to Default</button>
+            </div>
+            <div id="keybar-add-form" class="keybar-add-form" hidden>
+              <div class="keybar-form-row">
+                <label>Label</label>
+                <input type="text" id="keybar-new-label" class="settings-input" placeholder="e.g. Tab" maxlength="8">
+              </div>
+              <div class="keybar-form-row">
+                <label>Send</label>
+                <select id="keybar-preset-select" class="settings-input">
+                  <option value="">-- Custom --</option>
+                </select>
+                <input type="text" id="keybar-new-send" class="settings-input" placeholder="e.g. \t or literal text">
+              </div>
+              <div class="keybar-form-row">
+                <label>
+                  <input type="checkbox" id="keybar-new-modifier"> Modifier key (Ctrl/Alt)
+                </label>
+                <select id="keybar-new-modkey" class="settings-input" hidden>
+                  <option value="ctrl">Ctrl</option>
+                  <option value="alt">Alt</option>
+                </select>
+              </div>
+              <div class="keybar-form-actions">
+                <button id="keybar-add-confirm" class="modal-btn primary" type="button">Add</button>
+                <button id="keybar-add-cancel" class="modal-btn" type="button">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="modal-actions">
           <button id="settings-cancel" class="modal-btn">Cancel</button>
           <button id="settings-save" class="modal-btn primary">Save</button>

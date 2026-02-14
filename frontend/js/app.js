@@ -66,8 +66,8 @@ document.addEventListener('DOMContentLoaded', () => {
     DenTerminal.init(container);
     DenTerminal.connect(Auth.getToken());
 
-    // キーバー初期化
-    Keybar.init(document.getElementById('keybar'));
+    // キーバー初期化（カスタムキー設定があればそれを使用）
+    Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'));
 
     // タブ切り替え
     document.querySelectorAll('.tab').forEach((tab) => {
