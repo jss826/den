@@ -90,17 +90,17 @@ $env:DEN_SSH_PORT="2222"
 
 接続:
 
-```bash
-SSH_OPTS="-o PubkeyAuthentication=no -o IdentityAgent=none"
+```powershell
+$SSH_OPTS = @("-o", "PubkeyAuthentication=no", "-o", "IdentityAgent=none")
 
 # セッション一覧
-ssh -p 2222 $SSH_OPTS den@localhost list
+ssh -p 2222 @SSH_OPTS den@localhost list
 
 # セッションに接続（なければ作成） — -t で PTY 割当が必要
-ssh -t -p 2222 $SSH_OPTS den@localhost attach default
+ssh -t -p 2222 @SSH_OPTS den@localhost attach default
 
 # 新規セッション作成
-ssh -t -p 2222 $SSH_OPTS den@localhost new mysession
+ssh -t -p 2222 @SSH_OPTS den@localhost new mysession
 ```
 
 - ユーザー名は任意（パスワード認証のみ、`DEN_PASSWORD` と同じ）
