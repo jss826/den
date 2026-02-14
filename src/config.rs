@@ -37,7 +37,8 @@ pub struct Config {
     pub log_level: String,
     pub data_dir: String,
     pub bind_address: String,
-    pub ssh_port: u16,
+    /// SSH ポート（None = SSH 無効、DEN_SSH_PORT で指定）
+    pub ssh_port: Option<u16>,
 }
 
 impl Config {
@@ -84,8 +85,8 @@ impl Config {
 
         let ssh_port = env::var("DEN_SSH_PORT")
             .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(2222);
+            .and_then(|v| v.parse::<u16>().ok())
+            .filter(|&p| p > 0);
 
         let default_bind = match env {
             Environment::Development => "127.0.0.1",

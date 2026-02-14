@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -9,6 +10,35 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::manager::PtyManager;
 use super::ring_buffer::RingBuffer;
+
+/// SessionRegistry の操作エラー
+#[derive(Debug)]
+pub enum RegistryError {
+    /// セッション名が不正
+    InvalidName(String),
+    /// セッションが既に存在する
+    AlreadyExists(String),
+    /// セッションが見つからない
+    NotFound(String),
+    /// セッションが終了済み
+    SessionDead(String),
+    /// PTY spawn 失敗
+    SpawnFailed(String),
+}
+
+impl fmt::Display for RegistryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidName(name) => write!(f, "Invalid session name: {name}"),
+            Self::AlreadyExists(name) => write!(f, "Session already exists: {name}"),
+            Self::NotFound(name) => write!(f, "Session not found: {name}"),
+            Self::SessionDead(name) => write!(f, "Session is dead: {name}"),
+            Self::SpawnFailed(msg) => write!(f, "Spawn failed: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for RegistryError {}
 
 /// リプレイバッファ容量: 64KB
 const REPLAY_CAPACITY: usize = 64 * 1024;
@@ -33,8 +63,8 @@ pub struct SharedSession {
     alive: AtomicBool,
     /// リプレイバッファ（std::sync::Mutex: blocking context から常にアクセス可能）
     replay_buf: std::sync::Mutex<RingBuffer>,
-    /// broadcast 送信側（subscribe() 用、Mutex 不要）
-    output_tx: broadcast::Sender<Vec<u8>>,
+    /// broadcast 送信側（read_task 終了時に drop してチャネルを閉じる）
+    output_tx: std::sync::Mutex<Option<broadcast::Sender<Vec<u8>>>>,
     /// PTY 内部状態（pty_writer, clients, child 等）
     pub inner: Mutex<SessionInner>,
 }
@@ -106,7 +136,7 @@ impl SessionRegistry {
             created_at: Utc::now(),
             alive: AtomicBool::new(true),
             replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
-            output_tx: output_tx.clone(),
+            output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
             inner: Mutex::new(SessionInner {
                 pty_writer,
                 resize_tx,
@@ -157,6 +187,11 @@ impl SessionRegistry {
 
             // EOF: AtomicBool なので常に設定可能
             session_for_read.alive.store(false, Ordering::Release);
+
+            // broadcast sender を drop してチャネルを閉じる
+            // → 全 receiver に RecvError::Closed が通知される
+            session_for_read.output_tx.lock().unwrap().take();
+            drop(broadcast_tx);
         });
 
         session
@@ -168,14 +203,14 @@ impl SessionRegistry {
         name: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<Arc<SharedSession>, String> {
+    ) -> Result<Arc<SharedSession>, RegistryError> {
         if !is_valid_session_name(name) {
-            return Err(format!("Invalid session name: {name}"));
+            return Err(RegistryError::InvalidName(name.to_string()));
         }
 
         // 高速チェック（最適化: 大半のケースで不要な PTY spawn を回避）
         if self.sessions.read().await.contains_key(name) {
-            return Err(format!("Session already exists: {name}"));
+            return Err(RegistryError::AlreadyExists(name.to_string()));
         }
 
         // PTY を spawn（blocking）
@@ -184,8 +219,8 @@ impl SessionRegistry {
             move || PtyManager::spawn(&shell, cols, rows)
         })
         .await
-        .map_err(|e| format!("Spawn task failed: {e}"))?
-        .map_err(|e| format!("PTY spawn failed: {e}"))?;
+        .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?
+        .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?;
 
         let session = Self::setup_pty_session(
             name,
@@ -210,7 +245,7 @@ impl SessionRegistry {
                     })
                     .await;
                 }
-                return Err(format!("Session already exists: {name}"));
+                return Err(RegistryError::AlreadyExists(name.to_string()));
             }
             sessions.insert(name.to_string(), Arc::clone(&session));
         }
@@ -224,14 +259,14 @@ impl SessionRegistry {
         &self,
         name: &str,
         pty: super::manager::PtySession,
-    ) -> Result<Arc<SharedSession>, String> {
+    ) -> Result<Arc<SharedSession>, RegistryError> {
         if !is_valid_session_name(name) {
-            return Err(format!("Invalid session name: {name}"));
+            return Err(RegistryError::InvalidName(name.to_string()));
         }
 
         // 高速チェック
         if self.sessions.read().await.contains_key(name) {
-            return Err(format!("Session already exists: {name}"));
+            return Err(RegistryError::AlreadyExists(name.to_string()));
         }
 
         let session = Self::setup_pty_session(
@@ -256,7 +291,7 @@ impl SessionRegistry {
                     })
                     .await;
                 }
-                return Err(format!("Session already exists: {name}"));
+                return Err(RegistryError::AlreadyExists(name.to_string()));
             }
             sessions.insert(name.to_string(), Arc::clone(&session));
         }
@@ -279,18 +314,18 @@ impl SessionRegistry {
             Vec<u8>,
             u64,
         ),
-        String,
+        RegistryError,
     > {
         let sessions = self.sessions.read().await;
         let session = sessions
             .get(name)
-            .ok_or_else(|| format!("Session not found: {name}"))?;
+            .ok_or_else(|| RegistryError::NotFound(name.to_string()))?;
 
         let session = Arc::clone(session);
         drop(sessions); // RwLock 解放してから Mutex 取得
 
         if !session.is_alive() {
-            return Err(format!("Session is dead: {name}"));
+            return Err(RegistryError::SessionDead(name.to_string()));
         }
 
         let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
@@ -302,7 +337,7 @@ impl SessionRegistry {
             rows,
         });
 
-        let rx = session.output_tx.subscribe();
+        let rx = session.subscribe();
         let replay = session.replay_buf.lock().unwrap().read_all();
 
         // リサイズ再計算
@@ -328,13 +363,17 @@ impl SessionRegistry {
             Vec<u8>,
             u64,
         ),
-        String,
+        RegistryError,
     > {
         // まず attach 試行
         match self.attach(name, kind, cols, rows).await {
             Ok(result) => return Ok(result),
-            Err(e) if e.contains("not found") || e.contains("is dead") => {
-                // セッションが存在しないか死んでいる → 作成を試みる
+            Err(RegistryError::NotFound(_)) => {
+                // セッションが存在しない → 作成を試みる
+            }
+            Err(RegistryError::SessionDead(_)) => {
+                // dead セッション → クリーンアップしてから再作成
+                self.destroy(name).await;
             }
             Err(e) => return Err(e),
         }
@@ -351,13 +390,13 @@ impl SessionRegistry {
                     rows,
                 });
 
-                let rx = session.output_tx.subscribe();
+                let rx = session.subscribe();
                 let replay = session.replay_buf.lock().unwrap().read_all();
 
                 tracing::info!("Client {client_id} ({kind:?}) created+attached to session {name}");
                 Ok((Arc::clone(&session), rx, replay, client_id))
             }
-            Err(e) if e.contains("already exists") => {
+            Err(RegistryError::AlreadyExists(_)) => {
                 // レース: attach と create の間に別クライアントが作成した → retry attach
                 self.attach(name, kind, cols, rows).await
             }
@@ -506,9 +545,18 @@ impl SharedSession {
         SessionRegistry::recalculate_size(&mut inner);
     }
 
-    /// broadcast::Receiver を新たに取得（Mutex 不要）
+    /// broadcast::Receiver を新たに取得
+    /// セッション終了済みの場合は即座に Closed を返す receiver を返す
     pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.output_tx.subscribe()
+        let guard = self.output_tx.lock().unwrap();
+        match guard.as_ref() {
+            Some(tx) => tx.subscribe(),
+            None => {
+                // sender は既に drop 済み → 即 Closed になる receiver を返す
+                let (_, rx) = broadcast::channel::<Vec<u8>>(1);
+                rx
+            }
+        }
     }
 
     /// alive 状態を取得（AtomicBool: Mutex 不要）

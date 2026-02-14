@@ -21,7 +21,7 @@ fn test_config() -> Config {
         log_level: "debug".to_string(),
         data_dir: tmp.to_string_lossy().to_string(),
         bind_address: "127.0.0.1".to_string(),
-        ssh_port: 0,
+        ssh_port: None,
     }
 }
 

@@ -174,7 +174,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 let shared_session = match registry.create_with_pty(&registry_name, pty).await {
                     Ok(s) => s,
                     Err(e) => {
-                        send_error(&ws_tx, &format!("Registry error: {}", e)).await;
+                        send_error(&ws_tx, &format!("Registry error: {e}")).await;
                         continue;
                     }
                 };

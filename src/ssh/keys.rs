@@ -24,6 +24,14 @@ pub fn load_or_generate_host_key(data_dir: &Path) -> anyhow::Result<PrivateKey> 
         // data_dir が存在しなければ作成
         std::fs::create_dir_all(data_dir)?;
         std::fs::write(&key_path, pem.as_bytes())?;
+
+        // Unix: 秘密鍵のパーミッションを 0600 に制限
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
         tracing::info!("SSH host key saved to {}", key_path.display());
 
         Ok(key)

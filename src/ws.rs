@@ -162,7 +162,7 @@ pub async fn create_session(
 ) -> impl IntoResponse {
     match state.registry.create(&req.name, 80, 24).await {
         Ok(_) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }
 

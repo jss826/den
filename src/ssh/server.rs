@@ -87,7 +87,7 @@ impl DenSshHandler {
             .registry
             .get_or_create(session_name, ClientKind::Ssh, cols, rows)
             .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         self.session_name = Some(session_name.to_string());
         self.client_id = Some(client_id);

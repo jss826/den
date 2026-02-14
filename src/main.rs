@@ -18,26 +18,32 @@ async fn main() {
     let bind_address = config.bind_address.clone();
 
     tracing::info!("Den v0.4 starting on port {} ({})", port, config.env);
-    tracing::info!("SSH port: {}", ssh_port);
+    if let Some(sp) = ssh_port {
+        tracing::info!("SSH port: {}", sp);
+    } else {
+        tracing::info!("SSH server: disabled (set DEN_SSH_PORT to enable)");
+    }
     tracing::info!("Shell: {}", config.shell);
     tracing::info!("Password: (custom)");
 
     // SessionRegistry 生成
     let registry = SessionRegistry::new(config.shell.clone());
 
-    // SSH サーバー（バックグラウンド: 失敗しても HTTP は継続）
-    let ssh_registry = std::sync::Arc::clone(&registry);
-    let ssh_password = config.password.clone();
-    let ssh_data_dir = config.data_dir.clone();
-    let ssh_bind = config.bind_address.clone();
-    tokio::spawn(async move {
-        if let Err(e) =
-            den::ssh::server::run(ssh_registry, ssh_password, ssh_port, ssh_data_dir, ssh_bind)
-                .await
-        {
-            tracing::error!("SSH server error: {e}");
-        }
-    });
+    // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
+    if let Some(ssh_port) = ssh_port {
+        let ssh_registry = std::sync::Arc::clone(&registry);
+        let ssh_password = config.password.clone();
+        let ssh_data_dir = config.data_dir.clone();
+        let ssh_bind = config.bind_address.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                den::ssh::server::run(ssh_registry, ssh_password, ssh_port, ssh_data_dir, ssh_bind)
+                    .await
+            {
+                tracing::error!("SSH server error: {e}");
+            }
+        });
+    }
 
     // HTTP サーバー（メイン）
     let app = den::create_app(config, registry);
