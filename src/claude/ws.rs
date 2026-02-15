@@ -398,9 +398,16 @@ async fn spawn_claude_turn(
     let output_rx = shared_session.subscribe();
     let ws_tx_for_output = Arc::clone(ws_tx);
     let sid_for_output = session_id.to_string();
+    let session_for_output = Arc::clone(&shared_session);
 
     tokio::spawn(async move {
-        forward_claude_output(sid_for_output, output_rx, ws_tx_for_output).await;
+        forward_claude_output(
+            sid_for_output,
+            output_rx,
+            ws_tx_for_output,
+            session_for_output,
+        )
+        .await;
     });
 }
 
@@ -413,18 +420,21 @@ async fn run_claude_turn_processor(
     registry: Arc<SessionRegistry>,
     state_map: SessionStateMap,
 ) {
-    let mut output_rx = {
+    let (session, mut output_rx) = {
         let Some(session) = registry.get(&registry_name).await else {
             return;
         };
-        session.subscribe()
+        let rx = session.subscribe();
+        (session, rx)
     };
 
     let mut line_buf = String::new();
 
     loop {
-        match output_rx.recv().await {
-            Ok(bytes) => {
+        // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
+        // 閉じないため、定期的に alive を確認する
+        match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+            Ok(Ok(bytes)) => {
                 let text = String::from_utf8_lossy(&bytes);
                 line_buf.push_str(&text);
 
@@ -441,11 +451,17 @@ async fn run_claude_turn_processor(
                     }
                 }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                 tracing::warn!("Claude processor lagged {n} messages for session {session_id}");
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                 break;
+            }
+            Err(_) => {
+                // タイムアウト: セッション生存チェック
+                if !session.is_alive() {
+                    break;
+                }
             }
         }
     }
@@ -488,12 +504,15 @@ async fn forward_claude_output(
     session_id: String,
     mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
     ws_tx: WsSink,
+    session: Arc<crate::pty::registry::SharedSession>,
 ) {
     let mut line_buf = String::new();
 
     loop {
-        match output_rx.recv().await {
-            Ok(bytes) => {
+        // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
+        // 閉じないため、定期的に alive を確認する
+        match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+            Ok(Ok(bytes)) => {
                 let text = String::from_utf8_lossy(&bytes);
                 line_buf.push_str(&text);
 
@@ -522,8 +541,8 @@ async fn forward_claude_output(
                     }
                 }
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                 // ターン完了通知（session は idle に戻る）
                 let resp = json!({ "type": "turn_completed", "session_id": &session_id });
                 let _ = ws_tx
@@ -532,6 +551,18 @@ async fn forward_claude_output(
                     .send(Message::Text(resp.to_string().into()))
                     .await;
                 break;
+            }
+            Err(_) => {
+                // タイムアウト: セッション生存チェック
+                if !session.is_alive() {
+                    let resp = json!({ "type": "turn_completed", "session_id": &session_id });
+                    let _ = ws_tx
+                        .lock()
+                        .await
+                        .send(Message::Text(resp.to_string().into()))
+                        .await;
+                    break;
+                }
             }
         }
     }

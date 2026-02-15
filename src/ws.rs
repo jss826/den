@@ -76,20 +76,30 @@ async fn handle_socket(
     let name_for_output = session_name.clone();
     let pty_to_ws = async {
         loop {
-            match output_rx.recv().await {
-                Ok(data) => {
+            // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
+            // 閉じないため、定期的に alive を確認する
+            match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+                Ok(Ok(data)) => {
                     if ws_tx.send(Message::Binary(data.into())).await.is_err() {
                         break;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                     tracing::warn!("WS client lagged {n} messages on session {name_for_output}");
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                     // セッション終了
                     let msg = serde_json::json!({"type": "session_ended"}).to_string();
                     let _ = ws_tx.send(Message::Text(msg.into())).await;
                     break;
+                }
+                Err(_) => {
+                    // タイムアウト: セッション生存チェック
+                    if !session_for_output.is_alive() {
+                        let msg = serde_json::json!({"type": "session_ended"}).to_string();
+                        let _ = ws_tx.send(Message::Text(msg.into())).await;
+                        break;
+                    }
                 }
             }
         }
