@@ -531,9 +531,10 @@ fn filter_terminal_responses(data: &[u8]) -> Vec<u8> {
                 let start = i;
                 i += 2;
 
-                // Private prefix: ? > = <
-                let has_private_prefix = i < data.len()
-                    && (data[i] == b'?' || data[i] == b'>' || data[i] == b'=' || data[i] == b'<');
+                // Private prefix: ? > =
+                // Note: `<` is NOT included — SGR mouse reports use CSI < ... M/m
+                let has_private_prefix =
+                    i < data.len() && (data[i] == b'?' || data[i] == b'>' || data[i] == b'=');
                 if has_private_prefix {
                     i += 1;
                 }
@@ -566,12 +567,26 @@ fn filter_terminal_responses(data: &[u8]) -> Vec<u8> {
 
             // DCS (ESC P), SOS (ESC X), PM (ESC ^), APC (ESC _)
             b'P' | b'X' | b'^' | b'_' => {
-                i = skip_string_sequence(data, i);
+                let end = skip_string_sequence(data, i);
+                if end > i {
+                    i = end; // Terminated → filter
+                } else {
+                    // Unterminated → keep ESC, advance 1 (rest follows as plain bytes)
+                    result.push(data[i]);
+                    i += 1;
+                }
             }
 
             // OSC (ESC ])
             b']' => {
-                i = skip_osc_sequence(data, i);
+                let end = skip_osc_sequence(data, i);
+                if end > i {
+                    i = end; // Terminated → filter
+                } else {
+                    // Unterminated → keep ESC, advance 1
+                    result.push(data[i]);
+                    i += 1;
+                }
             }
 
             _ => {
@@ -595,8 +610,8 @@ fn skip_string_sequence(data: &[u8], start: usize) -> usize {
         }
         i += 1;
     }
-    // Unterminated → consume everything
-    data.len()
+    // Unterminated → keep bytes as-is to avoid losing subsequent input
+    start
 }
 
 /// BEL (0x07) または ST (`ESC \`) で終端される OSC シーケンスをスキップする。
@@ -611,8 +626,8 @@ fn skip_osc_sequence(data: &[u8], start: usize) -> usize {
         }
         i += 1;
     }
-    // Unterminated → consume everything
-    data.len()
+    // Unterminated → keep bytes as-is to avoid losing subsequent input
+    start
 }
 
 /// タイミング攻撃防止用の定数時間文字列比較
@@ -790,10 +805,31 @@ mod tests {
     }
 
     #[test]
-    fn consume_unterminated_dcs() {
-        // ESC P ... (no ST) → consume all
+    fn keep_unterminated_dcs() {
+        // ESC P ... (no ST) → keep as-is to avoid losing input on chunk split
         let data = b"\x1bPsome data without terminator";
-        assert!(filter_terminal_responses(data).is_empty());
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_unterminated_osc() {
+        // ESC ] ... (no BEL/ST) → keep as-is
+        let data = b"\x1b]10;rgb:ff/ff/ff";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_sgr_mouse_report() {
+        // ESC [ < 0 ; 35 ; 5 M → SGR mouse press → keep
+        let data = b"\x1b[<0;35;5M";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_sgr_mouse_release() {
+        // ESC [ < 0 ; 35 ; 5 m → SGR mouse release → keep
+        let data = b"\x1b[<0;35;5m";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
     }
 
     #[test]
