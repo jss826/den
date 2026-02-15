@@ -504,54 +504,115 @@ impl Drop for DenSshHandler {
 ///
 /// ConPTY は初期化時にクエリを送信し、ターミナルが応答を返す。
 /// CPR (Cursor Position Report: `ESC[n;mR`) は ConPTY が必要とするので通過させるが、
-/// DA (Device Attributes: `ESC[?...c` / `ESC[>...c`) はシェルに生入力として渡されて
-/// 文字化けを起こすため除去する。
+/// private prefix 付き CSI（DA, DECRQM 等）や DCS/OSC 文字列シーケンスは
+/// シェルに生入力として渡されて文字化けを起こすため除去する。
 fn filter_terminal_responses(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(data.len());
     let mut i = 0;
 
     while i < data.len() {
-        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'[' {
-            // CSI sequence: ESC [
-            let start = i;
-            i += 2;
-
-            // Optional private prefix: ? > =
-            let has_private_prefix =
-                i < data.len() && (data[i] == b'?' || data[i] == b'>' || data[i] == b'=');
-            if has_private_prefix {
-                i += 1;
-            }
-
-            // Parameters: digits and semicolons
-            while i < data.len() && (data[i].is_ascii_digit() || data[i] == b';') {
-                i += 1;
-            }
-
-            // Final byte
-            if i < data.len() && data[i].is_ascii_alphabetic() {
-                let final_byte = data[i];
-                i += 1;
-
-                // DA 応答のみ除去（CPR は ConPTY が必要とするので通過させる）
-                let is_da_response = final_byte == b'c' && has_private_prefix;
-
-                if is_da_response {
-                    continue;
-                }
-
-                result.extend_from_slice(&data[start..i]);
-            } else {
-                // 不完全なシーケンス → 保持
-                result.extend_from_slice(&data[start..i]);
-            }
-        } else {
+        if data[i] != 0x1b {
             result.push(data[i]);
             i += 1;
+            continue;
+        }
+
+        // ESC found
+        if i + 1 >= data.len() {
+            // Trailing ESC → keep
+            result.push(data[i]);
+            i += 1;
+            continue;
+        }
+
+        match data[i + 1] {
+            b'[' => {
+                // CSI sequence: ESC [
+                let start = i;
+                i += 2;
+
+                // Private prefix: ? > = <
+                let has_private_prefix = i < data.len()
+                    && (data[i] == b'?' || data[i] == b'>' || data[i] == b'=' || data[i] == b'<');
+                if has_private_prefix {
+                    i += 1;
+                }
+
+                // Parameter bytes: 0x30-0x3F (digits, ;, :, etc.)
+                while i < data.len() && (0x30..=0x3f).contains(&data[i]) {
+                    i += 1;
+                }
+
+                // Intermediate bytes: 0x20-0x2F ($, !, ", space, etc.)
+                while i < data.len() && (0x20..=0x2f).contains(&data[i]) {
+                    i += 1;
+                }
+
+                // Final byte: 0x40-0x7E
+                if i < data.len() && (0x40..=0x7e).contains(&data[i]) {
+                    i += 1;
+
+                    if has_private_prefix {
+                        // Private prefix CSI → filter (DA, DECRQM, DECSET responses, etc.)
+                        continue;
+                    }
+
+                    result.extend_from_slice(&data[start..i]);
+                } else {
+                    // Incomplete CSI → keep as-is
+                    result.extend_from_slice(&data[start..i]);
+                }
+            }
+
+            // DCS (ESC P), SOS (ESC X), PM (ESC ^), APC (ESC _)
+            b'P' | b'X' | b'^' | b'_' => {
+                i = skip_string_sequence(data, i);
+            }
+
+            // OSC (ESC ])
+            b']' => {
+                i = skip_osc_sequence(data, i);
+            }
+
+            _ => {
+                // Other ESC sequences (e.g. ESC O for SS3) → keep
+                result.push(data[i]);
+                i += 1;
+            }
         }
     }
 
     result
+}
+
+/// ST (`ESC \`) で終端される文字列シーケンスをスキップする。
+/// DCS, SOS, PM, APC 用。
+fn skip_string_sequence(data: &[u8], start: usize) -> usize {
+    let mut i = start + 2; // skip ESC + introducer
+    while i < data.len() {
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'\\' {
+            return i + 2; // consume ST
+        }
+        i += 1;
+    }
+    // Unterminated → consume everything
+    data.len()
+}
+
+/// BEL (0x07) または ST (`ESC \`) で終端される OSC シーケンスをスキップする。
+fn skip_osc_sequence(data: &[u8], start: usize) -> usize {
+    let mut i = start + 2; // skip ESC ]
+    while i < data.len() {
+        if data[i] == 0x07 {
+            return i + 1; // consume BEL
+        }
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'\\' {
+            return i + 2; // consume ST
+        }
+        i += 1;
+    }
+    // Unterminated → consume everything
+    data.len()
 }
 
 /// タイミング攻撃防止用の定数時間文字列比較
@@ -670,6 +731,90 @@ mod tests {
             key_identity(line),
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey"
         );
+    }
+
+    #[test]
+    fn filter_decrqm_response() {
+        // ESC [ ? 1 ; 1 $ y → DECRQM → has private prefix → 除去
+        let data = b"\x1b[?1;1$y";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn filter_generic_private_prefix_csi() {
+        // ESC [ ? 2 0 0 4 h — DECSET (bracketed paste mode report) → 除去
+        let data = b"\x1b[?2004h";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn filter_dcs_xtversion() {
+        // DCS >|version ST → XTVERSION 応答 → 除去
+        let data = b"\x1bP>|xterm(388)\x1b\\";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn filter_dcs_decrqss() {
+        // DCS 1 $ r ... ST → DECRQSS 応答 → 除去
+        let data = b"\x1bP1$r0m\x1b\\";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn filter_osc_bel_terminated() {
+        // OSC 10;rgb:ff/ff/ff BEL → 色クエリ応答 → 除去
+        let data = b"\x1b]10;rgb:ff/ff/ff\x07";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn filter_osc_st_terminated() {
+        // OSC 11;rgb:00/00/00 ST → 除去
+        let data = b"\x1b]11;rgb:00/00/00\x1b\\";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn mixed_da_decrqm_cpr_dcs() {
+        // DA + DECRQM + CPR + DCS → CPR のみ残る
+        let data = b"\x1b[?1;2c\x1b[?1;1$y\x1b[24;80R\x1bP>|term\x1b\\";
+        assert_eq!(filter_terminal_responses(data), b"\x1b[24;80R".to_vec());
+    }
+
+    #[test]
+    fn keep_incomplete_csi() {
+        // ESC [ 1 (no final byte) → keep
+        let data = b"\x1b[1";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn consume_unterminated_dcs() {
+        // ESC P ... (no ST) → consume all
+        let data = b"\x1bPsome data without terminator";
+        assert!(filter_terminal_responses(data).is_empty());
+    }
+
+    #[test]
+    fn keep_trailing_esc() {
+        // text + trailing ESC → keep all
+        let data = b"hello\x1b";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn keep_ss3_sequences() {
+        // ESC O P → SS3 F1 key → keep
+        let data = b"\x1bOP";
+        assert_eq!(filter_terminal_responses(data), data.to_vec());
+    }
+
+    #[test]
+    fn filter_dcs_with_text_around() {
+        // text + DCS + text → DCS のみ除去
+        let data = b"before\x1bP>|ver\x1b\\after";
+        assert_eq!(filter_terminal_responses(data), b"beforeafter".to_vec());
     }
 
     #[test]
