@@ -348,7 +348,7 @@ async fn spawn_claude_turn(
 
     // SessionRegistry に登録
     let shared_session = match registry.create_with_pty(&registry_name, pty).await {
-        Ok(s) => s,
+        Ok((s, _pre_rx)) => s,
         Err(e) => {
             send_error(ws_tx, &format!("Registry error: {e}")).await;
             let mut map = state_map.lock().await;

@@ -120,6 +120,9 @@ impl SessionRegistry {
     }
 
     /// PTY を spawn し read_task/resize_task を起動する共通ヘルパー
+    ///
+    /// 戻り値の `broadcast::Receiver` は read_task 開始前に作成されるため、
+    /// ConPTY の初期出力（DSR 等）を確実に捕捉する。
     fn setup_pty_session(
         name: &str,
         pty_reader: Box<dyn std::io::Read + Send>,
@@ -127,8 +130,8 @@ impl SessionRegistry {
         master: Box<dyn portable_pty::MasterPty + Send>,
         child: Box<dyn portable_pty::Child + Send + Sync>,
         #[cfg(windows)] job: Option<super::job::PtyJobObject>,
-    ) -> Arc<SharedSession> {
-        let (output_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+    ) -> (Arc<SharedSession>, broadcast::Receiver<Vec<u8>>) {
+        let (output_tx, first_rx) = broadcast::channel(BROADCAST_CAPACITY);
         let (resize_tx, resize_rx) = std::sync::mpsc::channel::<(u16, u16)>();
 
         let session = Arc::new(SharedSession {
@@ -194,16 +197,19 @@ impl SessionRegistry {
             drop(broadcast_tx);
         });
 
-        session
+        (session, first_rx)
     }
 
     /// セッション作成（デフォルトシェル）
+    ///
+    /// 戻り値の `broadcast::Receiver` は PTY 出力の pre-subscriber。
+    /// 最初のクライアントはこれを使うことで、read_task の初期出力を漏れなく受信できる。
     pub async fn create(
         &self,
         name: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<Arc<SharedSession>, RegistryError> {
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
         if !is_valid_session_name(name) {
             return Err(RegistryError::InvalidName(name.to_string()));
         }
@@ -222,7 +228,7 @@ impl SessionRegistry {
         .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?
         .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?;
 
-        let session = Self::setup_pty_session(
+        let (session, first_rx) = Self::setup_pty_session(
             name,
             pty.reader,
             pty.writer,
@@ -251,7 +257,7 @@ impl SessionRegistry {
         }
 
         tracing::info!("Session created: {name}");
-        Ok(session)
+        Ok((session, first_rx))
     }
 
     /// カスタムコマンドでセッション作成（Claude CLI 等）
@@ -259,7 +265,7 @@ impl SessionRegistry {
         &self,
         name: &str,
         pty: super::manager::PtySession,
-    ) -> Result<Arc<SharedSession>, RegistryError> {
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
         if !is_valid_session_name(name) {
             return Err(RegistryError::InvalidName(name.to_string()));
         }
@@ -269,7 +275,7 @@ impl SessionRegistry {
             return Err(RegistryError::AlreadyExists(name.to_string()));
         }
 
-        let session = Self::setup_pty_session(
+        let (session, first_rx) = Self::setup_pty_session(
             name,
             pty.reader,
             pty.writer,
@@ -297,7 +303,7 @@ impl SessionRegistry {
         }
 
         tracing::info!("Session created (custom PTY): {name}");
-        Ok(session)
+        Ok((session, first_rx))
     }
 
     /// 既存セッションに attach（クライアント追加 + broadcast::Receiver + replay data）
@@ -380,7 +386,7 @@ impl SessionRegistry {
 
         // create → inline attach
         match self.create(name, cols, rows).await {
-            Ok(session) => {
+            Ok((session, first_rx)) => {
                 let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                 let mut inner = session.inner.lock().await;
                 inner.clients.push(ClientInfo {
@@ -390,8 +396,11 @@ impl SessionRegistry {
                     rows,
                 });
 
-                let rx = session.subscribe();
-                let replay = session.replay_buf.lock().unwrap().read_all();
+                // first_rx は read_task 開始前に作成済みのため、
+                // ConPTY の初期出力（DSR 等）を確実に保持している。
+                // replay は不要（first_rx が全データを持つ）。
+                let rx = first_rx;
+                let replay = Vec::new();
 
                 // ConPTY は同一サイズの resize を無視するため、
                 // 異なるサイズで一度 resize してから正しいサイズに戻す。

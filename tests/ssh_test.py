@@ -219,6 +219,54 @@ class TestSSHAttach(unittest.TestCase):
         self.assertIn(">", text2, "Replay data should contain prompt")
 
 
+class TestSSHDsrDelivery(unittest.TestCase):
+    """Test that ConPTY's DSR query reaches the client via broadcast.
+
+    This verifies the fix for the race condition where the broadcast
+    subscriber was created after the read_task started, causing initial
+    PTY output (including DSR) to be lost.
+    """
+
+    def setUp(self):
+        self.client = ssh_connect()
+        self.session_name = f"ssh-dsr-{int(time.time())}"
+        self.channel = None
+
+    def tearDown(self):
+        if self.channel and not self.channel.closed:
+            self.channel.close()
+        self.client.close()
+
+    def test_dsr_arrives_without_manual_cpr(self):
+        """DSR query (ESC[6n) should arrive at client via broadcast."""
+        channel = self.client.get_transport().open_session()
+        channel.get_pty(term="xterm-256color", width=80, height=24)
+        channel.exec_command(f"new {self.session_name}")
+        channel.settimeout(1.0)
+        self.channel = channel
+
+        # CPR を送らずにデータを受信し、DSR が届くか確認
+        data = b""
+        start = time.time()
+        while time.time() - start < 5:
+            try:
+                chunk = channel.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                # DSR を検出したら即終了（成功）
+                if b"\x1b[6n" in data:
+                    break
+            except Exception:
+                pass
+
+        self.assertIn(
+            b"\x1b[6n",
+            data,
+            "DSR query not received — broadcast subscriber race condition?",
+        )
+
+
 class TestSSHSessionList(unittest.TestCase):
     """Test that created sessions appear in list."""
 

@@ -147,6 +147,10 @@ impl DenSshHandler {
             .ok_or_else(|| anyhow::anyhow!("No channel"))?;
 
         // replay data を送信
+        tracing::debug!(
+            "SSH start_bridge: session={session_name}, replay={} bytes",
+            replay.len()
+        );
         if !replay.is_empty() {
             session.data(channel_id, CryptoVec::from_slice(&replay))?;
         }
@@ -422,6 +426,13 @@ impl Handler for DenSshHandler {
             && let Some(session) = self.registry.get(name).await
         {
             let filtered = filter_terminal_responses(data);
+            if data.len() != filtered.len() {
+                tracing::debug!(
+                    "SSH data: {} bytes in, {} bytes after filter (session {name})",
+                    data.len(),
+                    filtered.len(),
+                );
+            }
             if !filtered.is_empty() {
                 let _ = session.write_input(&filtered).await;
             }
