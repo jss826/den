@@ -61,16 +61,16 @@ just prod strongpw    # パスワード上書き指定も可
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEN_PASSWORD` | **(required)** | Login password |
-| `DEN_ENV` | `development` | `development` / `production` |
-| `DEN_PORT` | `3939` (dev) / `8080` (prod) | Listen port |
-| `DEN_BIND_ADDRESS` | `127.0.0.1` (dev) / `0.0.0.0` (prod) | Bind address |
-| `DEN_SHELL` | `cmd.exe` (Win) / `$SHELL` | Shell for terminal |
-| `DEN_LOG_LEVEL` | `debug` (dev) / `info` (prod) | Log level filter |
-| `DEN_DATA_DIR` | `./data` | Data persistence directory |
-| `DEN_SSH_PORT` | *(disabled)* | SSH server port (opt-in) |
+| Variable | `just dev` | `just prod` | Description |
+|----------|-----------|-------------|-------------|
+| `DEN_PASSWORD` | `.env` から読込 | `.env` or 引数指定 | Login password **(required)** |
+| `DEN_ENV` | `development` | `production` | Environment mode |
+| `DEN_PORT` | `3939` | `8080` | Listen port |
+| `DEN_BIND_ADDRESS` | `127.0.0.1` | `0.0.0.0` | Bind address |
+| `DEN_DATA_DIR` | `./data-dev` | `./data` | Data persistence directory |
+| `DEN_LOG_LEVEL` | `debug` | `info` | Log level filter |
+| `DEN_SHELL` | `cmd.exe` (Win) / `$SHELL` | same | Shell for terminal |
+| `DEN_SSH_PORT` | *(disabled)* | *(disabled)* | SSH server port (opt-in) |
 
 ## Features
 
@@ -111,9 +111,9 @@ ssh -t -p 2222 den@localhost new mysession
 `DEN_DATA_DIR/ssh/authorized_keys` に公開鍵を配置すると、パスワード不要で接続できる。
 
 ```powershell
-mkdir $env:DEN_DATA_DIR/ssh
-# 公開鍵を追記（1Password SSH agent 等）
-Add-Content "$env:DEN_DATA_DIR/ssh/authorized_keys" (Get-Content ~/.ssh/id_ed25519.pub)
+# 開発環境の場合（just dev → DEN_DATA_DIR=./data-dev）
+mkdir ./data-dev/ssh
+Add-Content "./data-dev/ssh/authorized_keys" (Get-Content ~/.ssh/id_ed25519.pub)
 ```
 
 鍵認証が有効な場合、パスワードプロンプトなしで接続される。
