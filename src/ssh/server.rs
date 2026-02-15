@@ -1,10 +1,46 @@
 use std::sync::Arc;
 
+use russh::keys::ssh_key;
 use russh::server::{Auth, Handler, Msg, Server as _, Session};
 use russh::{ChannelId, CryptoVec, Pty};
 use tokio::net::TcpListener;
 
 use crate::pty::registry::{ClientKind, SessionRegistry};
+
+/// `{data_dir}/ssh/authorized_keys` から公開鍵を読み込む。
+/// 各行の "algorithm base64" 部分（コメント除去）を返す。
+fn load_authorized_keys(data_dir: &str) -> Vec<String> {
+    let path = std::path::Path::new(data_dir)
+        .join("ssh")
+        .join("authorized_keys");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let keys: Vec<String> = content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            let algo = parts.next()?;
+            let data = parts.next()?;
+            Some(format!("{algo} {data}"))
+        })
+        .collect();
+    if !keys.is_empty() {
+        tracing::info!("SSH: loaded {} authorized key(s)", keys.len());
+    }
+    keys
+}
+
+/// OpenSSH 形式の鍵文字列から "algorithm base64" 部分を抽出する。
+fn key_identity(openssh_line: &str) -> String {
+    let mut parts = openssh_line.split_whitespace();
+    let algo = parts.next().unwrap_or("");
+    let data = parts.next().unwrap_or("");
+    format!("{algo} {data}")
+}
 
 /// SSH サーバーを起動
 pub async fn run(
@@ -17,16 +53,25 @@ pub async fn run(
     // ホストキー読み込み/生成
     let host_key = super::keys::load_or_generate_host_key(std::path::Path::new(&data_dir))?;
 
+    let authorized_keys = Arc::new(load_authorized_keys(&data_dir));
+
+    // auth_rejection_time を 0 にして、パスワード認証のみハンドラ側で遅延させる。
+    // これにより公開鍵認証の拒否が即座に完了し、クライアントがパスワード認証に
+    // 素早くフォールバックできる。
     let config = russh::server::Config {
         inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
-        auth_rejection_time: std::time::Duration::from_secs(3),
+        auth_rejection_time: std::time::Duration::from_secs(0),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
         keys: vec![host_key],
         ..Default::default()
     };
     let config = Arc::new(config);
 
-    let mut server = DenSshServer { registry, password };
+    let mut server = DenSshServer {
+        registry,
+        password,
+        authorized_keys,
+    };
 
     let addr = format!("{bind_address}:{port}");
     let socket = TcpListener::bind(&addr).await?;
@@ -41,6 +86,7 @@ pub async fn run(
 struct DenSshServer {
     registry: Arc<SessionRegistry>,
     password: String,
+    authorized_keys: Arc<Vec<String>>,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -51,12 +97,14 @@ impl russh::server::Server for DenSshServer {
         DenSshHandler {
             registry: Arc::clone(&self.registry),
             password: self.password.clone(),
+            authorized_keys: Arc::clone(&self.authorized_keys),
             session_name: None,
             client_id: None,
             channel_id: None,
             output_task: None,
             pty_cols: 80,
             pty_rows: 24,
+            pty_requested: false,
         }
     }
 }
@@ -64,6 +112,7 @@ impl russh::server::Server for DenSshServer {
 struct DenSshHandler {
     registry: Arc<SessionRegistry>,
     password: String,
+    authorized_keys: Arc<Vec<String>>,
     // Per-connection state
     session_name: Option<String>,
     client_id: Option<u64>,
@@ -71,6 +120,7 @@ struct DenSshHandler {
     output_task: Option<tokio::task::JoinHandle<()>>,
     pty_cols: u16,
     pty_rows: u16,
+    pty_requested: bool,
 }
 
 impl DenSshHandler {
@@ -153,12 +203,55 @@ impl DenSshHandler {
 impl Handler for DenSshHandler {
     type Error = anyhow::Error;
 
+    async fn auth_publickey_offered(
+        &mut self,
+        _user: &str,
+        public_key: &ssh_key::PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        if self.authorized_keys.is_empty() {
+            return Ok(Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            });
+        }
+        let offered = key_identity(&public_key.to_string());
+        if self.authorized_keys.contains(&offered) {
+            tracing::info!("SSH auth: public key offered — accepted for verification");
+            Ok(Auth::Accept)
+        } else {
+            Ok(Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            })
+        }
+    }
+
+    async fn auth_publickey(
+        &mut self,
+        _user: &str,
+        public_key: &ssh_key::PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        let offered = key_identity(&public_key.to_string());
+        if self.authorized_keys.contains(&offered) {
+            tracing::info!("SSH auth: public key accepted");
+            Ok(Auth::Accept)
+        } else {
+            tracing::warn!("SSH auth: public key rejected");
+            Ok(Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            })
+        }
+    }
+
     async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
         if constant_time_eq(password, &self.password) {
             tracing::info!("SSH auth: password accepted");
             Ok(Auth::Accept)
         } else {
             tracing::warn!("SSH auth: password rejected");
+            // auth_rejection_time を 0 にしたため、ブルートフォース対策の遅延をここで入れる
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             Ok(Auth::Reject {
                 proceed_with_methods: None,
                 partial_success: false,
@@ -188,6 +281,7 @@ impl Handler for DenSshHandler {
     ) -> Result<(), Self::Error> {
         self.pty_cols = col_width as u16;
         self.pty_rows = row_height as u16;
+        self.pty_requested = true;
         let ch = self
             .channel_id
             .ok_or_else(|| anyhow::anyhow!("No channel open"))?;
@@ -252,6 +346,16 @@ impl Handler for DenSshHandler {
                     session.close(channel)?;
                     return Ok(());
                 }
+                if !self.pty_requested {
+                    session.data(
+                        channel,
+                        CryptoVec::from_slice(
+                            b"Error: PTY required. Use: ssh -t ... attach <name>\r\n",
+                        ),
+                    )?;
+                    session.close(channel)?;
+                    return Ok(());
+                }
                 self.start_bridge(name, session).await?;
                 Ok(())
             }
@@ -263,6 +367,16 @@ impl Handler for DenSshHandler {
                     session.data(
                         channel,
                         CryptoVec::from_slice(b"Usage: new <session-name>\r\n"),
+                    )?;
+                    session.close(channel)?;
+                    return Ok(());
+                }
+                if !self.pty_requested {
+                    session.data(
+                        channel,
+                        CryptoVec::from_slice(
+                            b"Error: PTY required. Use: ssh -t ... new <name>\r\n",
+                        ),
                     )?;
                     session.close(channel)?;
                     return Ok(());
@@ -281,6 +395,16 @@ impl Handler for DenSshHandler {
             _ => {
                 // コマンドなし or 不明 → attach default
                 session.channel_success(channel)?;
+                if !self.pty_requested {
+                    session.data(
+                        channel,
+                        CryptoVec::from_slice(
+                            b"Error: PTY required. Use: ssh -t ... attach <name>\r\n",
+                        ),
+                    )?;
+                    session.close(channel)?;
+                    return Ok(());
+                }
                 self.start_bridge("default", session).await?;
                 Ok(())
             }
@@ -517,5 +641,50 @@ mod tests {
         // テキスト + DA → テキスト保持
         let data = b"abc\x1b[?1;2c";
         assert_eq!(filter_terminal_responses(data), b"abc".to_vec());
+    }
+
+    #[test]
+    fn key_identity_with_comment() {
+        let line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey user@host";
+        assert_eq!(
+            key_identity(line),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey"
+        );
+    }
+
+    #[test]
+    fn key_identity_without_comment() {
+        let line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey";
+        assert_eq!(
+            key_identity(line),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey"
+        );
+    }
+
+    #[test]
+    fn key_identity_empty() {
+        assert_eq!(key_identity(""), " ");
+    }
+
+    #[test]
+    fn load_authorized_keys_missing_file() {
+        let keys = load_authorized_keys("/nonexistent/path");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn load_authorized_keys_with_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh_dir = dir.path().join("ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        std::fs::write(
+            ssh_dir.join("authorized_keys"),
+            "# comment\nssh-ed25519 AAAAB3NzaKey1 user@host\n\nssh-rsa AAAAB3NzaKey2 other\n",
+        )
+        .unwrap();
+        let keys = load_authorized_keys(dir.path().to_str().unwrap());
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], "ssh-ed25519 AAAAB3NzaKey1");
+        assert_eq!(keys[1], "ssh-rsa AAAAB3NzaKey2");
     }
 }
