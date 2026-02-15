@@ -91,22 +91,33 @@ $env:DEN_SSH_PORT="2222"
 接続:
 
 ```powershell
-$SSH_OPTS = @("-o", "PubkeyAuthentication=no", "-o", "IdentityAgent=none")
-
 # セッション一覧
-ssh -p 2222 @SSH_OPTS den@localhost list
+ssh -p 2222 den@localhost list
 
 # セッションに接続（なければ作成） — -t で PTY 割当が必要
-ssh -t -p 2222 @SSH_OPTS den@localhost attach default
+ssh -t -p 2222 den@localhost attach default
 
 # 新規セッション作成
-ssh -t -p 2222 @SSH_OPTS den@localhost new mysession
+ssh -t -p 2222 den@localhost new mysession
 ```
 
 - ユーザー名は任意（パスワード認証のみ、`DEN_PASSWORD` と同じ）
 - `attach` / `new` は対話セッションなので **`-t`（PTY 割当）が必須**
-- `-o PubkeyAuthentication=no -o IdentityAgent=none` で SSH agent をバイパス
+- 公開鍵認証なしでも `-o PubkeyAuthentication=no` は不要（拒否が即座に完了しパスワードにフォールバック）
 - ホストキーは初回起動時に `DEN_DATA_DIR/ssh_host_key` に自動生成
+
+### 公開鍵認証
+
+`DEN_DATA_DIR/ssh/authorized_keys` に公開鍵を配置すると、パスワード不要で接続できる。
+
+```powershell
+mkdir $env:DEN_DATA_DIR/ssh
+# 公開鍵を追記（1Password SSH agent 等）
+Add-Content "$env:DEN_DATA_DIR/ssh/authorized_keys" (Get-Content ~/.ssh/id_ed25519.pub)
+```
+
+鍵認証が有効な場合、パスワードプロンプトなしで接続される。
+鍵が未設定の場合はパスワード認証にフォールバックする。
 
 ## Project Structure
 
