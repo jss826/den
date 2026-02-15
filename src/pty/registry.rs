@@ -197,6 +197,34 @@ impl SessionRegistry {
             drop(broadcast_tx);
         });
 
+        // Child exit monitor: ConPTY は子プロセス終了後も reader を
+        // ブロックし続けるため、別タスクで子プロセス終了を検知して
+        // alive を false にする。SSH output_task がこれを参照して切断する。
+        let session_for_monitor = Arc::clone(&session);
+        let monitor_name = name.to_string();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let mut inner = session_for_monitor.inner.lock().await;
+                if let Some(ref mut child) = inner.child {
+                    match child.try_wait() {
+                        Ok(Some(_status)) => {
+                            tracing::debug!("Session {monitor_name}: child process exited");
+                            break;
+                        }
+                        Ok(None) => {} // still running
+                        Err(_) => break,
+                    }
+                } else {
+                    break; // child already taken (destroy)
+                }
+            }
+            session_for_monitor
+                .alive
+                .store(false, std::sync::atomic::Ordering::Release);
+            session_for_monitor.output_tx.lock().unwrap().take();
+        });
+
         (session, first_rx)
     }
 

@@ -146,13 +146,16 @@ impl DenSshHandler {
             .channel_id
             .ok_or_else(|| anyhow::anyhow!("No channel"))?;
 
-        // replay data を送信
+        // replay data を送信（SSH 非互換モードを除去）
         tracing::debug!(
             "SSH start_bridge: session={session_name}, replay={} bytes",
             replay.len()
         );
         if !replay.is_empty() {
-            session.data(channel_id, CryptoVec::from_slice(&replay))?;
+            let filtered_replay = filter_output_for_ssh(&replay);
+            if !filtered_replay.is_empty() {
+                session.data(channel_id, CryptoVec::from_slice(&filtered_replay))?;
+            }
         }
 
         // Output: broadcast::Receiver → SSH channel
@@ -163,25 +166,40 @@ impl DenSshHandler {
 
         self.output_task = Some(tokio::spawn(async move {
             loop {
-                match output_rx.recv().await {
-                    Ok(data) => {
+                // recv with timeout: ConPTY は子プロセス終了後も reader を
+                // ブロックし続けるため、定期的に alive を確認する
+                match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv())
+                    .await
+                {
+                    Ok(Ok(data)) => {
+                        let filtered = filter_output_for_ssh(&data);
+                        if filtered.is_empty() {
+                            continue;
+                        }
                         if handle
-                            .data(channel_id, CryptoVec::from_slice(&data))
+                            .data(channel_id, CryptoVec::from_slice(&filtered))
                             .await
                             .is_err()
                         {
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("SSH client lagged {n} messages on session {name_for_task}");
-                        // continue receiving
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                        tracing::warn!("SSH client lagged {n} messages on {name_for_task}");
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        // セッション終了 → EOF + close
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                        let _ = handle.exit_status_request(channel_id, 0).await;
                         let _ = handle.eof(channel_id).await;
                         let _ = handle.close(channel_id).await;
                         break;
+                    }
+                    Err(_) => {
+                        if !_shared_session.is_alive() {
+                            let _ = handle.exit_status_request(channel_id, 0).await;
+                            let _ = handle.eof(channel_id).await;
+                            let _ = handle.close(channel_id).await;
+                            break;
+                        }
                     }
                 }
             }
@@ -500,6 +518,36 @@ impl Drop for DenSshHandler {
     }
 }
 
+/// SSH クライアントへの出力から、SSH 非互換な ConPTY モードを除去する。
+///
+/// ConPTY は直結ターミナル向けに特殊モードを有効化するが、SSH 経由では
+/// ローカルターミナルがモード切替を実行してしまい入力形式が変わる。
+/// - `ESC[?9001h/l` — Win32 input mode: 全入力が `CSI ... _` 形式になり文字化け
+/// - `ESC[?1004h/l` — Focus events: 不要な `ESC[I`/`ESC[O` が入力に混入
+fn filter_output_for_ssh(data: &[u8]) -> Vec<u8> {
+    const BLOCKED: &[&[u8]] = &[
+        b"\x1b[?9001h",
+        b"\x1b[?9001l",
+        b"\x1b[?1004h",
+        b"\x1b[?1004l",
+    ];
+
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+
+    while i < data.len() {
+        let remaining = &data[i..];
+        if let Some(seq) = BLOCKED.iter().find(|s| remaining.starts_with(s)) {
+            i += seq.len();
+        } else {
+            result.push(data[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
+
 /// SSH クライアントのターミナルが返す応答シーケンスをフィルタする。
 ///
 /// ConPTY は初期化時にクエリを送信し、ターミナルが応答を返す。
@@ -746,6 +794,45 @@ mod tests {
             key_identity(line),
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey"
         );
+    }
+
+    #[test]
+    fn output_filter_strips_win32_input_mode() {
+        let data = b"\x1b[?9001h";
+        assert!(filter_output_for_ssh(data).is_empty());
+    }
+
+    #[test]
+    fn output_filter_strips_win32_input_mode_disable() {
+        let data = b"\x1b[?9001l";
+        assert!(filter_output_for_ssh(data).is_empty());
+    }
+
+    #[test]
+    fn output_filter_strips_focus_events() {
+        let data = b"\x1b[?1004h";
+        assert!(filter_output_for_ssh(data).is_empty());
+    }
+
+    #[test]
+    fn output_filter_keeps_other_sequences() {
+        // ESC[?25h (show cursor) should be kept
+        let data = b"\x1b[?25h";
+        assert_eq!(filter_output_for_ssh(data), data.to_vec());
+    }
+
+    #[test]
+    fn output_filter_mixed() {
+        // win32 mode + text + focus events → text only
+        let data = b"\x1b[?9001h\x1b[?1004hHello\x1b[?25h";
+        assert_eq!(filter_output_for_ssh(data), b"Hello\x1b[?25h".to_vec());
+    }
+
+    #[test]
+    fn output_filter_strips_from_conpty_init() {
+        // Realistic ConPTY init sequence: win32 + focus + DSR
+        let data = b"\x1b[?9001h\x1b[?1004h\x1b[6n";
+        assert_eq!(filter_output_for_ssh(data), b"\x1b[6n".to_vec());
     }
 
     #[test]
