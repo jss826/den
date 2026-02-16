@@ -1,5 +1,5 @@
 ---
-paths: ['src/**/*.rs', 'frontend/**']
+paths: ['src/**/*.rs', 'frontend/**', 'tests/**']
 ---
 
 # 開発ルール
@@ -23,6 +23,13 @@ paths: ['src/**/*.rs', 'frontend/**']
 
 - `cargo run` でサーバーを起動した場合、作業完了時に必ずプロセスを停止する
 - 停止し忘れるとポート占有やディレクトリロックの原因になる
+
+## PTY テスト（tests/registry_test.rs）
+
+- `#[tokio::test]` は使わない。ConPTY の read パイプは子プロセス終了後も閉じないため、`spawn_blocking` の read_task が永久ブロックし、tokio ランタイムが終了できない
+- 代わりに `#[test]` + 手動ランタイム（`build_test_runtime()`）+ `rt.shutdown_timeout(3s)` を使う
+- ConPTY は DSR (`ESC[6n`) に CPR 応答がないと出力をブロックする → シェルと対話するテストでは `init_shell()` で CPR を返してからコマンドを送る
+- テストが中断（Ctrl+C / taskkill）すると conhost.exe ゾンビが残る → `tasklist //FI "IMAGENAME eq conhost.exe"` で確認し、テスト由来のプロセス（6-7MB）を手動 kill する
 
 ## タスク管理
 
