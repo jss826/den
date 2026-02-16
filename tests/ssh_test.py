@@ -122,12 +122,13 @@ class TestSSHNewSession(unittest.TestCase):
         self.client.close()
 
     def test_new_session_shows_prompt(self):
-        """Creating a new session should show cmd.exe prompt."""
+        """Creating a new session should show shell prompt."""
         self.channel, output = exec_pty(self.client, f"new {self.session_name}")
         text = output.decode("utf-8", errors="replace")
 
-        # cmd.exe prompt contains ">" (e.g., C:\Users\user>)
-        self.assertIn(">", text, "cmd.exe prompt not found in output")
+        # Shell prompt should contain recognizable characters
+        has_prompt = ">" in text or "PS " in text or "$" in text
+        self.assertTrue(has_prompt, f"Shell prompt not found in output: {text!r}")
 
     def test_new_session_input_works(self):
         """Typing into the session should produce output."""
@@ -136,8 +137,8 @@ class TestSSHNewSession(unittest.TestCase):
         )
         text = output.decode("utf-8", errors="replace")
 
-        if ">" not in text:
-            self.skipTest("cmd.exe prompt did not appear")
+        if ">" not in text and "PS " not in text and "$" not in text:
+            self.skipTest("Shell prompt did not appear")
 
         # Send a command
         self.channel.send(b"echo HELLO_SSH_TEST\r\n")
@@ -159,8 +160,8 @@ class TestSSHNewSession(unittest.TestCase):
         )
         text = output.decode("utf-8", errors="replace")
 
-        if ">" not in text:
-            self.skipTest("cmd.exe prompt did not appear")
+        if ">" not in text and "PS " not in text and "$" not in text:
+            self.skipTest("Shell prompt did not appear")
 
         # Send a DA response (should be filtered by the server)
         self.channel.send(b"\x1b[?1;2c")
@@ -205,8 +206,8 @@ class TestSSHAttach(unittest.TestCase):
         self.channels.append(ch1)
 
         text1 = output1.decode("utf-8", errors="replace")
-        if ">" not in text1:
-            self.skipTest("cmd.exe prompt did not appear")
+        if ">" not in text1 and "PS " not in text1 and "$" not in text1:
+            self.skipTest("Shell prompt did not appear")
 
         # Attach with second client
         client2 = ssh_connect()
@@ -216,7 +217,8 @@ class TestSSHAttach(unittest.TestCase):
 
         text2 = output2.decode("utf-8", errors="replace")
         # Replay should contain part of the prompt
-        self.assertIn(">", text2, "Replay data should contain prompt")
+        has_prompt = ">" in text2 or "PS " in text2 or "$" in text2
+        self.assertTrue(has_prompt, f"Replay data should contain prompt: {text2!r}")
 
 
 class TestSSHDsrDelivery(unittest.TestCase):
@@ -288,6 +290,259 @@ class TestSSHSessionList(unittest.TestCase):
         self.assertIn(session_name, output, f"Session {session_name} not in list")
         self.assertIn("alive", output)
         client2.close()
+
+
+class TestSSHAuthRejection(unittest.TestCase):
+    """Test that wrong password is rejected."""
+
+    def test_wrong_password_rejected(self):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        with self.assertRaises(paramiko.AuthenticationException):
+            client.connect(
+                SSH_HOST,
+                port=SSH_PORT,
+                username=SSH_USER,
+                password="wrong_password_12345",
+                timeout=10,
+                auth_timeout=AUTH_TIMEOUT,
+                allow_agent=False,
+                look_for_keys=False,
+            )
+
+
+class TestSSHInvalidSession(unittest.TestCase):
+    """Test that invalid session names are handled properly."""
+
+    def test_invalid_session_name(self):
+        client = ssh_connect()
+        channel = client.get_transport().open_session()
+        channel.get_pty(term="xterm-256color", width=80, height=24)
+        channel.exec_command("new ../bad")
+        channel.settimeout(5.0)
+
+        output = b""
+        try:
+            while True:
+                data = channel.recv(4096)
+                if not data:
+                    break
+                output += data
+        except Exception:
+            pass
+
+        text = output.decode("utf-8", errors="replace")
+        # Server should reject invalid name or report error
+        has_error = (
+            "Invalid" in text
+            or "already exists" in text.lower()
+            or channel.exit_status_ready()
+        )
+        self.assertTrue(
+            has_error or channel.closed,
+            f"Expected error or channel close for invalid name, got: {text!r}",
+        )
+        channel.close()
+        client.close()
+
+
+class TestSSHWindowResize(unittest.TestCase):
+    """Test that window resize works during a session."""
+
+    def setUp(self):
+        self.client = ssh_connect()
+        self.session_name = f"ssh-resize-{int(time.time())}"
+        self.channel = None
+
+    def tearDown(self):
+        if self.channel and not self.channel.closed:
+            self.channel.close()
+        self.client.close()
+
+    def test_resize_then_echo(self):
+        """After resize, echo should still work."""
+        self.channel, output = exec_pty(
+            self.client, f"new {self.session_name}", duration=4
+        )
+        text = output.decode("utf-8", errors="replace")
+
+        if ">" not in text and "PS " not in text and "$" not in text:
+            self.skipTest("Shell prompt did not appear")
+
+        # Resize
+        self.channel.resize_pty(width=120, height=40)
+        time.sleep(1)
+
+        # Send a command after resize
+        self.channel.send(b"echo RESIZE_OK\r\n")
+        time.sleep(2)
+
+        try:
+            extra = self.channel.recv(8192)
+            extra_text = extra.decode("utf-8", errors="replace")
+            self.assertIn("RESIZE_OK", extra_text)
+        except Exception as e:
+            self.fail(f"Failed to receive echo after resize: {e}")
+
+
+class TestSSHMultipleClients(unittest.TestCase):
+    """Test that multiple clients can see the same session output."""
+
+    def setUp(self):
+        self.clients = []
+        self.channels = []
+        self.session_name = f"ssh-multi-{int(time.time())}"
+
+    def tearDown(self):
+        for ch in self.channels:
+            if not ch.closed:
+                ch.close()
+        for c in self.clients:
+            c.close()
+
+    def test_two_clients_receive_output(self):
+        """Both clients attached to the same session should receive echo output."""
+        # Client 1: create session
+        client1 = ssh_connect()
+        self.clients.append(client1)
+        ch1, output1 = exec_pty(client1, f"new {self.session_name}", duration=4)
+        self.channels.append(ch1)
+
+        text1 = output1.decode("utf-8", errors="replace")
+        if ">" not in text1 and "PS " not in text1 and "$" not in text1:
+            self.skipTest("Shell prompt did not appear")
+
+        # Client 2: attach to same session
+        client2 = ssh_connect()
+        self.clients.append(client2)
+        ch2, output2 = exec_pty(
+            client2, f"attach {self.session_name}", duration=4
+        )
+        self.channels.append(ch2)
+
+        # Send echo from client 1
+        ch1.send(b"echo MULTI_CLIENT_TEST\r\n")
+        time.sleep(3)
+
+        # Both clients should receive the output
+        try:
+            data2 = ch2.recv(8192)
+            text2 = data2.decode("utf-8", errors="replace")
+            self.assertIn(
+                "MULTI_CLIENT_TEST",
+                text2,
+                "Client 2 did not receive echo output",
+            )
+        except Exception as e:
+            self.fail(f"Client 2 failed to receive output: {e}")
+
+
+class TestSSHReconnect(unittest.TestCase):
+    """Test disconnect and reconnect with replay."""
+
+    def setUp(self):
+        self.session_name = f"ssh-reconn-{int(time.time())}"
+
+    def test_reconnect_has_replay(self):
+        """After disconnect+reconnect, replay should contain the marker."""
+        # Session 1: create and send marker
+        client1 = ssh_connect()
+        ch1, output1 = exec_pty(client1, f"new {self.session_name}", duration=4)
+        text1 = output1.decode("utf-8", errors="replace")
+
+        if ">" not in text1 and "PS " not in text1 and "$" not in text1:
+            ch1.close()
+            client1.close()
+            self.skipTest("Shell prompt did not appear")
+
+        ch1.send(b"echo RECONNECT_MARKER_42\r\n")
+        time.sleep(2)
+
+        # Disconnect
+        ch1.close()
+        client1.close()
+        time.sleep(1)
+
+        # Reconnect and check replay
+        client2 = ssh_connect()
+        ch2, output2 = exec_pty(
+            client2, f"attach {self.session_name}", duration=4
+        )
+        text2 = output2.decode("utf-8", errors="replace")
+
+        self.assertIn(
+            "RECONNECT_MARKER_42",
+            text2,
+            f"Replay should contain marker, got: {text2!r}",
+        )
+
+        ch2.close()
+        client2.close()
+
+
+class TestSSHNoPtyError(unittest.TestCase):
+    """Test that PTY-requiring commands fail gracefully without PTY."""
+
+    def test_attach_without_pty(self):
+        """exec 'attach' without PTY should return error message."""
+        client = ssh_connect()
+        output = exec_simple(client, "attach default")
+        self.assertIn(
+            "PTY required",
+            output,
+            f"Expected 'PTY required' error, got: {output!r}",
+        )
+        client.close()
+
+    def test_new_without_pty(self):
+        """exec 'new' without PTY should return error message."""
+        client = ssh_connect()
+        output = exec_simple(client, "new no-pty-session")
+        self.assertIn(
+            "PTY required",
+            output,
+            f"Expected 'PTY required' error, got: {output!r}",
+        )
+        client.close()
+
+
+class TestSSHExecUnknown(unittest.TestCase):
+    """Test that unknown exec commands fall back to default session."""
+
+    def test_unknown_command_with_pty(self):
+        """Unknown command with PTY should connect to default session."""
+        client = ssh_connect()
+        channel = client.get_transport().open_session()
+        channel.get_pty(term="xterm-256color", width=80, height=24)
+        channel.exec_command("some-unknown-command")
+        channel.settimeout(1.0)
+
+        all_output = b""
+        cpr_sent = False
+        start = time.time()
+
+        while time.time() - start < 6:
+            try:
+                data = channel.recv(4096)
+                if not data:
+                    break
+                all_output += data
+                if b"\x1b[6n" in data and not cpr_sent:
+                    channel.send(b"\x1b[1;1R")
+                    cpr_sent = True
+            except Exception:
+                pass
+
+        text = all_output.decode("utf-8", errors="replace")
+        # Should get a shell prompt (connected to default session)
+        has_prompt = ">" in text or "PS " in text or "$" in text
+        self.assertTrue(
+            has_prompt,
+            f"Expected shell prompt for unknown command fallback, got: {text!r}",
+        )
+
+        channel.close()
+        client.close()
 
 
 if __name__ == "__main__":

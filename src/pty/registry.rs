@@ -72,7 +72,8 @@ pub struct SharedSession {
 pub struct SessionInner {
     // PTY
     pub pty_writer: Box<dyn std::io::Write + Send>,
-    resize_tx: std::sync::mpsc::Sender<(u16, u16)>,
+    /// resize チャネル（destroy 時に take → channel 閉鎖 → master drop → pipe 閉鎖）
+    resize_tx: Option<std::sync::mpsc::Sender<(u16, u16)>>,
     // Clients
     clients: Vec<ClientInfo>,
     // Resources
@@ -142,7 +143,7 @@ impl SessionRegistry {
             output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
             inner: Mutex::new(SessionInner {
                 pty_writer,
-                resize_tx,
+                resize_tx: Some(resize_tx),
                 clients: Vec::new(),
                 #[cfg(windows)]
                 job,
@@ -434,8 +435,10 @@ impl SessionRegistry {
                 // 異なるサイズで一度 resize してから正しいサイズに戻す。
                 // これにより ConPTY の画面バッファが再描画され、初期出力がフラッシュされる。
                 let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
-                let _ = inner.resize_tx.send((nudge_cols, rows));
-                let _ = inner.resize_tx.send((cols, rows));
+                if let Some(ref tx) = inner.resize_tx {
+                    let _ = tx.send((nudge_cols, rows));
+                    let _ = tx.send((cols, rows));
+                }
 
                 tracing::info!("Client {client_id} ({kind:?}) created+attached to session {name}");
                 Ok((Arc::clone(&session), rx, replay, client_id))
@@ -503,7 +506,7 @@ impl SessionRegistry {
 
         session.alive.store(false, Ordering::Release);
 
-        // inner を lock して child を取り出す（lock は必ず解放される）
+        // inner を lock して child と resize_tx を取り出す
         let child = {
             let mut inner = session.inner.lock().await;
 
@@ -514,8 +517,11 @@ impl SessionRegistry {
                 tracing::warn!("Job Object terminate failed for session {name}: {e}");
             }
 
+            // resize_tx を drop → resize_task の recv() が Err を返す
+            // → resize_task 終了 → master drop → PTY パイプ閉鎖 → read_task 終了
+            inner.resize_tx.take();
+
             inner.child.take()
-            // inner (MutexGuard) はここで drop → resize_tx も drop → resize_task 停止
         };
 
         if let Some(mut child) = child {
@@ -564,7 +570,9 @@ impl SessionRegistry {
         let min_cols = inner.clients.iter().map(|c| c.cols).min().unwrap_or(80);
         let min_rows = inner.clients.iter().map(|c| c.rows).min().unwrap_or(24);
 
-        let _ = inner.resize_tx.send((min_cols, min_rows));
+        if let Some(ref tx) = inner.resize_tx {
+            let _ = tx.send((min_cols, min_rows));
+        }
     }
 }
 

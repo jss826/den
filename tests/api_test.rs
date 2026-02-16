@@ -16,7 +16,7 @@ fn test_config() -> Config {
     Config {
         port: 0,
         password: "testpass".to_string(),
-        shell: "cmd.exe".to_string(),
+        shell: "powershell.exe".to_string(),
         env: Environment::Development,
         log_level: "debug".to_string(),
         data_dir: tmp.to_string_lossy().to_string(),
@@ -26,7 +26,7 @@ fn test_config() -> Config {
 }
 
 fn test_app() -> axum::Router {
-    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string());
     den::create_app(test_config(), registry)
 }
 
@@ -237,7 +237,7 @@ async fn settings_get_default() {
 #[tokio::test]
 async fn settings_put_and_get() {
     let config = test_config();
-    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string());
     let app = den::create_app(config, registry);
 
     // PUT
@@ -379,7 +379,7 @@ async fn settings_put_invalid_json() {
 #[tokio::test]
 async fn settings_put_partial_json() {
     let config = test_config();
-    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string());
     let app = den::create_app(config, registry);
 
     // PUT with only some fields — serde should use defaults for missing fields

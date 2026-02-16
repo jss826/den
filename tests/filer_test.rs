@@ -16,7 +16,7 @@ fn test_config() -> Config {
     Config {
         port: 0,
         password: "testpass".to_string(),
-        shell: "cmd.exe".to_string(),
+        shell: "powershell.exe".to_string(),
         env: Environment::Development,
         log_level: "debug".to_string(),
         data_dir: tmp.to_string_lossy().to_string(),
@@ -26,7 +26,7 @@ fn test_config() -> Config {
 }
 
 fn test_app() -> axum::Router {
-    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string());
     den::create_app(test_config(), registry)
 }
 
@@ -37,7 +37,7 @@ fn auth_header() -> String {
 /// Helper: create a shared app with a tempdir for filer operations
 fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
-    let registry = SessionRegistry::new("cmd.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string());
     let app = den::create_app(test_config(), registry);
     (app, dir)
 }

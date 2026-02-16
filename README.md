@@ -69,7 +69,7 @@ just prod strongpw    # パスワード上書き指定も可
 | `DEN_BIND_ADDRESS` | `127.0.0.1` | `0.0.0.0` | Bind address |
 | `DEN_DATA_DIR` | `./data-dev` | `./data` | Data persistence directory |
 | `DEN_LOG_LEVEL` | `debug` | `info` | Log level filter |
-| `DEN_SHELL` | `cmd.exe` (Win) / `$SHELL` | same | Shell for terminal |
+| `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | same | Shell for terminal |
 | `DEN_SSH_PORT` | *(disabled)* | *(disabled)* | SSH server port (opt-in) |
 
 ## Features
