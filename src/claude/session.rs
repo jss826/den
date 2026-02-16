@@ -22,6 +22,7 @@ pub fn spawn_claude_session(
                 prompt.to_string(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
+                "--verbose".to_string(),
                 "--dangerously-skip-permissions".to_string(),
             ];
             if is_continuation {
@@ -31,7 +32,7 @@ pub fn spawn_claude_session(
         }
         ConnectionTarget::Ssh { host } => {
             let mut claude_args = format!(
-                "claude -p {} --output-format stream-json --dangerously-skip-permissions",
+                "claude -p {} --output-format stream-json --verbose --dangerously-skip-permissions",
                 shell_escape_prompt(prompt),
             );
             if is_continuation {
@@ -74,6 +75,9 @@ fn spawn_command_pty(
         cmd.arg(arg);
     }
     cmd.cwd(cwd);
+    // Den 自体が Claude Code 内から起動された場合、子プロセスの claude CLI が
+    // ネストセッション検出で拒否されるのを防ぐ
+    cmd.env_remove("CLAUDECODE");
 
     let child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
@@ -115,14 +119,16 @@ mod tests {
             prompt.to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
+            "--verbose".to_string(),
             "--dangerously-skip-permissions".to_string(),
         ];
-        assert_eq!(args.len(), 5);
+        assert_eq!(args.len(), 6);
         assert_eq!(args[0], "-p");
         assert_eq!(args[1], prompt);
         assert_eq!(args[2], "--output-format");
         assert_eq!(args[3], "stream-json");
-        assert_eq!(args[4], "--dangerously-skip-permissions");
+        assert_eq!(args[4], "--verbose");
+        assert_eq!(args[5], "--dangerously-skip-permissions");
     }
 
     #[test]
@@ -133,11 +139,12 @@ mod tests {
             prompt.to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
+            "--verbose".to_string(),
             "--dangerously-skip-permissions".to_string(),
         ];
         args.push("--continue".to_string());
-        assert_eq!(args.len(), 6);
-        assert_eq!(args[5], "--continue");
+        assert_eq!(args.len(), 7);
+        assert_eq!(args[6], "--continue");
     }
 
     #[test]
@@ -146,7 +153,7 @@ mod tests {
         let prompt = "test prompt";
         let working_dir = "/home/user";
         let claude_args = format!(
-            "claude -p {} --output-format stream-json --dangerously-skip-permissions",
+            "claude -p {} --output-format stream-json --verbose --dangerously-skip-permissions",
             shell_escape_prompt(prompt),
         );
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
@@ -162,6 +169,7 @@ mod tests {
         assert_eq!(args[3], host);
         assert!(args[4].contains("cd '/home/user'"));
         assert!(args[4].contains("claude -p"));
+        assert!(args[4].contains("--verbose"));
         assert!(args[4].contains("--dangerously-skip-permissions"));
     }
 
@@ -169,11 +177,12 @@ mod tests {
     fn ssh_args_continuation() {
         let prompt = "follow up";
         let mut claude_args = format!(
-            "claude -p {} --output-format stream-json --dangerously-skip-permissions",
+            "claude -p {} --output-format stream-json --verbose --dangerously-skip-permissions",
             shell_escape_prompt(prompt),
         );
         claude_args.push_str(" --continue");
         assert!(claude_args.contains("--continue"));
+        assert!(claude_args.contains("--verbose"));
         assert!(claude_args.contains("--dangerously-skip-permissions"));
     }
 

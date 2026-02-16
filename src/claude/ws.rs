@@ -322,7 +322,7 @@ async fn spawn_claude_turn(
         let conn = conn.clone();
         let dir = dir.clone();
         let prompt = prompt.to_string();
-        move || session::spawn_claude_session(&conn, &dir, &prompt, is_continuation, 200, 50)
+        move || session::spawn_claude_session(&conn, &dir, &prompt, is_continuation, 10000, 50)
     })
     .await;
 
@@ -347,8 +347,8 @@ async fn spawn_claude_turn(
     };
 
     // SessionRegistry に登録
-    let shared_session = match registry.create_with_pty(&registry_name, pty).await {
-        Ok((s, _pre_rx)) => s,
+    let (shared_session, pre_rx) = match registry.create_with_pty(&registry_name, pty).await {
+        Ok(result) => result,
         Err(e) => {
             send_error(ws_tx, &format!("Registry error: {e}")).await;
             let mut map = state_map.lock().await;
@@ -358,6 +358,8 @@ async fn spawn_claude_turn(
             return;
         }
     };
+    // forwarder 用 subscriber を pre_rx と同時点で作成（初期出力を漏れなく受信）
+    let forwarder_rx = shared_session.subscribe();
 
     // turn_started 通知
     let resp = json!({
@@ -377,25 +379,29 @@ async fn spawn_claude_turn(
     }
 
     // processor task（Store 永続化 + 状態更新）
+    // pre_rx を processor に渡す（初期出力を漏れなく永続化するため）
     let processor_store = store.clone();
     let processor_session_id = session_id.to_string();
-    let processor_registry_name = registry_name.clone();
-    let processor_registry = Arc::clone(registry);
+    let processor_session = Arc::clone(&shared_session);
     let processor_state_map = Arc::clone(state_map);
+    let processor_registry = Arc::clone(registry);
+    let processor_registry_name = registry_name.clone();
 
     tokio::spawn(async move {
         run_claude_turn_processor(
             processor_session_id,
-            processor_registry_name,
+            pre_rx,
+            processor_session,
             processor_store,
             processor_registry,
+            processor_registry_name,
             processor_state_map,
         )
         .await;
     });
 
     // forwarder task（WS 転送）
-    let output_rx = shared_session.subscribe();
+    let output_rx = forwarder_rx;
     let ws_tx_for_output = Arc::clone(ws_tx);
     let sid_for_output = session_id.to_string();
     let session_for_output = Arc::clone(&shared_session);
@@ -415,38 +421,45 @@ async fn spawn_claude_turn(
 /// ターン終了時にセッション状態を idle に戻す
 async fn run_claude_turn_processor(
     session_id: String,
-    registry_name: String,
+    mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    session: Arc<crate::pty::registry::SharedSession>,
     store: Store,
     registry: Arc<SessionRegistry>,
+    registry_name: String,
     state_map: SessionStateMap,
 ) {
-    let (session, mut output_rx) = {
-        let Some(session) = registry.get(&registry_name).await else {
-            return;
-        };
-        let rx = session.subscribe();
-        (session, rx)
-    };
-
     let mut line_buf = String::new();
+    #[cfg(windows)]
+    let mut dsr_responded = false;
 
     loop {
         // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
         // 閉じないため、定期的に alive を確認する
         match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
             Ok(Ok(bytes)) => {
+                // ConPTY DSR 検出 → CPR 応答（Windows のみ）
+                // pre_rx を持つ processor が最初に DSR を受信するため、ここで応答する
+                #[cfg(windows)]
+                if !dsr_responded && bytes.windows(4).any(|w| w == b"\x1b[6n") {
+                    let _ = session.write_input(b"\x1b[1;1R").await;
+                    dsr_responded = true;
+                }
+
                 let text = String::from_utf8_lossy(&bytes);
                 line_buf.push_str(&text);
 
                 while let Some(pos) = line_buf.find('\n') {
-                    let line = line_buf[..pos].trim().to_string();
+                    let raw_line = line_buf[..pos].trim().to_string();
                     line_buf.drain(..=pos);
 
-                    if line.is_empty() {
+                    if raw_line.is_empty() {
                         continue;
                     }
 
-                    if let Err(e) = store.append_event(&session_id, &line) {
+                    // ConPTY エスケープシーケンスが混入している場合は JSON 部分を抽出
+                    let line = extract_json_line(&raw_line).unwrap_or(&raw_line);
+
+                    if let Err(e) = store.append_event(&session_id, line) {
                         tracing::warn!("Failed to append event: {}", e);
                     }
                 }
@@ -468,10 +481,11 @@ async fn run_claude_turn_processor(
 
     // 残りのバッファを処理
     let remaining = line_buf.trim().to_string();
-    if !remaining.is_empty()
-        && let Err(e) = store.append_event(&session_id, &remaining)
-    {
-        tracing::warn!("Failed to append final event: {}", e);
+    if !remaining.is_empty() {
+        let line = extract_json_line(&remaining).unwrap_or(&remaining);
+        if let Err(e) = store.append_event(&session_id, line) {
+            tracing::warn!("Failed to append final event: {}", e);
+        }
     }
 
     // セッション状態を idle に戻す（次のターンの準備）
@@ -517,12 +531,17 @@ async fn forward_claude_output(
                 line_buf.push_str(&text);
 
                 while let Some(pos) = line_buf.find('\n') {
-                    let line = line_buf[..pos].trim().to_string();
+                    let raw_line = line_buf[..pos].trim().to_string();
                     line_buf.drain(..=pos);
 
-                    if line.is_empty() {
+                    if raw_line.is_empty() {
                         continue;
                     }
+
+                    // ConPTY エスケープシーケンスが混入している場合は JSON 部分を抽出
+                    let line = extract_json_line(&raw_line)
+                        .unwrap_or(&raw_line)
+                        .to_string();
 
                     let event = json!({
                         "type": "claude_event",
@@ -570,10 +589,13 @@ async fn forward_claude_output(
     // 残りのバッファを送信
     let remaining = line_buf.trim().to_string();
     if !remaining.is_empty() {
+        let line = extract_json_line(&remaining)
+            .unwrap_or(&remaining)
+            .to_string();
         let event = json!({
             "type": "claude_event",
             "session_id": &session_id,
-            "event": Value::String(remaining),
+            "event": Value::String(line),
         });
         let _ = ws_tx
             .lock()
@@ -590,6 +612,21 @@ async fn send_error(ws_tx: &WsSink, message: &str) {
         .await
         .send(Message::Text(resp.to_string().into()))
         .await;
+}
+
+/// ConPTY エスケープシーケンスが混入した行から JSON 部分を抽出
+///
+/// ConPTY は出力に ANSI エスケープシーケンス（カーソル移動、属性リセット等）を付加することがある。
+/// Claude CLI の stream-json 出力は 1 行 1 JSON オブジェクトなので、
+/// 最初の `{` から最後の `}` までを抽出すれば有効な JSON が得られる。
+fn extract_json_line(line: &str) -> Option<&str> {
+    let start = line.find('{')?;
+    let end = line.rfind('}')?;
+    if end >= start {
+        Some(&line[start..=end])
+    } else {
+        None
+    }
 }
 
 fn uuid_v4() -> String {
@@ -657,5 +694,36 @@ mod tests {
         let a = uuid_v4();
         let b = uuid_v4();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn extract_json_line_clean() {
+        let line = r#"{"type":"message","content":"hello"}"#;
+        assert_eq!(extract_json_line(line), Some(line));
+    }
+
+    #[test]
+    fn extract_json_line_with_escape_prefix() {
+        // ConPTY がカーソル移動等のエスケープを先頭に付加するケース
+        let line = "\x1b[0m\x1b[?25l{\"type\":\"message\"}";
+        assert_eq!(extract_json_line(line), Some("{\"type\":\"message\"}"));
+    }
+
+    #[test]
+    fn extract_json_line_with_escape_suffix() {
+        let line = "{\"type\":\"message\"}\x1b[0m";
+        assert_eq!(extract_json_line(line), Some("{\"type\":\"message\"}"));
+    }
+
+    #[test]
+    fn extract_json_line_no_json() {
+        assert_eq!(extract_json_line("plain text"), None);
+        assert_eq!(extract_json_line(""), None);
+    }
+
+    #[test]
+    fn extract_json_line_nested_braces() {
+        let line = r#"{"type":"result","data":{"key":"value"}}"#;
+        assert_eq!(extract_json_line(line), Some(line));
     }
 }
