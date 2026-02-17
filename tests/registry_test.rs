@@ -364,9 +364,9 @@ fn pty_exit_and_recreate() {
         let result = dead_rx.recv().await;
         assert!(result.is_err(), "Subscribe on dead session → Closed");
 
-        // remove_dead → 消える
+        // destroy → 消える
         assert!(reg.exists(&name).await);
-        reg.remove_dead(&name).await;
+        reg.destroy(&name).await;
         assert!(!reg.exists(&name).await);
 
         // get_or_create → 再作成

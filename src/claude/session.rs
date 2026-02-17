@@ -91,6 +91,9 @@ fn spawn_command_pty(
         pixel_height: 0,
     };
 
+    #[cfg(windows)]
+    let pids_before = crate::pty::manager::snapshot_openconsole_pids();
+
     let pair = pty_system.openpty(size)?;
 
     let mut cmd = CommandBuilder::new(command);
@@ -106,7 +109,7 @@ fn spawn_command_pty(
     drop(pair.slave);
 
     #[cfg(windows)]
-    let job = crate::pty::manager::create_job_for_child(&*child);
+    let job = crate::pty::manager::create_job_for_pty(&*child, &pids_before);
 
     let reader = pair.master.try_clone_reader()?;
     let writer = pair.master.take_writer()?;

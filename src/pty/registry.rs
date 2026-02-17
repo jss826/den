@@ -74,6 +74,8 @@ pub struct SessionInner {
     pub pty_writer: Box<dyn std::io::Write + Send>,
     /// resize チャネル（destroy 時に take → channel 閉鎖 → master drop → pipe 閉鎖）
     resize_tx: Option<std::sync::mpsc::Sender<(u16, u16)>>,
+    /// resize_task の JoinHandle（destroy 時に await → master drop → ConPTY 閉鎖保証）
+    resize_handle: Option<tokio::task::JoinHandle<()>>,
     // Clients
     clients: Vec<ClientInfo>,
     // Resources
@@ -135,24 +137,9 @@ impl SessionRegistry {
         let (output_tx, first_rx) = broadcast::channel(BROADCAST_CAPACITY);
         let (resize_tx, resize_rx) = std::sync::mpsc::channel::<(u16, u16)>();
 
-        let session = Arc::new(SharedSession {
-            name: name.to_string(),
-            created_at: Utc::now(),
-            alive: AtomicBool::new(true),
-            replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
-            output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
-            inner: Mutex::new(SessionInner {
-                pty_writer,
-                resize_tx: Some(resize_tx),
-                clients: Vec::new(),
-                #[cfg(windows)]
-                job,
-                child: Some(child),
-            }),
-        });
-
         // resize task: blocking スレッドで master.resize()
-        tokio::task::spawn_blocking(move || {
+        // master を所有 → recv() が Err (= resize_tx drop) で終了 → master drop → ConPTY 閉鎖
+        let resize_handle = tokio::task::spawn_blocking(move || {
             while let Ok((cols, rows)) = resize_rx.recv() {
                 let size = PtySize {
                     rows,
@@ -162,6 +149,24 @@ impl SessionRegistry {
                 };
                 let _ = master.resize(size);
             }
+            // master はここで drop → ClosePseudoConsole → OpenConsole.exe 終了
+        });
+
+        let session = Arc::new(SharedSession {
+            name: name.to_string(),
+            created_at: Utc::now(),
+            alive: AtomicBool::new(true),
+            replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
+            output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
+            inner: Mutex::new(SessionInner {
+                pty_writer,
+                resize_tx: Some(resize_tx),
+                resize_handle: Some(resize_handle),
+                clients: Vec::new(),
+                #[cfg(windows)]
+                job,
+                child: Some(child),
+            }),
         });
 
         // PTY read_task: 出力を replay buffer + broadcast に流す
@@ -277,12 +282,21 @@ impl SessionRegistry {
             if sessions.contains_key(name) {
                 // レース: 別の呼び出しが先に作成した → クリーンアップ
                 session.alive.store(false, Ordering::Release);
-                if let Some(mut child) = session.inner.lock().await.child.take() {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                    })
-                    .await;
+                let resize_handle = {
+                    let mut inner = session.inner.lock().await;
+                    if let Some(mut child) = inner.child.take() {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        })
+                        .await;
+                    }
+                    inner.pty_writer = Box::new(std::io::sink());
+                    inner.resize_tx.take();
+                    inner.resize_handle.take()
+                };
+                if let Some(handle) = resize_handle {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
                 }
                 return Err(RegistryError::AlreadyExists(name.to_string()));
             }
@@ -323,12 +337,21 @@ impl SessionRegistry {
             let mut sessions = self.sessions.write().await;
             if sessions.contains_key(name) {
                 session.alive.store(false, Ordering::Release);
-                if let Some(mut child) = session.inner.lock().await.child.take() {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                    })
-                    .await;
+                let resize_handle = {
+                    let mut inner = session.inner.lock().await;
+                    if let Some(mut child) = inner.child.take() {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        })
+                        .await;
+                    }
+                    inner.pty_writer = Box::new(std::io::sink());
+                    inner.resize_tx.take();
+                    inner.resize_handle.take()
+                };
+                if let Some(handle) = resize_handle {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
                 }
                 return Err(RegistryError::AlreadyExists(name.to_string()));
             }
@@ -511,10 +534,11 @@ impl SessionRegistry {
 
         session.alive.store(false, Ordering::Release);
 
-        // inner を lock して child と resize_tx を取り出す
-        let child = {
+        let resize_handle = {
             let mut inner = session.inner.lock().await;
 
+            // 1. Job Object で child + OpenConsole を一括 terminate
+            //    OpenConsole が先に死ぬことで ClosePseudoConsole がブロックしなくなる
             #[cfg(windows)]
             if let Some(ref job) = inner.job
                 && let Err(e) = job.terminate()
@@ -522,25 +546,37 @@ impl SessionRegistry {
                 tracing::warn!("Job Object terminate failed for session {name}: {e}");
             }
 
-            // resize_tx を drop → resize_task の recv() が Err を返す
-            // → resize_task 終了 → master drop → PTY パイプ閉鎖 → read_task 終了
+            // 2. child を kill/wait（Job Object 対象外の場合のフォールバック）
+            if let Some(mut child) = inner.child.take() {
+                let child_name = name.to_string();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = child.kill() {
+                        tracing::debug!("Session {child_name} child kill: {e}");
+                    }
+                    if let Err(e) = child.wait() {
+                        tracing::warn!("Session {child_name} child wait: {e}");
+                    }
+                })
+                .await;
+            }
+
+            // 3. pty_writer を閉じる（stdin パイプ閉鎖 → conhost の ReadFile 解除）
+            inner.pty_writer = Box::new(std::io::sink());
+
+            // 4. resize_tx を drop → resize_task 終了 → master drop → ClosePseudoConsole
             inner.resize_tx.take();
 
-            inner.child.take()
+            inner.resize_handle.take()
         };
 
-        if let Some(mut child) = child {
-            let name = name.to_string();
-            tokio::task::spawn_blocking(move || {
-                if let Err(e) = child.kill() {
-                    tracing::debug!("Session {name} child kill: {e}");
-                }
-                if let Err(e) = child.wait() {
-                    tracing::warn!("Session {name} child wait: {e}");
-                }
-            })
-            .await
-            .ok();
+        // resize_handle を await（master drop → ClosePseudoConsole）
+        // OpenConsole は既に Job Object で terminate 済みなので即完了するはず
+        if let Some(handle) = resize_handle
+            && tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+                .await
+                .is_err()
+        {
+            tracing::warn!("Session {name}: resize_task did not finish within 5s");
         }
 
         tracing::info!("Session destroyed: {name}");
@@ -554,16 +590,6 @@ impl SessionRegistry {
     /// セッション取得
     pub async fn get(&self, name: &str) -> Option<Arc<SharedSession>> {
         self.sessions.read().await.get(name).cloned()
-    }
-
-    /// 死んだセッションを registry から削除
-    pub async fn remove_dead(&self, name: &str) {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.get(name)
-            && !session.is_alive()
-        {
-            sessions.remove(name);
-        }
     }
 
     /// リサイズ再計算: 全 clients の min(cols), min(rows)

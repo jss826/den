@@ -631,7 +631,7 @@ async fn run_interactive_processor(
     }
 
     // registry から削除
-    registry.remove_dead(&registry_name).await;
+    registry.destroy(&registry_name).await;
 
     tracing::info!("Claude interactive process ended for session {session_id}");
 }

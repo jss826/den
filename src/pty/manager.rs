@@ -29,6 +29,10 @@ impl PtyManager {
             pixel_height: 0,
         };
 
+        // ConPTY 作成前の OpenConsole PID をスナップショット
+        #[cfg(windows)]
+        let pids_before = snapshot_openconsole_pids();
+
         let pair = pty_system.openpty(size)?;
 
         let mut cmd = CommandBuilder::new(shell);
@@ -44,7 +48,7 @@ impl PtyManager {
 
         // Windows: Job Object でプロセスグループ管理
         #[cfg(windows)]
-        let job = create_job_for_child(&*child);
+        let job = create_job_for_pty(&*child, &pids_before);
 
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
@@ -60,10 +64,13 @@ impl PtyManager {
     }
 }
 
-/// Create a Job Object and assign the child process to it.
-/// Returns None (with a warning log) if anything fails.
+/// Create a Job Object and assign both the child and OpenConsole processes.
+/// OpenConsole (ConPTY host) の PID は openpty() 前後のスナップショット差分で特定する。
 #[cfg(windows)]
-pub fn create_job_for_child(child: &dyn portable_pty::Child) -> Option<super::job::PtyJobObject> {
+pub fn create_job_for_pty(
+    child: &dyn portable_pty::Child,
+    pids_before: &std::collections::HashSet<u32>,
+) -> Option<super::job::PtyJobObject> {
     let pid = child.process_id()?;
 
     let job = match super::job::PtyJobObject::new() {
@@ -75,10 +82,70 @@ pub fn create_job_for_child(child: &dyn portable_pty::Child) -> Option<super::jo
     };
 
     if let Err(e) = job.assign_pid(pid) {
-        tracing::warn!("Failed to assign PID {pid} to Job Object: {e}");
+        tracing::warn!("Failed to assign child PID {pid} to Job Object: {e}");
         return None;
     }
+    tracing::debug!("Assigned child PID {pid} to Job Object");
 
-    tracing::debug!("Assigned PID {pid} to Job Object");
+    // openpty() で新たに起動した OpenConsole を Job Object に追加
+    let pids_after = snapshot_openconsole_pids();
+    for &conhost_pid in pids_after.difference(pids_before) {
+        match job.assign_pid(conhost_pid) {
+            Ok(()) => {
+                tracing::debug!("Assigned OpenConsole PID {conhost_pid} to Job Object");
+            }
+            Err(e) => {
+                tracing::debug!("Failed to assign OpenConsole PID {conhost_pid}: {e}");
+            }
+        }
+    }
+
     Some(job)
+}
+
+/// 現在実行中の OpenConsole.exe プロセスの PID セットを返す
+#[cfg(windows)]
+pub fn snapshot_openconsole_pids() -> std::collections::HashSet<u32> {
+    use std::collections::HashSet;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next, TH32CS_SNAPPROCESS,
+    };
+
+    let mut pids = HashSet::new();
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot.is_null() {
+            return pids;
+        }
+
+        let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+
+        if Process32First(snapshot, &mut entry) != 0 {
+            loop {
+                // szExeFile は [i8; 260] (null-terminated)
+                let name_bytes: Vec<u8> = entry
+                    .szExeFile
+                    .iter()
+                    .take_while(|&&c| c != 0)
+                    .map(|&c| c as u8)
+                    .collect();
+                if let Ok(name) = std::str::from_utf8(&name_bytes)
+                    && name.eq_ignore_ascii_case("OpenConsole.exe")
+                {
+                    pids.insert(entry.th32ProcessID);
+                }
+
+                if Process32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+
+        CloseHandle(snapshot);
+    }
+
+    pids
 }

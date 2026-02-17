@@ -207,7 +207,7 @@ impl DenSshHandler {
             }
 
             // セッションが死んでいたら registry から削除
-            registry.remove_dead(&name_for_task).await;
+            registry.destroy(&name_for_task).await;
         }));
 
         Ok(())
