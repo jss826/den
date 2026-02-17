@@ -63,6 +63,8 @@ const SessionHistory = (() => {
         sessions = sessions.filter(s => s.id !== id);
         Toast.success('Session deleted');
         return true;
+      } else if (resp.status === 409) {
+        Toast.error('Cannot delete a running session');
       } else {
         Toast.error('Failed to delete session');
       }

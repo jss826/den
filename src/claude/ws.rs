@@ -438,11 +438,36 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     }
                 };
 
+                // まずローカル state_map を確認
                 let shared_session = {
                     let map = state_map.lock().await;
-                    match map.get(&session_id) {
-                        Some(state) => state.shared_session.clone(),
-                        None => None,
+                    map.get(&session_id).and_then(|s| s.shared_session.clone())
+                };
+
+                // ローカルになければ registry から復元（WS 再接続ケース）
+                let shared_session = if shared_session.is_some() {
+                    shared_session
+                } else {
+                    let registry_name = format!("claude-{}", session_id);
+                    if let Some(shared) = registry.get(&registry_name).await {
+                        let meta = store.load_session_meta(&session_id);
+                        let is_running = meta
+                            .as_ref()
+                            .map(|m| m.status == "running")
+                            .unwrap_or(false);
+                        let mut map = state_map.lock().await;
+                        map.insert(
+                            session_id.clone(),
+                            ClaudeSessionState {
+                                is_running,
+                                process_alive: true,
+                                registry_name,
+                                shared_session: Some(Arc::clone(&shared)),
+                            },
+                        );
+                        Some(shared)
+                    } else {
+                        None
                     }
                 };
 

@@ -74,6 +74,14 @@ pub async fn delete_session(
     if !is_valid_id(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    // 実行中セッションの削除を拒否
+    if state
+        .store
+        .load_session_meta(&id)
+        .is_some_and(|meta| meta.status == "running")
+    {
+        return StatusCode::CONFLICT.into_response();
+    }
     match state.store.delete_session(&id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),

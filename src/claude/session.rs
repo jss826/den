@@ -39,13 +39,7 @@ pub fn spawn_claude_session(
                 claude_args.push_str(" --continue");
             }
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-            let args = vec![
-                "-t".to_string(),
-                "-o".to_string(),
-                "BatchMode=yes".to_string(),
-                host.clone(),
-                remote_cmd,
-            ];
+            let args = build_ssh_args(host, &remote_cmd);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
     }
@@ -72,13 +66,7 @@ pub fn spawn_claude_interactive(
             let claude_args =
                 "claude --output-format stream-json --verbose --dangerously-skip-permissions";
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-            let args = vec![
-                "-t".to_string(),
-                "-o".to_string(),
-                "BatchMode=yes".to_string(),
-                host.clone(),
-                remote_cmd,
-            ];
+            let args = build_ssh_args(host, &remote_cmd);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
     }
@@ -129,6 +117,18 @@ fn spawn_command_pty(
         #[cfg(windows)]
         job,
     })
+}
+
+/// SSH コマンドの共通引数を構築（-A でエージェント転送を有効化）
+fn build_ssh_args(host: &str, remote_cmd: &str) -> Vec<String> {
+    vec![
+        "-t".to_string(),
+        "-A".to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        host.to_string(),
+        remote_cmd.to_string(),
+    ]
 }
 
 /// シングルクォートエスケープ（SSH リモートコマンド用）
@@ -190,20 +190,15 @@ mod tests {
             shell_escape_prompt(prompt),
         );
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-        let args = vec![
-            "-t".to_string(),
-            "-o".to_string(),
-            "BatchMode=yes".to_string(),
-            host.to_string(),
-            remote_cmd.clone(),
-        ];
-        assert_eq!(args.len(), 5);
+        let args = build_ssh_args(host, &remote_cmd);
+        assert_eq!(args.len(), 6);
         assert_eq!(args[0], "-t");
-        assert_eq!(args[3], host);
-        assert!(args[4].contains("cd '/home/user'"));
-        assert!(args[4].contains("claude -p"));
-        assert!(args[4].contains("--verbose"));
-        assert!(args[4].contains("--dangerously-skip-permissions"));
+        assert_eq!(args[1], "-A");
+        assert_eq!(args[4], host);
+        assert!(args[5].contains("cd '/home/user'"));
+        assert!(args[5].contains("claude -p"));
+        assert!(args[5].contains("--verbose"));
+        assert!(args[5].contains("--dangerously-skip-permissions"));
     }
 
     #[test]
@@ -227,14 +222,9 @@ mod tests {
         let claude_args =
             "claude --output-format stream-json --verbose --dangerously-skip-permissions";
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-        let args = vec![
-            "-t".to_string(),
-            "-o".to_string(),
-            "BatchMode=yes".to_string(),
-            host.to_string(),
-            remote_cmd.clone(),
-        ];
-        assert_eq!(args.len(), 5);
+        let args = build_ssh_args(host, &remote_cmd);
+        assert_eq!(args.len(), 6);
+        assert_eq!(args[1], "-A"); // agent forwarding
         assert!(!remote_cmd.contains("claude -p"));
         assert!(remote_cmd.contains("--output-format stream-json"));
     }

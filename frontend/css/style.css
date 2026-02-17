@@ -194,12 +194,174 @@
   --spinner-track: rgba(255,255,255,0.15);
 }
 
-/* CodeMirror ライトテーマ対応 (Solarized Light 含む) */
-[data-theme="solarized-light"] .filer-editor .cm-editor {
+/* === Dracula テーマ === */
+[data-theme="dracula"] {
+  --bg: #282a36;
+  --fg: #f8f8f2;
+  --accent: #bd93f9;
+  --surface: #44475a;
+  --border: #6272a4;
+  --error: #ff5555;
+  --keybar-bg: #44475a;
+  --keybar-key: #6272a4;
+  --keybar-key-active: #bd93f9;
+  --success: #50fa7b;
+  --warn: #f1fa8c;
+  --muted: #6272a4;
+  --hover-subtle: rgba(255,255,255,0.03);
+  --hover: rgba(255,255,255,0.05);
+  --hover-strong: rgba(255,255,255,0.1);
+  --accent-tint: rgba(189,147,249,0.1);
+  --accent-tint-strong: rgba(189,147,249,0.15);
+  --accent-tint-2: rgba(189,147,249,0.2);
+  --accent-tint-3: rgba(189,147,249,0.3);
+  --accent-tint-4: rgba(189,147,249,0.6);
+  --error-tint: rgba(255,85,85,0.15);
+  --code-bg: rgba(255,255,255,0.08);
+  --inset-bg: rgba(0,0,0,0.2);
+  --overlay-bg: rgba(0,0,0,0.3);
+  --overlay-bg-strong: rgba(0,0,0,0.5);
+  --shadow: rgba(0,0,0,0.4);
+  --spinner-track: rgba(255,255,255,0.15);
+}
+
+/* === Gruvbox Dark テーマ === */
+[data-theme="gruvbox-dark"] {
+  --bg: #282828;
+  --fg: #ebdbb2;
+  --accent: #83a598;
+  --surface: #3c3836;
+  --border: #504945;
+  --error: #fb4934;
+  --keybar-bg: #3c3836;
+  --keybar-key: #504945;
+  --keybar-key-active: #689d6a;
+  --success: #b8bb26;
+  --warn: #fabd2f;
+  --muted: #a89984;
+  --hover-subtle: rgba(255,255,255,0.03);
+  --hover: rgba(255,255,255,0.05);
+  --hover-strong: rgba(255,255,255,0.1);
+  --accent-tint: rgba(131,165,152,0.1);
+  --accent-tint-strong: rgba(131,165,152,0.15);
+  --accent-tint-2: rgba(131,165,152,0.2);
+  --accent-tint-3: rgba(131,165,152,0.3);
+  --accent-tint-4: rgba(131,165,152,0.6);
+  --error-tint: rgba(251,73,52,0.15);
+  --code-bg: rgba(255,255,255,0.08);
+  --inset-bg: rgba(0,0,0,0.2);
+  --overlay-bg: rgba(0,0,0,0.3);
+  --overlay-bg-strong: rgba(0,0,0,0.5);
+  --shadow: rgba(0,0,0,0.4);
+  --spinner-track: rgba(255,255,255,0.15);
+}
+
+/* === Gruvbox Light テーマ === */
+[data-theme="gruvbox-light"],
+[data-theme="gruvbox-light"] body {
+  color-scheme: light;
+}
+
+[data-theme="gruvbox-light"] {
+  --bg: #fbf1c7;
+  --fg: #3c3836;
+  --accent: #076678;
+  --surface: #ebdbb2;
+  --border: #a89984;
+  --error: #cc241d;
+  --keybar-bg: #ebdbb2;
+  --keybar-key: #a89984;
+  --keybar-key-active: #689d6a;
+  --success: #79740e;
+  --warn: #b57614;
+  --muted: #665c54;
+  --hover-subtle: rgba(0,0,0,0.02);
+  --hover: rgba(0,0,0,0.04);
+  --hover-strong: rgba(0,0,0,0.08);
+  --accent-tint: rgba(7,102,120,0.08);
+  --accent-tint-strong: rgba(7,102,120,0.12);
+  --accent-tint-2: rgba(7,102,120,0.15);
+  --accent-tint-3: rgba(7,102,120,0.2);
+  --accent-tint-4: rgba(7,102,120,0.4);
+  --error-tint: rgba(204,36,29,0.1);
+  --code-bg: rgba(0,0,0,0.05);
+  --inset-bg: rgba(0,0,0,0.04);
+  --overlay-bg: rgba(0,0,0,0.2);
+  --overlay-bg-strong: rgba(0,0,0,0.4);
+  --shadow: rgba(0,0,0,0.12);
+  --spinner-track: rgba(0,0,0,0.1);
+}
+
+/* === Catppuccin Mocha テーマ === */
+[data-theme="catppuccin"] {
+  --bg: #1e1e2e;
+  --fg: #cdd6f4;
+  --accent: #89b4fa;
+  --surface: #313244;
+  --border: #45475a;
+  --error: #f38ba8;
+  --keybar-bg: #313244;
+  --keybar-key: #45475a;
+  --keybar-key-active: #585b70;
+  --success: #a6e3a1;
+  --warn: #f9e2af;
+  --muted: #a6adc8;
+  --hover-subtle: rgba(255,255,255,0.03);
+  --hover: rgba(255,255,255,0.05);
+  --hover-strong: rgba(255,255,255,0.1);
+  --accent-tint: rgba(137,180,250,0.1);
+  --accent-tint-strong: rgba(137,180,250,0.15);
+  --accent-tint-2: rgba(137,180,250,0.2);
+  --accent-tint-3: rgba(137,180,250,0.3);
+  --accent-tint-4: rgba(137,180,250,0.6);
+  --error-tint: rgba(243,139,168,0.15);
+  --code-bg: rgba(255,255,255,0.08);
+  --inset-bg: rgba(0,0,0,0.2);
+  --overlay-bg: rgba(0,0,0,0.3);
+  --overlay-bg-strong: rgba(0,0,0,0.5);
+  --shadow: rgba(0,0,0,0.4);
+  --spinner-track: rgba(255,255,255,0.15);
+}
+
+/* === One Dark テーマ === */
+[data-theme="one-dark"] {
+  --bg: #282c34;
+  --fg: #abb2bf;
+  --accent: #61afef;
+  --surface: #21252b;
+  --border: #3e4451;
+  --error: #e06c75;
+  --keybar-bg: #21252b;
+  --keybar-key: #3e4451;
+  --keybar-key-active: #528bff;
+  --success: #98c379;
+  --warn: #e5c07b;
+  --muted: #5c6370;
+  --hover-subtle: rgba(255,255,255,0.03);
+  --hover: rgba(255,255,255,0.05);
+  --hover-strong: rgba(255,255,255,0.1);
+  --accent-tint: rgba(97,175,239,0.1);
+  --accent-tint-strong: rgba(97,175,239,0.15);
+  --accent-tint-2: rgba(97,175,239,0.2);
+  --accent-tint-3: rgba(97,175,239,0.3);
+  --accent-tint-4: rgba(97,175,239,0.6);
+  --error-tint: rgba(224,108,117,0.15);
+  --code-bg: rgba(255,255,255,0.08);
+  --inset-bg: rgba(0,0,0,0.2);
+  --overlay-bg: rgba(0,0,0,0.3);
+  --overlay-bg-strong: rgba(0,0,0,0.5);
+  --shadow: rgba(0,0,0,0.4);
+  --spinner-track: rgba(255,255,255,0.15);
+}
+
+/* CodeMirror ライトテーマ対応 */
+[data-theme="solarized-light"] .filer-editor .cm-editor,
+[data-theme="gruvbox-light"] .filer-editor .cm-editor {
   background: var(--surface);
 }
 
-[data-theme="solarized-light"] .filer-editor .cm-editor .cm-gutters {
+[data-theme="solarized-light"] .filer-editor .cm-editor .cm-gutters,
+[data-theme="gruvbox-light"] .filer-editor .cm-editor .cm-gutters {
   background: var(--bg);
   border-right: 1px solid var(--border);
 }

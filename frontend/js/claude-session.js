@@ -312,7 +312,8 @@ const ClaudeSession = (() => {
   function closeSession(id) {
     const session = sessions[id];
     if (!session) return;
-    if (session.status === 'running') {
+    // idle でもインタラクティブプロセスが残っているので常に stop を送る
+    if (session.status === 'running' || session.status === 'idle') {
       stopSession(id);
     }
     delete sessions[id];

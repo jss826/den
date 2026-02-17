@@ -219,9 +219,14 @@ const ClaudeParser = (() => {
 
     html = result.join('\n');
 
-    // リンク: [text](url)
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // リンク: [text](url) — 安全なスキームのみ許可
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
+      const trimmed = url.trim().toLowerCase();
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('mailto:')) {
+        return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+      }
+      return `${text} (${url})`;
+    });
 
     // 太字: **text**
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');

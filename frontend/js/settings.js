@@ -116,7 +116,7 @@ const DenSettings = (() => {
       document.documentElement.setAttribute('data-theme', theme);
     }
     // light 系テーマでは color-scheme を light に
-    const lightThemes = ['light', 'solarized-light'];
+    const lightThemes = ['light', 'solarized-light', 'gruvbox-light'];
     const resolved = theme === 'system'
       ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
       : theme;

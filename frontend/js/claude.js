@@ -44,7 +44,10 @@ const DenClaude = (() => {
         removeThinkingIndicator();
         appendSystemMessage(sessionId, 'Process ended');
         updateHeader(sessionId);
-        setInputEnabled(false);
+        // アクティブセッションの場合のみ入力を無効化
+        if (sessionId === ClaudeSession.getActiveSessionId()) {
+          setInputEnabled(false);
+        }
         break;
 
       case 'session_closed':
