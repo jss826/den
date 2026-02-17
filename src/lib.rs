@@ -47,7 +47,10 @@ pub fn create_app(config: Config, registry: Arc<SessionRegistry>) -> Router {
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
         .route("/api/sessions", get(store_api::list_sessions))
-        .route("/api/sessions/{id}", get(store_api::get_session))
+        .route(
+            "/api/sessions/{id}",
+            get(store_api::get_session).delete(store_api::delete_session),
+        )
         .route(
             "/api/sessions/{id}/events",
             get(store_api::get_session_events),

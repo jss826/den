@@ -23,6 +23,13 @@ const ClaudeSession = (() => {
     ws.onopen = () => {
       // SSH ホスト一覧を取得
       send({ type: 'get_ssh_hosts' });
+      // アクティブセッションの再接続
+      for (const id of Object.keys(sessions)) {
+        const s = sessions[id];
+        if (s.status === 'idle' || s.status === 'running') {
+          send({ type: 'attach_session', session_id: id });
+        }
+      }
       // 接続前にキューされたメッセージを送信
       const pending = [...pendingSend];
       pendingSend = [];
@@ -110,6 +117,20 @@ const ClaudeSession = (() => {
         loadHistory();
         break;
 
+      case 'process_died':
+        if (sessions[msg.session_id]) {
+          sessions[msg.session_id].status = 'completed';
+          renderSessionList();
+        }
+        if (onEvent) onEvent(msg.session_id, msg);
+        loadHistory();
+        break;
+
+      case 'session_attached':
+        // WS 再接続後のセッション復帰確認
+        if (onEvent) onEvent(msg.session_id, msg);
+        break;
+
       case 'error':
         if (onEvent) onEvent(null, msg);
         break;
@@ -160,7 +181,7 @@ const ClaudeSession = (() => {
     });
   }
 
-  function openModal() {
+  function openModal(presetDir) {
     document.getElementById('claude-modal').hidden = false;
     document.getElementById('modal-prompt').value = '';
 
@@ -170,9 +191,13 @@ const ClaudeSession = (() => {
       selectedConnection = defaultConn;
     }
 
-    // デフォルトディレクトリを適用
-    const defaultDir = DenSettings.get('claude_default_dir');
-    currentDirPath = defaultDir || '~';
+    // プリセットディレクトリ → デフォルトディレクトリ → ~ の優先度
+    if (presetDir) {
+      currentDirPath = presetDir;
+    } else {
+      const defaultDir = DenSettings.get('claude_default_dir');
+      currentDirPath = defaultDir || '~';
+    }
 
     send({ type: 'list_dirs', connection: selectedConnection, path: currentDirPath });
   }
@@ -284,6 +309,21 @@ const ClaudeSession = (() => {
     });
   }
 
+  function closeSession(id) {
+    const session = sessions[id];
+    if (!session) return;
+    if (session.status === 'running') {
+      stopSession(id);
+    }
+    delete sessions[id];
+    if (activeSessionId === id) {
+      const remaining = Object.keys(sessions);
+      activeSessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+    }
+    renderSessionList();
+    if (onEvent) onEvent(id, { type: 'session_closed', session_id: id });
+  }
+
   function renderSessionList() {
     const container = document.getElementById('claude-session-list');
     container.innerHTML = '';
@@ -322,7 +362,17 @@ const ClaudeSession = (() => {
         infoSpan.appendChild(previewSpan);
       }
 
-      div.append(statusSpan, infoSpan);
+      // Close button
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'session-close-btn';
+      closeBtn.textContent = '\u00d7';
+      closeBtn.title = 'Close session';
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeSession(s.id);
+      });
+
+      div.append(statusSpan, infoSpan, closeBtn);
 
       div.addEventListener('click', () => {
         activeSessionId = s.id;

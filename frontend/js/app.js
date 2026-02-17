@@ -54,10 +54,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Esc キーで開いているモーダルを閉じる + Ctrl+1/2/3 タブ切替
   document.addEventListener('keydown', (e) => {
-    // confirm-modal は Toast.confirm 内で独自にハンドルするので Esc 対象外
+    // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
     const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'claude-modal', 'filer-quickopen-modal'];
     // ショートカット抑止にはすべてのモーダルを含める
-    const allModals = ['confirm-modal', ...escModals];
+    const allModals = ['confirm-modal', 'prompt-modal', ...escModals];
 
     const anyModalOpen = allModals.some((id) => {
       const m = document.getElementById(id);
@@ -148,6 +148,9 @@ document.addEventListener('DOMContentLoaded', () => {
       tab.addEventListener('click', () => switchTab(tab.dataset.tab));
     });
 
+    // モバイルサイドバートグル
+    initSidebarToggles();
+
     // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
     if (window.visualViewport) {
       const update = () => {
@@ -159,6 +162,9 @@ document.addEventListener('DOMContentLoaded', () => {
       update();
     }
   }
+
+  // 他モジュールからタブ切替できるようグローバル公開
+  window.DenApp = { switchTab: (tab) => switchTab(tab) };
 
   function switchTab(tabName) {
     // タブボタン更新
@@ -196,5 +202,33 @@ document.addEventListener('DOMContentLoaded', () => {
       filerInitialized = true;
       DenFiler.init(Auth.getToken());
     }
+  }
+
+  function initSidebarToggles() {
+    setupSidebarToggle('.claude-sidebar-toggle', '.claude-sidebar', '.claude-layout');
+    setupSidebarToggle('.filer-sidebar-toggle', '.filer-sidebar', '.filer-layout');
+  }
+
+  function setupSidebarToggle(toggleSel, sidebarSel, layoutSel) {
+    const toggle = document.querySelector(toggleSel);
+    const sidebar = document.querySelector(sidebarSel);
+    const layout = document.querySelector(layoutSel);
+    if (!toggle || !sidebar || !layout) return;
+
+    // オーバーレイ要素を作成
+    const overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay';
+    layout.appendChild(overlay);
+
+    function toggleSidebar() {
+      const expanded = sidebar.classList.toggle('sidebar-expanded');
+      overlay.classList.toggle('visible', expanded);
+    }
+
+    toggle.addEventListener('click', toggleSidebar);
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('sidebar-expanded');
+      overlay.classList.remove('visible');
+    });
   }
 });

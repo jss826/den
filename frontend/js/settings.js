@@ -7,6 +7,7 @@ const DenSettings = (() => {
     claude_default_connection: null,
     claude_default_dir: null,
     keybar_buttons: null,
+    claude_input_position: null,
   };
 
   // キーバー設定で使用する一時配列
@@ -85,6 +86,17 @@ const DenSettings = (() => {
   function apply() {
     document.documentElement.style.setProperty('--den-font-size', current.font_size + 'px');
     applyTheme();
+    applyInputPosition();
+  }
+
+  function applyInputPosition() {
+    const main = document.querySelector('.claude-main');
+    if (!main) return;
+    if (current.claude_input_position === 'top') {
+      main.classList.add('input-top');
+    } else {
+      main.classList.remove('input-top');
+    }
   }
 
   function applyTheme() {
@@ -103,6 +115,12 @@ const DenSettings = (() => {
     } else {
       document.documentElement.setAttribute('data-theme', theme);
     }
+    // light 系テーマでは color-scheme を light に
+    const lightThemes = ['light', 'solarized-light'];
+    const resolved = theme === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : theme;
+    document.documentElement.style.colorScheme = lightThemes.includes(resolved) ? 'light' : 'dark';
   }
 
   function onSystemThemeChange(e) {
@@ -319,6 +337,9 @@ const DenSettings = (() => {
     const themeSelect = document.getElementById('setting-theme');
     if (themeSelect) themeSelect.value = current.theme || 'dark';
 
+    const inputPosSelect = document.getElementById('setting-input-position');
+    if (inputPosSelect) inputPosSelect.value = current.claude_input_position || 'bottom';
+
     // ディレクトリブラウザ初期化
     settingsDirPath = current.claude_default_dir || '~';
     settingsDirUserModified = false;
@@ -391,6 +412,8 @@ const DenSettings = (() => {
       const scrollback = parseInt(document.getElementById('setting-scrollback').value, 10) || 1000;
       const themeSelect = document.getElementById('setting-theme');
       const theme = themeSelect ? themeSelect.value : 'dark';
+      const inputPosSelect = document.getElementById('setting-input-position');
+      const inputPos = inputPosSelect ? inputPosSelect.value : 'bottom';
       // ユーザーがディレクトリを変更していなければ元の設定値を保持
       const defaultDir = settingsDirUserModified
         ? (document.getElementById('setting-default-dir').value.trim() || null)
@@ -404,6 +427,7 @@ const DenSettings = (() => {
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
         theme: theme,
         claude_default_dir: defaultDir,
+        claude_input_position: inputPos === 'bottom' ? null : inputPos,
         keybar_buttons: keybarButtons,
       });
       apply();

@@ -62,6 +62,7 @@ const FilerTree = (() => {
       row.dataset.isDir = entry.is_dir;
       row.setAttribute('role', 'treeitem');
       row.setAttribute('aria-label', entry.name);
+      row.setAttribute('tabindex', '0');
       if (entry.is_dir) row.setAttribute('aria-expanded', String(expanded.has(fullPath)));
 
       if (fullPath === selectedPath) row.classList.add('selected');
@@ -92,6 +93,50 @@ const FilerTree = (() => {
           toggleDir(fullPath);
         } else {
           selectFile(fullPath);
+        }
+      });
+
+      // キーボードナビゲーション
+      row.addEventListener('keydown', (e) => {
+        const items = getVisibleTreeItems();
+        const idx = items.indexOf(row);
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (idx < items.length - 1) items[idx + 1].focus();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (idx > 0) items[idx - 1].focus();
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          if (entry.is_dir) {
+            if (!expanded.has(fullPath)) {
+              toggleDir(fullPath).then(() => {
+                const updated = getVisibleTreeItems();
+                const newIdx = updated.indexOf(row);
+                if (newIdx < updated.length - 1) updated[newIdx + 1].focus();
+              });
+            } else {
+              // 展開済み: 子の先頭にフォーカス
+              if (idx < items.length - 1) items[idx + 1].focus();
+            }
+          }
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          if (entry.is_dir && expanded.has(fullPath)) {
+            toggleDir(fullPath);
+          } else {
+            // 親ディレクトリにフォーカス
+            const parentPath = getParentPath(fullPath);
+            const parentRow = treeEl.querySelector(`.tree-item[data-path="${CSS.escape(parentPath)}"]`);
+            if (parentRow) parentRow.focus();
+          }
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (entry.is_dir) {
+            toggleDir(fullPath);
+          } else {
+            selectFile(fullPath);
+          }
         }
       });
 
@@ -178,6 +223,21 @@ const FilerTree = (() => {
   }
 
   // --- ユーティリティ ---
+
+  /** 表示中のツリーアイテム一覧を取得（キーボードナビ用） */
+  function getVisibleTreeItems() {
+    return [...treeEl.querySelectorAll('.tree-item')].filter((el) => {
+      // 非表示の tree-children 内のアイテムを除外
+      let node = el.parentElement;
+      while (node && node !== treeEl) {
+        if (node.classList.contains('tree-children') && !node.classList.contains('expanded')) {
+          return false;
+        }
+        node = node.parentElement;
+      }
+      return true;
+    });
+  }
 
   function joinPath(parent, name) {
     const sep = parent.includes('/') ? '/' : '\\';

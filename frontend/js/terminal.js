@@ -125,6 +125,8 @@ const DenTerminal = (() => {
 
   function doConnect() {
     const generation = ++connectGeneration;
+    reconnectAttempts = 0;
+    if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -144,6 +146,7 @@ const DenTerminal = (() => {
 
       ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
+      let sessionEnded = false;
 
       ws.onopen = () => {
         retries = 0;
@@ -157,6 +160,7 @@ const DenTerminal = (() => {
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'session_ended') {
+              sessionEnded = true;
               term.writeln('\r\n\x1b[33mSession ended.\x1b[0m');
               refreshSessionList();
               return;
@@ -171,7 +175,10 @@ const DenTerminal = (() => {
       };
 
       ws.onclose = () => {
-        term.writeln('\r\n\x1b[31mDisconnected.\x1b[0m');
+        if (generation !== connectGeneration) return;
+        // session_ended 後の切断は再接続不要
+        if (sessionEnded) return;
+        startReconnect(generation);
       };
 
       ws.onerror = () => {};
@@ -188,6 +195,40 @@ const DenTerminal = (() => {
 
     // 少し遅延させてから接続（Safari の初回 WS stall 軽減）
     setTimeout(attemptConnect, 200);
+  }
+
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT = 3;
+  let manualReconnectDisposable = null;
+
+  function startReconnect(generation) {
+    reconnectAttempts++;
+    if (reconnectAttempts > MAX_RECONNECT) {
+      term.writeln('\r\n\x1b[31mConnection lost. Press Enter to reconnect.\x1b[0m');
+      manualReconnectDisposable = term.onData((data) => {
+        if (data === '\r' || data === '\n') {
+          if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
+          reconnectAttempts = 0;
+          term.writeln('\r\n\x1b[33mReconnecting...\x1b[0m');
+          doConnect();
+        }
+      });
+      return;
+    }
+
+    let countdown = 3;
+    term.write(`\r\n\x1b[31mDisconnected.\x1b[0m Reconnecting in \x1b[33m${countdown}\x1b[0m...`);
+    const timer = setInterval(() => {
+      if (generation !== connectGeneration) { clearInterval(timer); return; }
+      countdown--;
+      if (countdown > 0) {
+        term.write(`\x1b[33m${countdown}\x1b[0m...`);
+      } else {
+        clearInterval(timer);
+        term.writeln('');
+        if (generation === connectGeneration) doConnect();
+      }
+    }, 1000);
   }
 
   /** セッションを切り替え */
@@ -317,7 +358,7 @@ const DenTerminal = (() => {
 
     if (newBtn) {
       newBtn.addEventListener('click', async () => {
-        const name = prompt('Session name:');
+        const name = await Toast.prompt('Session name:');
         if (!name || !name.trim()) return;
         const trimmed = name.trim();
         if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {

@@ -66,6 +66,24 @@ pub async fn get_session(
     }
 }
 
+/// DELETE /api/sessions/{id}
+pub async fn delete_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if !is_valid_id(&id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    match state.store.delete_session(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("Failed to delete session {}: {}", id, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// GET /api/sessions/{id}/events
 pub async fn get_session_events(
     State(state): State<Arc<AppState>>,

@@ -51,6 +51,39 @@ pub fn spawn_claude_session(
     }
 }
 
+/// Claude CLI をインタラクティブモードで起動（`-p` なし、プロンプトは stdin から入力）
+pub fn spawn_claude_interactive(
+    connection: &ConnectionTarget,
+    working_dir: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
+    match connection {
+        ConnectionTarget::Local => {
+            let args = vec![
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--verbose".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            ];
+            spawn_command_pty("claude", &args, working_dir, cols, rows)
+        }
+        ConnectionTarget::Ssh { host } => {
+            let claude_args =
+                "claude --output-format stream-json --verbose --dangerously-skip-permissions";
+            let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
+            let args = vec![
+                "-t".to_string(),
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                host.clone(),
+                remote_cmd,
+            ];
+            spawn_command_pty("ssh", &args, working_dir, cols, rows)
+        }
+    }
+}
+
 fn spawn_command_pty(
     command: &str,
     args: &[String],
@@ -171,6 +204,39 @@ mod tests {
         assert!(args[4].contains("claude -p"));
         assert!(args[4].contains("--verbose"));
         assert!(args[4].contains("--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn interactive_local_args() {
+        let args = vec![
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--verbose".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+        ];
+        assert_eq!(args.len(), 4);
+        assert!(!args.iter().any(|a| a == "-p"));
+        assert!(args.contains(&"--output-format".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
+    }
+
+    #[test]
+    fn interactive_ssh_args() {
+        let host = "user@remote";
+        let working_dir = "/home/user";
+        let claude_args =
+            "claude --output-format stream-json --verbose --dangerously-skip-permissions";
+        let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
+        let args = vec![
+            "-t".to_string(),
+            "-o".to_string(),
+            "BatchMode=yes".to_string(),
+            host.to_string(),
+            remote_cmd.clone(),
+        ];
+        assert_eq!(args.len(), 5);
+        assert!(!remote_cmd.contains("claude -p"));
+        assert!(remote_cmd.contains("--output-format stream-json"));
     }
 
     #[test]

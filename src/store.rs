@@ -39,6 +39,8 @@ pub struct Settings {
     pub claude_default_dir: Option<String>,
     #[serde(default)]
     pub keybar_buttons: Option<Vec<KeybarButton>>,
+    #[serde(default)]
+    pub claude_input_position: Option<String>,
 }
 
 fn default_font_size() -> u8 {
@@ -60,6 +62,7 @@ impl Default for Settings {
             claude_default_connection: None,
             claude_default_dir: None,
             keybar_buttons: None,
+            claude_input_position: None,
         }
     }
 }
@@ -228,6 +231,23 @@ impl Store {
             .collect()
     }
 
+    pub fn delete_session(&self, id: &str) -> std::io::Result<()> {
+        if !is_valid_session_id(id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid session ID",
+            ));
+        }
+        let session_dir = self.root.join("sessions").join(id);
+        if !session_dir.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Session not found",
+            ));
+        }
+        fs::remove_dir_all(session_dir)
+    }
+
     fn load_session_meta_from_path(&self, dir: &Path) -> Option<SessionMeta> {
         let meta_path = dir.join("meta.json");
         let content = fs::read_to_string(&meta_path).ok()?;
@@ -383,6 +403,33 @@ mod tests {
         let (store, _tmp) = temp_store();
         let meta = sample_meta("");
         assert!(store.create_session(&meta).is_err());
+    }
+
+    #[test]
+    fn delete_session_ok() {
+        let (store, _tmp) = temp_store();
+        let meta = sample_meta("sess-del");
+        store.create_session(&meta).unwrap();
+        assert!(store.load_session_meta("sess-del").is_some());
+
+        store.delete_session("sess-del").unwrap();
+        assert!(store.load_session_meta("sess-del").is_none());
+    }
+
+    #[test]
+    fn delete_session_not_found() {
+        let (store, _tmp) = temp_store();
+        let result = store.delete_session("nonexistent");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn delete_session_invalid_id() {
+        let (store, _tmp) = temp_store();
+        let result = store.delete_session("../escape");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

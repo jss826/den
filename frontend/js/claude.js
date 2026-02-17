@@ -23,9 +23,11 @@ const DenClaude = (() => {
       case 'turn_started':
         updateHeader(sessionId);
         setInputEnabled(false);
+        appendThinkingIndicator(sessionId);
         break;
 
       case 'turn_completed':
+        removeThinkingIndicator();
         updateHeader(sessionId);
         setInputEnabled(true);
         break;
@@ -36,6 +38,25 @@ const DenClaude = (() => {
 
       case 'session_stopped':
         updateHeader(sessionId);
+        break;
+
+      case 'process_died':
+        removeThinkingIndicator();
+        appendSystemMessage(sessionId, 'Process ended');
+        updateHeader(sessionId);
+        setInputEnabled(false);
+        break;
+
+      case 'session_closed':
+        delete messageHistory[sessionId];
+        if (!ClaudeSession.getActiveSessionId()) {
+          document.getElementById('claude-messages').innerHTML = '';
+          document.getElementById('claude-header').innerHTML = '<span class="header-hint">Start a new session</span>';
+          setInputEnabled(false);
+        } else {
+          showSession(ClaudeSession.getActiveSessionId());
+          updateHeader(ClaudeSession.getActiveSessionId());
+        }
         break;
 
       case 'switch_session':
@@ -54,6 +75,7 @@ const DenClaude = (() => {
   }
 
   function handleClaudeEvent(sessionId, eventStr) {
+    removeThinkingIndicator();
     const event = ClaudeParser.parse(eventStr);
     if (!event) return;
 
@@ -117,7 +139,14 @@ const DenClaude = (() => {
     const statusSpan = document.createElement('span');
     statusSpan.className = 'header-status ' + statusClass;
     statusSpan.textContent = session.status;
-    header.append(connSpan, dirSpan, statusSpan);
+
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'header-export-btn';
+    exportBtn.innerHTML = DenIcons.download(14);
+    exportBtn.title = 'Export as Markdown';
+    exportBtn.addEventListener('click', () => exportSession(sessionId));
+
+    header.append(connSpan, dirSpan, statusSpan, exportBtn);
   }
 
   function appendError(message) {
@@ -126,6 +155,17 @@ const DenClaude = (() => {
     div.className = 'msg msg-error';
     div.textContent = message;
     container.appendChild(div);
+    scrollToBottom();
+  }
+
+  function appendSystemMessage(sessionId, message) {
+    const container = document.getElementById('claude-messages');
+    const div = document.createElement('div');
+    div.className = 'msg msg-system';
+    div.textContent = message;
+    container.appendChild(div);
+    if (!messageHistory[sessionId]) messageHistory[sessionId] = [];
+    messageHistory[sessionId].push(div);
     scrollToBottom();
   }
 
@@ -242,6 +282,137 @@ const DenClaude = (() => {
       container.appendChild(element);
     }
     scrollToBottom();
+  }
+
+  function appendThinkingIndicator(sessionId) {
+    if (sessionId !== ClaudeSession.getActiveSessionId()) return;
+    removeThinkingIndicator();
+    const container = document.getElementById('claude-messages');
+    const indicator = document.createElement('div');
+    indicator.className = 'claude-thinking';
+    indicator.innerHTML = '<div class="spinner-ring"></div><span>Thinking...</span>';
+    container.appendChild(indicator);
+    scrollToBottom();
+  }
+
+  function removeThinkingIndicator() {
+    const container = document.getElementById('claude-messages');
+    const indicator = container.querySelector('.claude-thinking');
+    if (indicator) indicator.remove();
+  }
+
+  async function exportSession(sessionId) {
+    try {
+      const [metaResp, eventsResp] = await Promise.all([
+        fetch(`/api/sessions/${sessionId}`, {
+          headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+        }),
+        fetch(`/api/sessions/${sessionId}/events`, {
+          headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+        }),
+      ]);
+      if (!metaResp.ok || !eventsResp.ok) {
+        Toast.error('Failed to load session data');
+        return;
+      }
+      const meta = await metaResp.json();
+      const events = await eventsResp.json();
+      const md = eventsToMarkdown(meta, events);
+      const date = new Date(meta.created_at).toISOString().slice(0, 10);
+      downloadText(md, `claude-session-${date}-${sessionId.slice(0, 8)}.md`);
+    } catch {
+      Toast.error('Export failed');
+    }
+  }
+
+  function eventsToMarkdown(meta, events) {
+    const lines = [];
+    const connLabel = meta.connection?.type === 'local' ? 'Local' : (meta.connection?.host || '?');
+    const date = new Date(meta.created_at).toLocaleString();
+    const cost = meta.total_cost != null ? `$${meta.total_cost.toFixed(4)}` : '-';
+    const duration = meta.duration_ms ? `${(meta.duration_ms / 1000).toFixed(1)}s` : '-';
+
+    lines.push(`# Claude Session`);
+    lines.push('');
+    lines.push(`- **Date:** ${date}`);
+    lines.push(`- **Connection:** ${connLabel}`);
+    lines.push(`- **Working Directory:** ${meta.working_dir}`);
+    lines.push(`- **Cost:** ${cost}`);
+    lines.push(`- **Duration:** ${duration}`);
+    lines.push(`- **Status:** ${meta.status}`);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+
+    for (const eventStr of events) {
+      let event;
+      try { event = JSON.parse(eventStr); } catch { continue; }
+
+      if (event.type === 'user_prompt') {
+        lines.push(`## User`);
+        lines.push('');
+        lines.push(event.prompt || '');
+        lines.push('');
+      } else if (event.type === 'assistant') {
+        lines.push(`## Claude`);
+        lines.push('');
+        const contents = event.message?.content || [];
+        for (const block of contents) {
+          if (block.type === 'text') {
+            lines.push(block.text);
+            lines.push('');
+          } else if (block.type === 'tool_use') {
+            lines.push(`### Tool: ${block.name}`);
+            lines.push('');
+            lines.push('```json');
+            lines.push(JSON.stringify(block.input, null, 2));
+            lines.push('```');
+            lines.push('');
+          }
+        }
+      } else if (event.type === 'user') {
+        const contents = event.message?.content || [];
+        for (const block of contents) {
+          if (block.type === 'tool_result') {
+            const content = typeof block.content === 'string'
+              ? block.content
+              : JSON.stringify(block.content, null, 2);
+            const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n... (truncated)' : content;
+            lines.push('<details>');
+            lines.push(`<summary>Tool Result${block.is_error ? ' (Error)' : ''}</summary>`);
+            lines.push('');
+            lines.push('```');
+            lines.push(truncated);
+            lines.push('```');
+            lines.push('');
+            lines.push('</details>');
+            lines.push('');
+          }
+        }
+      } else if (event.type === 'result') {
+        lines.push('---');
+        lines.push('');
+        const resultCost = event.total_cost_usd != null ? `$${event.total_cost_usd.toFixed(4)}` : '-';
+        const turns = event.num_turns || 0;
+        const dur = event.duration_ms ? `${(event.duration_ms / 1000).toFixed(1)}s` : '-';
+        lines.push(`**Result:** ${event.is_error ? 'Error' : 'Done'} | ${turns} turns | ${dur} | ${resultCost}`);
+        lines.push('');
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  function downloadText(text, filename) {
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   function scrollToBottom() {

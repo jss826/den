@@ -158,6 +158,15 @@ const DenFiler = (() => {
       items.push({ label: 'New File Here...', action: () => promptNewFile(path) });
       items.push({ label: 'New Folder Here...', action: () => promptNewFolder(path) });
       items.push({ separator: true });
+      items.push({ label: 'Open Terminal Here', action: () => {
+        if (window.DenApp) window.DenApp.switchTab('terminal');
+        DenTerminal.sendInput('cd "' + path.replace(/"/g, '\\"') + '"\r');
+      }});
+      items.push({ label: 'Open Claude Here', action: () => {
+        if (window.DenApp) window.DenApp.switchTab('claude');
+        ClaudeSession.openModal(path);
+      }});
+      items.push({ separator: true });
     }
 
     if (!isDir) {
@@ -209,46 +218,43 @@ const DenFiler = (() => {
 
   // --- ファイル操作 ---
 
-  function promptNewFile(basePath) {
+  async function promptNewFile(basePath) {
     const dir = typeof basePath === 'string' ? basePath : currentDir;
-    const name = prompt('New file name:');
+    const name = await Toast.prompt('New file name:');
     if (!name) return;
     const fullPath = joinPath(dir, name);
-    apiCall('/api/filer/write', 'PUT', { path: fullPath, content: '' }).then((ok) => {
-      if (ok) {
-        Toast.success('File created');
-        FilerTree.refresh();
-        FilerEditor.openFile(fullPath);
-      }
-    });
+    const ok = await apiCall('/api/filer/write', 'PUT', { path: fullPath, content: '' });
+    if (ok) {
+      Toast.success('File created');
+      FilerTree.refresh();
+      FilerEditor.openFile(fullPath);
+    }
   }
 
-  function promptNewFolder(basePath) {
+  async function promptNewFolder(basePath) {
     const dir = typeof basePath === 'string' ? basePath : currentDir;
-    const name = prompt('New folder name:');
+    const name = await Toast.prompt('New folder name:');
     if (!name) return;
     const fullPath = joinPath(dir, name);
-    apiCall('/api/filer/mkdir', 'POST', { path: fullPath }).then((ok) => {
-      if (ok) {
-        Toast.success('Folder created');
-        FilerTree.refresh();
-      }
-    });
+    const ok = await apiCall('/api/filer/mkdir', 'POST', { path: fullPath });
+    if (ok) {
+      Toast.success('Folder created');
+      FilerTree.refresh();
+    }
   }
 
-  function promptRename(path) {
+  async function promptRename(path) {
     const oldName = path.split(/[/\\]/).pop();
-    const newName = prompt('New name:', oldName);
+    const newName = await Toast.prompt('New name:', oldName);
     if (!newName || newName === oldName) return;
     const parentDir = FilerTree.getParentPath(path);
     const newPath = joinPath(parentDir, newName);
-    apiCall('/api/filer/rename', 'POST', { from: path, to: newPath }).then((ok) => {
-      if (ok) {
-        Toast.success('Renamed');
-        FilerEditor.notifyRenamed(path, newPath);
-        FilerTree.refresh();
-      }
-    });
+    const ok = await apiCall('/api/filer/rename', 'POST', { from: path, to: newPath });
+    if (ok) {
+      Toast.success('Renamed');
+      FilerEditor.notifyRenamed(path, newPath);
+      FilerTree.refresh();
+    }
   }
 
   async function doDelete(path) {

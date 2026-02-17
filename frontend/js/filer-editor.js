@@ -55,9 +55,11 @@ const FilerEditor = (() => {
 
     // CodeMirror インスタンス作成
     const lang = detectLanguage(filePath);
+    const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+    const isDark = !['light', 'solarized-light'].includes(theme);
     const extensions = [
       ...CM.denSetup,
-      CM.oneDark,
+      ...(isDark ? [CM.oneDark] : []),
       CM.search(),
       CM.EditorView.updateListener.of((update) => {
         if (update.docChanged) {

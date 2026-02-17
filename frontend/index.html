@@ -51,6 +51,7 @@
       <div class="claude-layout">
         <!-- サイドバー -->
         <div class="claude-sidebar">
+          <button class="sidebar-toggle claude-sidebar-toggle" aria-label="Toggle sidebar"></button>
           <button id="claude-new-session" class="claude-new-btn">+ New Session</button>
           <div id="claude-session-list" class="claude-sessions"></div>
           <div class="sidebar-divider"></div>
@@ -74,6 +75,7 @@
       <div class="filer-layout">
         <!-- サイドバー: ツリービュー -->
         <div class="filer-sidebar">
+          <button class="sidebar-toggle filer-sidebar-toggle" aria-label="Toggle sidebar"></button>
           <div class="filer-toolbar">
             <button id="filer-new-file" class="filer-tool-btn" data-tooltip="New File" aria-label="New file"></button>
             <button id="filer-new-folder" class="filer-tool-btn" data-tooltip="New Folder" aria-label="New folder"></button>
@@ -180,6 +182,10 @@
           <select id="setting-theme" class="settings-input">
             <option value="dark">Dark</option>
             <option value="light">Light</option>
+            <option value="solarized-dark">Solarized Dark</option>
+            <option value="solarized-light">Solarized Light</option>
+            <option value="monokai">Monokai</option>
+            <option value="nord">Nord</option>
             <option value="system">System</option>
           </select>
         </div>
@@ -190,6 +196,13 @@
         <div class="modal-section">
           <label>Terminal Scrollback</label>
           <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
+        </div>
+        <div class="modal-section">
+          <label>Claude Input Position</label>
+          <select id="setting-input-position" class="settings-input">
+            <option value="bottom">Bottom</option>
+            <option value="top">Top</option>
+          </select>
         </div>
         <div class="modal-section">
           <label>Default Working Directory</label>

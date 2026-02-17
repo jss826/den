@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::AppState;
 use crate::auth::validate_token;
-use crate::pty::registry::SessionRegistry;
+use crate::pty::registry::{SessionRegistry, SharedSession};
 use crate::store::Store;
 
 use super::connection::{self, ConnectionTarget};
@@ -27,12 +27,12 @@ pub struct ClaudeWsQuery {
     pub token: String,
 }
 
-/// Claude セッションの状態（ターンベース）
+/// Claude セッションの状態（インタラクティブモード）
 struct ClaudeSessionState {
-    connection: ConnectionTarget,
-    dir: String,
-    is_first_prompt: bool,
     is_running: bool,
+    process_alive: bool,
+    registry_name: String,
+    shared_session: Option<Arc<SharedSession>>,
 }
 
 type WsSink = Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>;
@@ -125,6 +125,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 let dir = cmd["dir"].as_str().unwrap_or("~").to_string();
                 let prompt = cmd["prompt"].as_str().unwrap_or("").to_string();
                 let session_id = uuid_v4();
+                let registry_name = format!("claude-{}", session_id);
 
                 let has_prompt = !prompt.is_empty();
 
@@ -134,7 +135,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     prompt: prompt.clone(),
                     connection: serde_json::to_value(&conn).unwrap_or_default(),
                     working_dir: dir.clone(),
-                    status: if has_prompt { "running" } else { "idle" }.to_string(),
+                    status: "idle".to_string(),
                     created_at: Utc::now(),
                     finished_at: None,
                     total_cost: None,
@@ -144,29 +145,59 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     tracing::error!("Failed to persist session meta: {}", e);
                 }
 
+                // インタラクティブモードで Claude CLI を起動
+                let pty_result = tokio::task::spawn_blocking({
+                    let conn = conn.clone();
+                    let dir = dir.clone();
+                    move || session::spawn_claude_interactive(&conn, &dir, 10000, 50)
+                })
+                .await;
+
+                let pty = match pty_result {
+                    Ok(Ok(pty)) => pty,
+                    Ok(Err(e)) => {
+                        send_error(&ws_tx, &format!("Failed to spawn claude: {}", e)).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        send_error(&ws_tx, &format!("Spawn task failed: {}", e)).await;
+                        continue;
+                    }
+                };
+
+                // SessionRegistry に登録
+                let (shared_session, pre_rx) =
+                    match registry.create_with_pty(&registry_name, pty).await {
+                        Ok(result) => result,
+                        Err(e) => {
+                            send_error(&ws_tx, &format!("Registry error: {e}")).await;
+                            continue;
+                        }
+                    };
+                let forwarder_rx = shared_session.subscribe();
+
                 // セッション状態を作成
                 {
                     let mut map = state_map.lock().await;
                     map.insert(
                         session_id.clone(),
                         ClaudeSessionState {
-                            connection: conn.clone(),
-                            dir: dir.clone(),
-                            is_first_prompt: true,
                             is_running: false,
+                            process_alive: true,
+                            registry_name: registry_name.clone(),
+                            shared_session: Some(Arc::clone(&shared_session)),
                         },
                     );
                 }
 
-                // セッション開始通知（status フィールド追加）
-                let status = if has_prompt { "running" } else { "idle" };
+                // セッション開始通知
                 let resp = json!({
                     "type": "session_created",
                     "session_id": &session_id,
                     "connection": &conn,
                     "dir": &dir,
                     "prompt": &prompt,
-                    "status": status,
+                    "status": "idle",
                 });
                 let _ = ws_tx
                     .lock()
@@ -174,25 +205,96 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     .send(Message::Text(resp.to_string().into()))
                     .await;
 
-                // プロンプトがあればすぐにターンを開始
+                // 永続 processor task（セッション全体で1つ）
+                let processor_store = store.clone();
+                let processor_session_id = session_id.clone();
+                let processor_session = Arc::clone(&shared_session);
+                let processor_state_map = Arc::clone(&state_map);
+                let processor_registry = Arc::clone(&registry);
+                let processor_registry_name = registry_name.clone();
+                let processor_ws_tx = Arc::clone(&ws_tx);
+
+                tokio::spawn(async move {
+                    run_interactive_processor(
+                        processor_session_id,
+                        pre_rx,
+                        processor_session,
+                        processor_store,
+                        processor_registry,
+                        processor_registry_name,
+                        processor_state_map,
+                        processor_ws_tx,
+                    )
+                    .await;
+                });
+
+                // 永続 forwarder task
+                let ws_tx_for_output = Arc::clone(&ws_tx);
+                let sid_for_output = session_id.clone();
+                let session_for_output = Arc::clone(&shared_session);
+                let forwarder_state_map = Arc::clone(&state_map);
+
+                tokio::spawn(async move {
+                    forward_interactive_output(
+                        sid_for_output,
+                        forwarder_rx,
+                        ws_tx_for_output,
+                        session_for_output,
+                        forwarder_state_map,
+                    )
+                    .await;
+                });
+
+                // プロンプトがあれば stdin に書き込み
                 if has_prompt {
-                    // is_running を事前に設定（spawn_claude_turn の前提条件）
+                    // ユーザープロンプトを events.jsonl に記録
+                    let user_prompt_event =
+                        json!({ "type": "user_prompt", "prompt": &prompt }).to_string();
+                    if let Err(e) = store.append_event(&session_id, &user_prompt_event) {
+                        tracing::warn!("Failed to append user_prompt event: {}", e);
+                    }
+
+                    // is_running フラグをセット
                     {
                         let mut map = state_map.lock().await;
                         if let Some(state) = map.get_mut(&session_id) {
                             state.is_running = true;
                         }
                     }
-                    spawn_claude_turn(
-                        &session_id,
-                        &prompt,
-                        false, // 初回は continuation ではない
-                        &store,
-                        &registry,
-                        &ws_tx,
-                        &state_map,
-                    )
-                    .await;
+
+                    // turn_started 通知
+                    let resp = json!({
+                        "type": "turn_started",
+                        "session_id": &session_id,
+                    });
+                    let _ = ws_tx
+                        .lock()
+                        .await
+                        .send(Message::Text(resp.to_string().into()))
+                        .await;
+
+                    // Store メタを running に更新
+                    if let Some(mut meta) = store.load_session_meta(&session_id) {
+                        meta.status = "running".to_string();
+                        let _ = store.update_session_meta(&meta);
+                    }
+
+                    // プロンプトを stdin に書き込み
+                    let prompt_bytes = format!("{}\n", prompt);
+                    if let Err(e) = shared_session.write_input(prompt_bytes.as_bytes()).await {
+                        tracing::warn!("Failed to write prompt to stdin: {}", e);
+                        // turn_started 済みなので turn_completed を送って UI をアンブロック
+                        let mut map = state_map.lock().await;
+                        if let Some(state) = map.get_mut(&session_id) {
+                            state.is_running = false;
+                        }
+                        let resp = json!({ "type": "turn_completed", "session_id": &session_id });
+                        let _ = ws_tx
+                            .lock()
+                            .await
+                            .send(Message::Text(resp.to_string().into()))
+                            .await;
+                    }
                 }
             }
 
@@ -211,11 +313,16 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     continue;
                 }
 
-                // is_running チェックと is_running = true を同一ロック内で行う（TOCTOU 防止）
-                let is_continuation = {
+                // is_running チェックと shared_session 取得を同一ロック内で行う
+                let shared_session = {
                     let mut map = state_map.lock().await;
                     match map.get_mut(&session_id) {
                         Some(state) => {
+                            if !state.process_alive {
+                                drop(map);
+                                send_error(&ws_tx, "Process is no longer running").await;
+                                continue;
+                            }
                             if state.is_running {
                                 drop(map);
                                 send_error(
@@ -225,9 +332,8 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                                 .await;
                                 continue;
                             }
-                            let cont = !state.is_first_prompt;
                             state.is_running = true;
-                            cont
+                            state.shared_session.clone()
                         }
                         None => {
                             drop(map);
@@ -237,16 +343,57 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     }
                 };
 
-                spawn_claude_turn(
-                    &session_id,
-                    &prompt,
-                    is_continuation,
-                    &store,
-                    &registry,
-                    &ws_tx,
-                    &state_map,
-                )
-                .await;
+                let Some(shared_session) = shared_session else {
+                    send_error(&ws_tx, "Session process not available").await;
+                    // Revert is_running
+                    let mut map = state_map.lock().await;
+                    if let Some(state) = map.get_mut(&session_id) {
+                        state.is_running = false;
+                    }
+                    continue;
+                };
+
+                // ユーザープロンプトを events.jsonl に記録
+                let user_prompt_event =
+                    json!({ "type": "user_prompt", "prompt": &prompt }).to_string();
+                if let Err(e) = store.append_event(&session_id, &user_prompt_event) {
+                    tracing::warn!("Failed to append user_prompt event: {}", e);
+                }
+
+                // turn_started 通知
+                let resp = json!({
+                    "type": "turn_started",
+                    "session_id": &session_id,
+                });
+                let _ = ws_tx
+                    .lock()
+                    .await
+                    .send(Message::Text(resp.to_string().into()))
+                    .await;
+
+                // Store メタを running に更新
+                if let Some(mut meta) = store.load_session_meta(&session_id) {
+                    meta.status = "running".to_string();
+                    let _ = store.update_session_meta(&meta);
+                }
+
+                // プロンプトを stdin に書き込み（プロセス再起動なし）
+                let prompt_bytes = format!("{}\n", prompt);
+                if let Err(e) = shared_session.write_input(prompt_bytes.as_bytes()).await {
+                    tracing::warn!("Failed to write prompt to stdin: {}", e);
+                    send_error(&ws_tx, "Failed to send prompt to Claude process").await;
+                    let mut map = state_map.lock().await;
+                    if let Some(state) = map.get_mut(&session_id) {
+                        state.is_running = false;
+                    }
+                    // turn_started 済みなので turn_completed を送って UI をアンブロック
+                    let resp = json!({ "type": "turn_completed", "session_id": &session_id });
+                    let _ = ws_tx
+                        .lock()
+                        .await
+                        .send(Message::Text(resp.to_string().into()))
+                        .await;
+                }
             }
 
             Some("stop_session") => {
@@ -254,13 +401,15 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     Some(id) => id.to_string(),
                     None => continue,
                 };
-                let registry_name = format!("claude-{}", session_id);
 
-                // 状態マップから削除
-                {
+                // 状態マップから削除 & registry 名を取得
+                let registry_name = {
                     let mut map = state_map.lock().await;
-                    map.remove(&session_id);
-                }
+                    match map.remove(&session_id) {
+                        Some(state) => state.registry_name,
+                        None => format!("claude-{}", session_id),
+                    }
+                };
 
                 registry.destroy(&registry_name).await;
 
@@ -279,166 +428,86 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     .await;
             }
 
+            Some("attach_session") => {
+                // WS 再接続時にセッション復帰
+                let session_id = match cmd["session_id"].as_str() {
+                    Some(id) => id.to_string(),
+                    None => {
+                        send_error(&ws_tx, "session_id is required").await;
+                        continue;
+                    }
+                };
+
+                let shared_session = {
+                    let map = state_map.lock().await;
+                    match map.get(&session_id) {
+                        Some(state) => state.shared_session.clone(),
+                        None => None,
+                    }
+                };
+
+                if let Some(shared_session) = shared_session {
+                    // 新しい forwarder を起動
+                    let forwarder_rx = shared_session.subscribe();
+                    let ws_tx_for_output = Arc::clone(&ws_tx);
+                    let sid_for_output = session_id.clone();
+                    let session_for_output = Arc::clone(&shared_session);
+                    let forwarder_state_map = Arc::clone(&state_map);
+
+                    tokio::spawn(async move {
+                        forward_interactive_output(
+                            sid_for_output,
+                            forwarder_rx,
+                            ws_tx_for_output,
+                            session_for_output,
+                            forwarder_state_map,
+                        )
+                        .await;
+                    });
+
+                    let resp = json!({
+                        "type": "session_attached",
+                        "session_id": &session_id,
+                    });
+                    let _ = ws_tx
+                        .lock()
+                        .await
+                        .send(Message::Text(resp.to_string().into()))
+                        .await;
+                } else {
+                    send_error(&ws_tx, "Session not found or process not running").await;
+                }
+            }
+
             _ => {}
         }
     }
 
-    // WS 切断 — processor は続行（WS ライフサイクルから独立）
+    // WS 切断 — processor/forwarder は続行（WS ライフサイクルから独立）
     tracing::info!("Claude WebSocket disconnected");
 }
 
-/// Claude の1ターン（1プロセス）を起動
-/// 呼び出し前に state_map で is_running = true に設定済みであること
-async fn spawn_claude_turn(
-    session_id: &str,
-    prompt: &str,
-    is_continuation: bool,
-    store: &Store,
-    registry: &Arc<SessionRegistry>,
-    ws_tx: &WsSink,
-    state_map: &SessionStateMap,
-) {
-    // ユーザープロンプトを events.jsonl に記録
-    let user_prompt_event = json!({ "type": "user_prompt", "prompt": prompt }).to_string();
-    if let Err(e) = store.append_event(session_id, &user_prompt_event) {
-        tracing::warn!("Failed to append user_prompt event: {}", e);
-    }
-
-    // 接続情報とディレクトリを取得
-    let (conn, dir) = {
-        let map = state_map.lock().await;
-        match map.get(session_id) {
-            Some(state) => (state.connection.clone(), state.dir.clone()),
-            None => return,
-        }
-    };
-
-    // 前回の registry エントリがあれば破棄
-    let registry_name = format!("claude-{}", session_id);
-    registry.destroy(&registry_name).await;
-
-    // PTY で claude CLI を起動
-    let pty_result = tokio::task::spawn_blocking({
-        let conn = conn.clone();
-        let dir = dir.clone();
-        let prompt = prompt.to_string();
-        move || session::spawn_claude_session(&conn, &dir, &prompt, is_continuation, 10000, 50)
-    })
-    .await;
-
-    let pty = match pty_result {
-        Ok(Ok(pty)) => pty,
-        Ok(Err(e)) => {
-            send_error(ws_tx, &format!("Failed to spawn claude: {}", e)).await;
-            let mut map = state_map.lock().await;
-            if let Some(state) = map.get_mut(session_id) {
-                state.is_running = false;
-            }
-            return;
-        }
-        Err(e) => {
-            send_error(ws_tx, &format!("Spawn task failed: {}", e)).await;
-            let mut map = state_map.lock().await;
-            if let Some(state) = map.get_mut(session_id) {
-                state.is_running = false;
-            }
-            return;
-        }
-    };
-
-    // SessionRegistry に登録
-    let (shared_session, pre_rx) = match registry.create_with_pty(&registry_name, pty).await {
-        Ok(result) => result,
-        Err(e) => {
-            send_error(ws_tx, &format!("Registry error: {e}")).await;
-            let mut map = state_map.lock().await;
-            if let Some(state) = map.get_mut(session_id) {
-                state.is_running = false;
-            }
-            return;
-        }
-    };
-    // forwarder 用 subscriber を pre_rx と同時点で作成（初期出力を漏れなく受信）
-    let forwarder_rx = shared_session.subscribe();
-
-    // turn_started 通知
-    let resp = json!({
-        "type": "turn_started",
-        "session_id": session_id,
-    });
-    let _ = ws_tx
-        .lock()
-        .await
-        .send(Message::Text(resp.to_string().into()))
-        .await;
-
-    // Store メタを running に更新
-    if let Some(mut meta) = store.load_session_meta(session_id) {
-        meta.status = "running".to_string();
-        let _ = store.update_session_meta(&meta);
-    }
-
-    // processor task（Store 永続化 + 状態更新）
-    // pre_rx を processor に渡す（初期出力を漏れなく永続化するため）
-    let processor_store = store.clone();
-    let processor_session_id = session_id.to_string();
-    let processor_session = Arc::clone(&shared_session);
-    let processor_state_map = Arc::clone(state_map);
-    let processor_registry = Arc::clone(registry);
-    let processor_registry_name = registry_name.clone();
-
-    tokio::spawn(async move {
-        run_claude_turn_processor(
-            processor_session_id,
-            pre_rx,
-            processor_session,
-            processor_store,
-            processor_registry,
-            processor_registry_name,
-            processor_state_map,
-        )
-        .await;
-    });
-
-    // forwarder task（WS 転送）
-    let output_rx = forwarder_rx;
-    let ws_tx_for_output = Arc::clone(ws_tx);
-    let sid_for_output = session_id.to_string();
-    let session_for_output = Arc::clone(&shared_session);
-
-    tokio::spawn(async move {
-        forward_claude_output(
-            sid_for_output,
-            output_rx,
-            ws_tx_for_output,
-            session_for_output,
-        )
-        .await;
-    });
-}
-
-/// Claude ターンプロセッサー: broadcast から出力を読み、Store に永続化
-/// ターン終了時にセッション状態を idle に戻す
-async fn run_claude_turn_processor(
+/// インタラクティブプロセッサ: broadcast から出力を読み、Store に永続化
+/// ターン境界は `{"type": "result", ...}` イベントで検知
+#[allow(clippy::too_many_arguments)]
+async fn run_interactive_processor(
     session_id: String,
     mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
-    session: Arc<crate::pty::registry::SharedSession>,
+    session: Arc<SharedSession>,
     store: Store,
     registry: Arc<SessionRegistry>,
     registry_name: String,
     state_map: SessionStateMap,
+    ws_tx: WsSink,
 ) {
     let mut line_buf = String::new();
     #[cfg(windows)]
     let mut dsr_responded = false;
 
     loop {
-        // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
-        // 閉じないため、定期的に alive を確認する
         match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
             Ok(Ok(bytes)) => {
                 // ConPTY DSR 検出 → CPR 応答（Windows のみ）
-                // pre_rx を持つ processor が最初に DSR を受信するため、ここで応答する
                 #[cfg(windows)]
                 if !dsr_responded && bytes.windows(4).any(|w| w == b"\x1b[6n") {
                     let _ = session.write_input(b"\x1b[1;1R").await;
@@ -456,11 +525,26 @@ async fn run_claude_turn_processor(
                         continue;
                     }
 
-                    // ConPTY エスケープシーケンスが混入している場合は JSON 部分を抽出
                     let line = extract_json_line(&raw_line).unwrap_or(&raw_line);
 
                     if let Err(e) = store.append_event(&session_id, line) {
                         tracing::warn!("Failed to append event: {}", e);
+                    }
+
+                    // ターン境界検出: {"type": "result", ...}
+                    if is_result_event(line) {
+                        // is_running を false に
+                        {
+                            let mut map = state_map.lock().await;
+                            if let Some(state) = map.get_mut(&session_id) {
+                                state.is_running = false;
+                            }
+                        }
+                        // Store メタを idle に更新
+                        if let Some(mut meta) = store.load_session_meta(&session_id) {
+                            meta.status = "idle".to_string();
+                            let _ = store.update_session_meta(&meta);
+                        }
                     }
                 }
             }
@@ -471,7 +555,6 @@ async fn run_claude_turn_processor(
                 break;
             }
             Err(_) => {
-                // タイムアウト: セッション生存チェック
                 if !session.is_alive() {
                     break;
                 }
@@ -488,43 +571,53 @@ async fn run_claude_turn_processor(
         }
     }
 
-    // セッション状態を idle に戻す（次のターンの準備）
-    // state_map にエントリがない場合は stop_session で削除済み → Store 更新をスキップ
+    // プロセス死亡通知
     let session_still_active = {
         let mut map = state_map.lock().await;
         if let Some(state) = map.get_mut(&session_id) {
+            state.process_alive = false;
             state.is_running = false;
-            state.is_first_prompt = false;
+            state.shared_session = None;
             true
         } else {
             false
         }
     };
 
-    // stop_session で削除されていなければ Store メタを idle に更新
-    if session_still_active && let Some(mut meta) = store.load_session_meta(&session_id) {
-        meta.status = "idle".to_string();
-        let _ = store.update_session_meta(&meta);
+    if session_still_active {
+        // Store メタを completed に更新
+        if let Some(mut meta) = store.load_session_meta(&session_id) {
+            meta.status = "completed".to_string();
+            meta.finished_at = Some(Utc::now());
+            let _ = store.update_session_meta(&meta);
+        }
+
+        // process_died 通知をクライアントに送信
+        let resp = json!({ "type": "process_died", "session_id": &session_id });
+        let _ = ws_tx
+            .lock()
+            .await
+            .send(Message::Text(resp.to_string().into()))
+            .await;
     }
 
     // registry から削除
     registry.remove_dead(&registry_name).await;
 
-    tracing::info!("Claude turn completed for session {session_id}");
+    tracing::info!("Claude interactive process ended for session {session_id}");
 }
 
-/// broadcast → WS 転送（ターン出力をリアルタイムで WS に送信）
-async fn forward_claude_output(
+/// broadcast → WS 転送（インタラクティブ: ターン境界で turn_completed を送信）
+async fn forward_interactive_output(
     session_id: String,
     mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
     ws_tx: WsSink,
-    session: Arc<crate::pty::registry::SharedSession>,
+    session: Arc<SharedSession>,
+    state_map: SessionStateMap,
 ) {
     let mut line_buf = String::new();
 
     loop {
-        // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
-        // 閉じないため、定期的に alive を確認する
         match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
             Ok(Ok(bytes)) => {
                 let text = String::from_utf8_lossy(&bytes);
@@ -538,7 +631,6 @@ async fn forward_claude_output(
                         continue;
                     }
 
-                    // ConPTY エスケープシーケンスが混入している場合は JSON 部分を抽出
                     let line = extract_json_line(&raw_line)
                         .unwrap_or(&raw_line)
                         .to_string();
@@ -546,7 +638,7 @@ async fn forward_claude_output(
                     let event = json!({
                         "type": "claude_event",
                         "session_id": &session_id,
-                        "event": Value::String(line),
+                        "event": Value::String(line.clone()),
                     });
 
                     if ws_tx
@@ -558,28 +650,49 @@ async fn forward_claude_output(
                     {
                         return; // WS closed
                     }
+
+                    // ターン境界検出 → turn_completed 通知
+                    if is_result_event(&line) {
+                        let resp = json!({ "type": "turn_completed", "session_id": &session_id });
+                        let _ = ws_tx
+                            .lock()
+                            .await
+                            .send(Message::Text(resp.to_string().into()))
+                            .await;
+                    }
                 }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
             Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                // ターン完了通知（session は idle に戻る）
-                let resp = json!({ "type": "turn_completed", "session_id": &session_id });
-                let _ = ws_tx
-                    .lock()
-                    .await
-                    .send(Message::Text(resp.to_string().into()))
-                    .await;
-                break;
-            }
-            Err(_) => {
-                // タイムアウト: セッション生存チェック
-                if !session.is_alive() {
+                // プロセス終了 → 最終ターンの turn_completed（is_running の場合のみ）
+                let was_running = {
+                    let map = state_map.lock().await;
+                    map.get(&session_id).map(|s| s.is_running).unwrap_or(false)
+                };
+                if was_running {
                     let resp = json!({ "type": "turn_completed", "session_id": &session_id });
                     let _ = ws_tx
                         .lock()
                         .await
                         .send(Message::Text(resp.to_string().into()))
                         .await;
+                }
+                break;
+            }
+            Err(_) => {
+                if !session.is_alive() {
+                    let was_running = {
+                        let map = state_map.lock().await;
+                        map.get(&session_id).map(|s| s.is_running).unwrap_or(false)
+                    };
+                    if was_running {
+                        let resp = json!({ "type": "turn_completed", "session_id": &session_id });
+                        let _ = ws_tx
+                            .lock()
+                            .await
+                            .send(Message::Text(resp.to_string().into()))
+                            .await;
+                    }
                     break;
                 }
             }
@@ -602,6 +715,16 @@ async fn forward_claude_output(
             .await
             .send(Message::Text(event.to_string().into()))
             .await;
+    }
+}
+
+/// JSON 行が {"type": "result", ...} かチェック
+fn is_result_event(line: &str) -> bool {
+    // 軽量チェック: パース失敗時は false
+    if let Ok(v) = serde_json::from_str::<Value>(line) {
+        v.get("type").and_then(|t| t.as_str()) == Some("result")
+    } else {
+        false
     }
 }
 
@@ -725,5 +848,23 @@ mod tests {
     fn extract_json_line_nested_braces() {
         let line = r#"{"type":"result","data":{"key":"value"}}"#;
         assert_eq!(extract_json_line(line), Some(line));
+    }
+
+    #[test]
+    fn is_result_event_true() {
+        let line = r#"{"type":"result","total_cost_usd":0.05}"#;
+        assert!(is_result_event(line));
+    }
+
+    #[test]
+    fn is_result_event_false() {
+        let line = r#"{"type":"assistant","message":{}}"#;
+        assert!(!is_result_event(line));
+    }
+
+    #[test]
+    fn is_result_event_invalid_json() {
+        assert!(!is_result_event("not json"));
+        assert!(!is_result_event(""));
     }
 }

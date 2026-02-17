@@ -52,6 +52,26 @@ const SessionHistory = (() => {
     }
   }
 
+  async function deleteSession(id) {
+    if (!(await Toast.confirm('Delete this session?'))) return;
+    try {
+      const resp = await fetch(`/api/sessions/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+      });
+      if (resp.ok) {
+        sessions = sessions.filter(s => s.id !== id);
+        Toast.success('Session deleted');
+        return true;
+      } else {
+        Toast.error('Failed to delete session');
+      }
+    } catch {
+      Toast.error('Failed to delete session');
+    }
+    return false;
+  }
+
   function render(container) {
     container.innerHTML = '';
 
@@ -82,6 +102,19 @@ const SessionHistory = (() => {
         </div>
         <div class="history-prompt">${esc(shortPrompt)}</div>
         <div class="history-meta">${esc(connLabel)}</div>`;
+
+      // Delete button
+      const delBtn = document.createElement('button');
+      delBtn.className = 'history-delete-btn';
+      delBtn.textContent = '\u00d7';
+      delBtn.title = 'Delete session';
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (await deleteSession(s.id)) {
+          render(container);
+        }
+      });
+      div.appendChild(delBtn);
 
       div.addEventListener('click', () => replaySession(s.id));
       container.appendChild(div);
