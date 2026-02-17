@@ -41,6 +41,8 @@ pub struct Settings {
     pub keybar_buttons: Option<Vec<KeybarButton>>,
     #[serde(default)]
     pub claude_input_position: Option<String>,
+    #[serde(default)]
+    pub ssh_agent_forwarding: bool,
 }
 
 fn default_font_size() -> u8 {
@@ -63,6 +65,7 @@ impl Default for Settings {
             claude_default_dir: None,
             keybar_buttons: None,
             claude_input_position: None,
+            ssh_agent_forwarding: false,
         }
     }
 }

@@ -8,6 +8,7 @@ const DenSettings = (() => {
     claude_default_dir: null,
     keybar_buttons: null,
     claude_input_position: null,
+    ssh_agent_forwarding: false,
   };
 
   // キーバー設定で使用する一時配列
@@ -340,6 +341,9 @@ const DenSettings = (() => {
     const inputPosSelect = document.getElementById('setting-input-position');
     if (inputPosSelect) inputPosSelect.value = current.claude_input_position || 'bottom';
 
+    const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
+    if (agentFwdCheck) agentFwdCheck.checked = !!current.ssh_agent_forwarding;
+
     // ディレクトリブラウザ初期化
     settingsDirPath = current.claude_default_dir || '~';
     settingsDirUserModified = false;
@@ -422,6 +426,9 @@ const DenSettings = (() => {
       // キーバーボタン: 保存用に send をリテラルに変換
       const keybarButtons = getEditingButtons();
 
+      const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
+      const sshAgentFwd = agentFwdCheck ? agentFwdCheck.checked : false;
+
       await save({
         font_size: Math.max(8, Math.min(32, fontSize)),
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
@@ -429,6 +436,7 @@ const DenSettings = (() => {
         claude_default_dir: defaultDir,
         claude_input_position: inputPos === 'bottom' ? null : inputPos,
         keybar_buttons: keybarButtons,
+        ssh_agent_forwarding: sshAgentFwd,
       });
       apply();
 

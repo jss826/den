@@ -146,10 +146,11 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 }
 
                 // インタラクティブモードで Claude CLI を起動
+                let agent_fwd = store.load_settings().ssh_agent_forwarding;
                 let pty_result = tokio::task::spawn_blocking({
                     let conn = conn.clone();
                     let dir = dir.clone();
-                    move || session::spawn_claude_interactive(&conn, &dir, 10000, 50)
+                    move || session::spawn_claude_interactive(&conn, &dir, agent_fwd, 10000, 50)
                 })
                 .await;
 

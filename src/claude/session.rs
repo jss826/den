@@ -11,6 +11,7 @@ pub fn spawn_claude_session(
     working_dir: &str,
     prompt: &str,
     is_continuation: bool,
+    agent_forwarding: bool,
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
@@ -39,7 +40,7 @@ pub fn spawn_claude_session(
                 claude_args.push_str(" --continue");
             }
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-            let args = build_ssh_args(host, &remote_cmd);
+            let args = build_ssh_args(host, &remote_cmd, agent_forwarding);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
     }
@@ -49,6 +50,7 @@ pub fn spawn_claude_session(
 pub fn spawn_claude_interactive(
     connection: &ConnectionTarget,
     working_dir: &str,
+    agent_forwarding: bool,
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
@@ -66,7 +68,7 @@ pub fn spawn_claude_interactive(
             let claude_args =
                 "claude --output-format stream-json --verbose --dangerously-skip-permissions";
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-            let args = build_ssh_args(host, &remote_cmd);
+            let args = build_ssh_args(host, &remote_cmd, agent_forwarding);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
     }
@@ -119,16 +121,17 @@ fn spawn_command_pty(
     })
 }
 
-/// SSH コマンドの共通引数を構築（-A でエージェント転送を有効化）
-fn build_ssh_args(host: &str, remote_cmd: &str) -> Vec<String> {
-    vec![
-        "-t".to_string(),
-        "-A".to_string(),
-        "-o".to_string(),
-        "BatchMode=yes".to_string(),
-        host.to_string(),
-        remote_cmd.to_string(),
-    ]
+/// SSH コマンドの共通引数を構築（`agent_forwarding` が true の場合のみ `-A` を追加）
+fn build_ssh_args(host: &str, remote_cmd: &str, agent_forwarding: bool) -> Vec<String> {
+    let mut args = vec!["-t".to_string()];
+    if agent_forwarding {
+        args.push("-A".to_string());
+    }
+    args.push("-o".to_string());
+    args.push("BatchMode=yes".to_string());
+    args.push(host.to_string());
+    args.push(remote_cmd.to_string());
+    args
 }
 
 /// シングルクォートエスケープ（SSH リモートコマンド用）
@@ -181,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn ssh_args_structure() {
+    fn ssh_args_with_agent_forwarding() {
         let host = "user@remote";
         let prompt = "test prompt";
         let working_dir = "/home/user";
@@ -190,15 +193,26 @@ mod tests {
             shell_escape_prompt(prompt),
         );
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-        let args = build_ssh_args(host, &remote_cmd);
+        let args = build_ssh_args(host, &remote_cmd, true);
         assert_eq!(args.len(), 6);
         assert_eq!(args[0], "-t");
         assert_eq!(args[1], "-A");
         assert_eq!(args[4], host);
         assert!(args[5].contains("cd '/home/user'"));
         assert!(args[5].contains("claude -p"));
-        assert!(args[5].contains("--verbose"));
-        assert!(args[5].contains("--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn ssh_args_without_agent_forwarding() {
+        let host = "user@remote";
+        let remote_cmd = "echo hello";
+        let args = build_ssh_args(host, remote_cmd, false);
+        assert_eq!(args.len(), 5);
+        assert_eq!(args[0], "-t");
+        assert_eq!(args[1], "-o");
+        assert_eq!(args[2], "BatchMode=yes");
+        assert_eq!(args[3], host);
+        assert!(!args.contains(&"-A".to_string()));
     }
 
     #[test]
@@ -222,9 +236,9 @@ mod tests {
         let claude_args =
             "claude --output-format stream-json --verbose --dangerously-skip-permissions";
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-        let args = build_ssh_args(host, &remote_cmd);
+        let args = build_ssh_args(host, &remote_cmd, true);
         assert_eq!(args.len(), 6);
-        assert_eq!(args[1], "-A"); // agent forwarding
+        assert_eq!(args[1], "-A"); // agent forwarding enabled
         assert!(!remote_cmd.contains("claude -p"));
         assert!(remote_cmd.contains("--output-format stream-json"));
     }

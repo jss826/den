@@ -1042,6 +1042,13 @@ html, body {
   margin-bottom: 6px;
 }
 
+.setting-hint {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 .modal-connections {
   display: flex;
   gap: 6px;
