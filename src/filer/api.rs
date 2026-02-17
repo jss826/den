@@ -216,66 +216,67 @@ pub async fn list(
     _state: State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<FilerListing>, ApiError> {
-    let path = resolve_path(&q.path)?;
+    tokio::task::spawn_blocking(move || {
+        let path = resolve_path(&q.path)?;
 
-    if !path.is_dir() {
-        return Err(err(StatusCode::BAD_REQUEST, "Not a directory"));
-    }
-
-    let read_dir = fs::read_dir(&path).map_err(io_err)?;
-    let mut entries = Vec::new();
-
-    for entry in read_dir.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        if !q.show_hidden && (name.starts_with('.') || name.starts_with('$')) {
-            continue;
+        if !path.is_dir() {
+            return Err(err(StatusCode::BAD_REQUEST, "Not a directory"));
         }
 
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
+        let read_dir = fs::read_dir(&path).map_err(io_err)?;
+        let mut entries = Vec::new();
+
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+
+            if !q.show_hidden && (name.starts_with('.') || name.starts_with('$')) {
+                continue;
+            }
+
+            let metadata = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let modified = metadata.modified().ok().map(|t| {
+                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                dt.to_rfc3339()
+            });
+
+            entries.push(FilerEntry {
+                name,
+                is_dir: metadata.is_dir(),
+                size: metadata.len(),
+                modified,
+            });
+        }
+
+        // ディレクトリ優先、その後名前でソート（キャッシュ付きで比較ごとのアロケーション回避）
+        entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir));
+        entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()));
+
+        // 親ディレクトリ（ドライブルート "C:\" の parent は "C:" → Some("") 相当を None に）
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty() && *p != path)
+            .map(|p| p.to_string_lossy().into_owned());
+
+        // ドライブルート（parent が None）のときドライブ一覧を付与
+        let drives = if parent.is_none() {
+            list_drives()
+        } else {
+            Vec::new()
         };
 
-        let modified = metadata.modified().ok().map(|t| {
-            let dt: chrono::DateTime<chrono::Utc> = t.into();
-            dt.to_rfc3339()
-        });
-
-        entries.push(FilerEntry {
-            name,
-            is_dir: metadata.is_dir(),
-            size: metadata.len(),
-            modified,
-        });
-    }
-
-    // ディレクトリ優先、その後名前でソート
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-
-    // 親ディレクトリ（ドライブルート "C:\" の parent は "C:" → Some("") 相当を None に）
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty() && *p != path)
-        .map(|p| p.to_string_lossy().to_string());
-
-    // ドライブルート（parent が None）のときドライブ一覧を付与
-    let drives = if parent.is_none() {
-        list_drives()
-    } else {
-        Vec::new()
-    };
-
-    Ok(Json(FilerListing {
-        path: path.to_string_lossy().to_string(),
-        parent,
-        entries,
-        drives,
-    }))
+        Ok(Json(FilerListing {
+            path: path.to_string_lossy().into_owned(),
+            parent,
+            entries,
+            drives,
+        }))
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// GET /api/filer/read
@@ -283,39 +284,42 @@ pub async fn read(
     _state: State<Arc<AppState>>,
     Query(q): Query<ReadQuery>,
 ) -> Result<Json<FileContent>, ApiError> {
-    let path = resolve_path(&q.path)?;
+    tokio::task::spawn_blocking(move || {
+        let path = resolve_path(&q.path)?;
 
-    if !path.is_file() {
-        return Err(err(StatusCode::NOT_FOUND, "Not a file"));
-    }
+        let metadata = fs::metadata(&path).map_err(io_err)?;
+        if !metadata.is_file() {
+            return Err(err(StatusCode::NOT_FOUND, "Not a file"));
+        }
+        if metadata.len() > MAX_READ_SIZE {
+            return Err(err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!(
+                    "File too large: {} bytes (max {})",
+                    metadata.len(),
+                    MAX_READ_SIZE
+                ),
+            ));
+        }
 
-    let metadata = fs::metadata(&path).map_err(io_err)?;
-    if metadata.len() > MAX_READ_SIZE {
-        return Err(err(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            &format!(
-                "File too large: {} bytes (max {})",
-                metadata.len(),
-                MAX_READ_SIZE
-            ),
-        ));
-    }
+        let data = fs::read(&path).map_err(io_err)?;
+        let binary = is_binary(&data);
 
-    let data = fs::read(&path).map_err(io_err)?;
-    let binary = is_binary(&data);
+        let content = if binary {
+            String::new()
+        } else {
+            String::from_utf8_lossy(&data).into_owned()
+        };
 
-    let content = if binary {
-        String::new()
-    } else {
-        String::from_utf8_lossy(&data).to_string()
-    };
-
-    Ok(Json(FileContent {
-        path: path.to_string_lossy().to_string(),
-        content,
-        size: metadata.len(),
-        is_binary: binary,
-    }))
+        Ok(Json(FileContent {
+            path: path.to_string_lossy().into_owned(),
+            content,
+            size: metadata.len(),
+            is_binary: binary,
+        }))
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// PUT /api/filer/write
@@ -323,18 +327,22 @@ pub async fn write(
     _state: State<Arc<AppState>>,
     Json(req): Json<WriteRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let path = resolve_path(&req.path)?;
+    tokio::task::spawn_blocking(move || {
+        let path = resolve_path(&req.path)?;
 
-    tracing::info!("filer: write {}", path.display());
+        tracing::info!("filer: write {}", path.display());
 
-    if let Some(parent) = path.parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(io_err)?;
-    }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).map_err(io_err)?;
+        }
 
-    fs::write(&path, req.content.as_bytes()).map_err(io_err)?;
-    Ok(StatusCode::OK)
+        fs::write(&path, req.content.as_bytes()).map_err(io_err)?;
+        Ok(StatusCode::OK)
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// POST /api/filer/mkdir
@@ -342,11 +350,15 @@ pub async fn mkdir(
     _state: State<Arc<AppState>>,
     Json(req): Json<MkdirRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let path = resolve_path(&req.path)?;
+    tokio::task::spawn_blocking(move || {
+        let path = resolve_path(&req.path)?;
 
-    tracing::info!("filer: mkdir {}", path.display());
-    fs::create_dir_all(&path).map_err(io_err)?;
-    Ok(StatusCode::CREATED)
+        tracing::info!("filer: mkdir {}", path.display());
+        fs::create_dir_all(&path).map_err(io_err)?;
+        Ok(StatusCode::CREATED)
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// POST /api/filer/rename
@@ -354,12 +366,16 @@ pub async fn rename(
     _state: State<Arc<AppState>>,
     Json(req): Json<RenameRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let from = resolve_path(&req.from)?;
-    let to = resolve_path(&req.to)?;
+    tokio::task::spawn_blocking(move || {
+        let from = resolve_path(&req.from)?;
+        let to = resolve_path(&req.to)?;
 
-    tracing::info!("filer: rename {} -> {}", from.display(), to.display());
-    fs::rename(&from, &to).map_err(io_err)?;
-    Ok(StatusCode::OK)
+        tracing::info!("filer: rename {} -> {}", from.display(), to.display());
+        fs::rename(&from, &to).map_err(io_err)?;
+        Ok(StatusCode::OK)
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// DELETE /api/filer/delete
@@ -367,17 +383,21 @@ pub async fn delete(
     _state: State<Arc<AppState>>,
     Query(q): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let path = resolve_path(&q.path)?;
+    tokio::task::spawn_blocking(move || {
+        let path = resolve_path(&q.path)?;
 
-    tracing::info!("filer: delete {}", path.display());
+        tracing::info!("filer: delete {}", path.display());
 
-    if path.is_dir() {
-        fs::remove_dir_all(&path).map_err(io_err)?;
-    } else {
-        fs::remove_file(&path).map_err(io_err)?;
-    }
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(io_err)?;
+        } else {
+            fs::remove_file(&path).map_err(io_err)?;
+        }
 
-    Ok(StatusCode::OK)
+        Ok(StatusCode::OK)
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// GET /api/filer/download
@@ -385,59 +405,62 @@ pub async fn download(
     _state: State<Arc<AppState>>,
     Query(q): Query<DownloadQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let path = resolve_path(&q.path)?;
+    tokio::task::spawn_blocking(move || {
+        let path = resolve_path(&q.path)?;
 
-    if !path.is_file() {
-        return Err(err(StatusCode::NOT_FOUND, "Not a file"));
-    }
+        let metadata = fs::metadata(&path).map_err(io_err)?;
+        if !metadata.is_file() {
+            return Err(err(StatusCode::NOT_FOUND, "Not a file"));
+        }
 
-    let metadata = fs::metadata(&path).map_err(io_err)?;
+        // ダウンロードサイズ上限: 100MB
+        const MAX_DOWNLOAD_SIZE: u64 = 100 * 1024 * 1024;
+        if metadata.len() > MAX_DOWNLOAD_SIZE {
+            return Err(err(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!(
+                    "File too large: {} bytes (max {})",
+                    metadata.len(),
+                    MAX_DOWNLOAD_SIZE
+                ),
+            ));
+        }
 
-    // ダウンロードサイズ上限: 100MB
-    const MAX_DOWNLOAD_SIZE: u64 = 100 * 1024 * 1024;
-    if metadata.len() > MAX_DOWNLOAD_SIZE {
-        return Err(err(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            &format!(
-                "File too large: {} bytes (max {})",
-                metadata.len(),
-                MAX_DOWNLOAD_SIZE
-            ),
-        ));
-    }
+        let data = fs::read(&path).map_err(io_err)?;
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
 
-    let data = fs::read(&path).map_err(io_err)?;
-    let file_name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+        // ヘッダーインジェクション防止: " と制御文字を除去
+        let safe_name: String = file_name
+            .chars()
+            .filter(|c| !c.is_control() && *c != '"')
+            .collect();
+        let safe_name = if safe_name.is_empty() {
+            "download".to_string()
+        } else {
+            safe_name
+        };
 
-    // ヘッダーインジェクション防止: " と制御文字を除去
-    let safe_name: String = file_name
-        .chars()
-        .filter(|c| !c.is_control() && *c != '"')
-        .collect();
-    let safe_name = if safe_name.is_empty() {
-        "download".to_string()
-    } else {
-        safe_name
-    };
+        let mime = mime_guess::from_path(&path)
+            .first_or_octet_stream()
+            .to_string();
 
-    let mime = mime_guess::from_path(&path)
-        .first_or_octet_stream()
-        .to_string();
-
-    Ok((
-        [
-            (header::CONTENT_TYPE, mime),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", safe_name),
-            ),
-        ],
-        data,
-    ))
+        Ok((
+            [
+                (header::CONTENT_TYPE, mime),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", safe_name),
+                ),
+            ],
+            data,
+        ))
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// POST /api/filer/upload (multipart)
@@ -503,12 +526,17 @@ pub async fn upload(
     }
 
     let dir_path = target_path.unwrap_or_else(|| "~".to_string());
-    let dir = resolve_path(&dir_path)?;
-    let dest = dir.join(&file_name);
 
-    tracing::info!("filer: upload {} ({} bytes)", dest.display(), data.len());
-    fs::write(&dest, &data).map_err(io_err)?;
-    Ok(StatusCode::CREATED)
+    tokio::task::spawn_blocking(move || {
+        let dir = resolve_path(&dir_path)?;
+        let dest = dir.join(&file_name);
+
+        tracing::info!("filer: upload {} ({} bytes)", dest.display(), data.len());
+        fs::write(&dest, &data).map_err(io_err)?;
+        Ok(StatusCode::CREATED)
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))?
 }
 
 /// GET /api/filer/search
@@ -558,7 +586,7 @@ fn search_recursive(
         }
 
         let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
+        let name = entry.file_name().to_string_lossy().into_owned();
 
         // 隠しファイルをスキップ
         if name.starts_with('.') || name.starts_with('$') {
@@ -566,11 +594,12 @@ fn search_recursive(
         }
 
         let is_dir = path.is_dir();
+        let name_lower = name.to_lowercase();
 
         // ファイル名マッチ
-        if name.to_lowercase().contains(query) {
+        if name_lower.contains(query) {
             results.push(SearchResult {
-                path: path.to_string_lossy().to_string(),
+                path: path.to_string_lossy().into_owned(),
                 is_dir,
                 line: None,
                 context: None,
@@ -580,20 +609,27 @@ fn search_recursive(
         // 内容検索（テキストファイルのみ）
         if content_search
             && path.is_file()
-            && !name.to_lowercase().contains(query)
+            && !name_lower.contains(query)
             && let Ok(metadata) = fs::metadata(&path)
             && metadata.len() <= MAX_READ_SIZE
             && let Ok(file_content) = fs::read(&path)
             && !is_binary(&file_content)
         {
             let text = String::from_utf8_lossy(&file_content);
+            let path_str = path.to_string_lossy().into_owned();
             for (i, line) in text.lines().enumerate() {
                 if results.len() >= MAX_SEARCH_RESULTS {
                     return;
                 }
-                if line.to_lowercase().contains(query) {
+                // ASCII 快速パス: 行に大文字がなければ直接比較、そうでなければ to_lowercase
+                let matches = if line.is_ascii() {
+                    line.to_ascii_lowercase().contains(query)
+                } else {
+                    line.to_lowercase().contains(query)
+                };
+                if matches {
                     results.push(SearchResult {
-                        path: path.to_string_lossy().to_string(),
+                        path: path_str.clone(),
                         is_dir: false,
                         line: Some((i + 1) as u32),
                         context: Some(line.chars().take(200).collect()),

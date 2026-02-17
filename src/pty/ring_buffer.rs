@@ -41,8 +41,11 @@ impl RingBuffer {
         };
 
         let mut result = Vec::with_capacity(self.len);
-        for i in 0..self.len {
-            result.push(self.buf[(start + i) % cap]);
+        // 2 スライスコピー: リングバッファの連続領域を直接 extend
+        let first_len = (cap - start).min(self.len);
+        result.extend_from_slice(&self.buf[start..start + first_len]);
+        if first_len < self.len {
+            result.extend_from_slice(&self.buf[..self.len - first_len]);
         }
         result
     }

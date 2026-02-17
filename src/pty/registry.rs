@@ -206,6 +206,10 @@ impl SessionRegistry {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // read_task が先に alive=false にした場合はロック不要
+                if !session_for_monitor.is_alive() {
+                    break;
+                }
                 let mut inner = session_for_monitor.inner.lock().await;
                 if let Some(ref mut child) = inner.child {
                     match child.try_wait() {
@@ -476,10 +480,11 @@ impl SessionRegistry {
 
     /// セッション一覧
     pub async fn list(&self) -> Vec<SessionInfo> {
-        let sessions = self.sessions.read().await;
-        let mut result = Vec::with_capacity(sessions.len());
+        // RwLock を即解放してから各セッションの Mutex を取得する
+        let session_arcs: Vec<_> = self.sessions.read().await.values().cloned().collect();
 
-        for (_, session) in sessions.iter() {
+        let mut result = Vec::with_capacity(session_arcs.len());
+        for session in &session_arcs {
             let inner = session.inner.lock().await;
             result.push(SessionInfo {
                 name: session.name.clone(),
@@ -567,8 +572,12 @@ impl SessionRegistry {
             return;
         }
 
-        let min_cols = inner.clients.iter().map(|c| c.cols).min().unwrap_or(80);
-        let min_rows = inner.clients.iter().map(|c| c.rows).min().unwrap_or(24);
+        let (min_cols, min_rows) = inner
+            .clients
+            .iter()
+            .fold((u16::MAX, u16::MAX), |(mc, mr), c| {
+                (mc.min(c.cols), mr.min(c.rows))
+            });
 
         if let Some(ref tx) = inner.resize_tx {
             let _ = tx.send((min_cols, min_rows));

@@ -61,14 +61,14 @@ fn list_local_dirs(path: &str) -> Result<DirListing, String> {
             Err(_) => continue,
         };
         if metadata.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
+            let name = entry.file_name().to_string_lossy().into_owned();
             // 隠しディレクトリを除外（先頭 . または $）
             if !name.starts_with('.') && !name.starts_with('$') {
                 entries.push(DirEntry { name, is_dir: true });
             }
         }
     }
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_cached_key(|e| e.name.to_lowercase());
 
     // 親ディレクトリ（ドライブルートでは None）
     let parent = canonical
@@ -143,7 +143,7 @@ fn list_ssh_dirs(host: &str, path: &str) -> Result<DirListing, String> {
             });
         }
     }
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_cached_key(|e| e.name.to_lowercase());
 
     let parent = if resolved_path == "/" {
         None
@@ -151,7 +151,7 @@ fn list_ssh_dirs(host: &str, path: &str) -> Result<DirListing, String> {
         Some(
             Path::new(&resolved_path)
                 .parent()
-                .map(|p| p.to_string_lossy().to_string())
+                .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "/".to_string()),
         )
     };

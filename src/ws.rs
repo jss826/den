@@ -23,6 +23,16 @@ pub struct WsQuery {
     pub session: Option<String>,
 }
 
+/// WebSocket コマンド（型付きデシリアライズ）
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum WsCommand {
+    #[serde(rename = "resize")]
+    Resize { cols: u16, rows: u16 },
+    #[serde(rename = "input")]
+    Input { data: String },
+}
+
 /// WebSocket エンドポイント
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -89,14 +99,14 @@ async fn handle_socket(
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
                     // セッション終了
-                    let msg = serde_json::json!({"type": "session_ended"}).to_string();
+                    let msg = r#"{"type":"session_ended"}"#.to_string();
                     let _ = ws_tx.send(Message::Text(msg.into())).await;
                     break;
                 }
                 Err(_) => {
                     // タイムアウト: セッション生存チェック
                     if !session_for_output.is_alive() {
-                        let msg = serde_json::json!({"type": "session_ended"}).to_string();
+                        let msg = r#"{"type":"session_ended"}"#.to_string();
                         let _ = ws_tx.send(Message::Text(msg.into())).await;
                         break;
                     }
@@ -116,23 +126,16 @@ async fn handle_socket(
                     }
                 }
                 Message::Text(text) => {
-                    if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
-                        match cmd["type"].as_str() {
-                            Some("resize") => {
-                                if let (Some(c), Some(r)) =
-                                    (cmd["cols"].as_u64(), cmd["rows"].as_u64())
-                                {
-                                    session.resize(client_id, c as u16, r as u16).await;
-                                }
+                    if let Ok(cmd) = serde_json::from_str::<WsCommand>(&text) {
+                        match cmd {
+                            WsCommand::Resize { cols, rows } => {
+                                session.resize(client_id, cols, rows).await;
                             }
-                            Some("input") => {
-                                if let Some(data) = cmd["data"].as_str()
-                                    && session.write_input(data.as_bytes()).await.is_err()
-                                {
+                            WsCommand::Input { data } => {
+                                if session.write_input(data.as_bytes()).await.is_err() {
                                     break;
                                 }
                             }
-                            _ => {}
                         }
                     }
                 }

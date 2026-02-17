@@ -46,36 +46,30 @@ fn parse_ssh_config(content: &str) -> Vec<SshHost> {
             None => continue,
         };
 
-        match key.to_lowercase().as_str() {
-            "host" => {
-                if let Some(h) = current.take()
-                    && h.name != "*"
-                {
-                    hosts.push(h);
-                }
-                current = Some(SshHost {
-                    name: value.to_string(),
-                    hostname: None,
-                    user: None,
-                    port: None,
-                });
+        if key.eq_ignore_ascii_case("host") {
+            if let Some(h) = current.take()
+                && h.name != "*"
+            {
+                hosts.push(h);
             }
-            "hostname" => {
-                if let Some(ref mut h) = current {
-                    h.hostname = Some(value.to_string());
-                }
+            current = Some(SshHost {
+                name: value.to_string(),
+                hostname: None,
+                user: None,
+                port: None,
+            });
+        } else if key.eq_ignore_ascii_case("hostname") {
+            if let Some(ref mut h) = current {
+                h.hostname = Some(value.to_string());
             }
-            "user" => {
-                if let Some(ref mut h) = current {
-                    h.user = Some(value.to_string());
-                }
+        } else if key.eq_ignore_ascii_case("user") {
+            if let Some(ref mut h) = current {
+                h.user = Some(value.to_string());
             }
-            "port" => {
-                if let Some(ref mut h) = current {
-                    h.port = value.parse().ok();
-                }
-            }
-            _ => {}
+        } else if key.eq_ignore_ascii_case("port")
+            && let Some(ref mut h) = current
+        {
+            h.port = value.parse().ok();
         }
     }
 

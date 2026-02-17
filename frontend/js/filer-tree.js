@@ -7,6 +7,7 @@ const FilerTree = (() => {
   let onContextMenu; // callback(path, isDir, x, y)
   let onRootResolved; // callback(resolvedPath) — ルートパス解決通知
   let rootPath = '~';
+  let visibleItemsCache = null; // getVisibleTreeItems キャッシュ
   // expanded: Set<path> — 展開中ディレクトリのパス
   const expanded = new Set();
   let selectedPath = null;
@@ -27,6 +28,7 @@ const FilerTree = (() => {
   }
 
   async function loadDir(dirPath) {
+    visibleItemsCache = null; // ツリー内容変更
     // ルート読込時はスピナー表示
     const isRoot = dirPath === rootPath;
     if (isRoot) Spinner.show(treeEl);
@@ -161,6 +163,7 @@ const FilerTree = (() => {
   }
 
   async function toggleDir(dirPath) {
+    visibleItemsCache = null; // ツリー構造変更時にキャッシュ無効化
     if (expanded.has(dirPath)) {
       expanded.delete(dirPath);
       const childrenEl = treeEl.querySelector(`[data-children="${CSS.escape(dirPath)}"]`);
@@ -224,9 +227,10 @@ const FilerTree = (() => {
 
   // --- ユーティリティ ---
 
-  /** 表示中のツリーアイテム一覧を取得（キーボードナビ用） */
+  /** 表示中のツリーアイテム一覧を取得（キーボードナビ用、キャッシュ付き） */
   function getVisibleTreeItems() {
-    return [...treeEl.querySelectorAll('.tree-item')].filter((el) => {
+    if (visibleItemsCache) return visibleItemsCache;
+    visibleItemsCache = [...treeEl.querySelectorAll('.tree-item')].filter((el) => {
       // 非表示の tree-children 内のアイテムを除外
       let node = el.parentElement;
       while (node && node !== treeEl) {
@@ -237,6 +241,7 @@ const FilerTree = (() => {
       }
       return true;
     });
+    return visibleItemsCache;
   }
 
   function joinPath(parent, name) {

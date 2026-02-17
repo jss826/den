@@ -22,8 +22,12 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 /// GET /api/settings
-pub async fn get_settings(State(state): State<Arc<AppState>>) -> Json<Settings> {
-    Json(state.store.load_settings())
+pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || store.load_settings()).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// PUT /api/settings
@@ -31,12 +35,14 @@ pub async fn put_settings(
     State(state): State<Arc<AppState>>,
     Json(settings): Json<Settings>,
 ) -> impl IntoResponse {
-    match state.store.save_settings(&settings) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => {
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => {
             tracing::error!("Failed to save settings: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -45,11 +51,19 @@ pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PaginationParams>,
 ) -> impl IntoResponse {
-    let all = state.store.list_sessions();
+    let store = state.store.clone();
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(20);
-    let page: Vec<_> = all.into_iter().skip(offset).take(limit).collect();
-    Json(page)
+    match tokio::task::spawn_blocking(move || {
+        let all = store.list_sessions();
+        let page: Vec<_> = all.into_iter().skip(offset).take(limit).collect();
+        page
+    })
+    .await
+    {
+        Ok(page) => Json(page).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// GET /api/sessions/{id}
@@ -60,9 +74,11 @@ pub async fn get_session(
     if !is_valid_id(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    match state.store.load_session_meta(&id) {
-        Some(meta) => Json(meta).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || store.load_session_meta(&id)).await {
+        Ok(Some(meta)) => Json(meta).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -74,21 +90,31 @@ pub async fn delete_session(
     if !is_valid_id(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    // 実行中セッションの削除を拒否
-    if state
-        .store
-        .load_session_meta(&id)
-        .is_some_and(|meta| meta.status == "running")
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || {
+        // 実行中セッションの削除を拒否
+        if store
+            .load_session_meta(&id)
+            .is_some_and(|meta| meta.status == "running")
+        {
+            return Err(std::io::Error::other("running"));
+        }
+        store.delete_session(&id)
+    })
+    .await
     {
-        return StatusCode::CONFLICT.into_response();
-    }
-    match state.store.delete_session(&id) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::error!("Failed to delete session {}: {}", id, e);
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::Other && e.to_string() == "running" => {
+            StatusCode::CONFLICT.into_response()
+        }
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Failed to delete session: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -100,11 +126,17 @@ pub async fn get_session_events(
     if !is_valid_id(&id) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    if state.store.load_session_meta(&id).is_none() {
-        return StatusCode::NOT_FOUND.into_response();
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || {
+        store.load_session_meta(&id)?;
+        Some(store.load_session_events(&id))
+    })
+    .await
+    {
+        Ok(Some(events)) => Json(events).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-    let events = state.store.load_session_events(&id);
-    Json(events).into_response()
 }
 
 #[cfg(test)]

@@ -72,7 +72,9 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
 
         match cmd["type"].as_str() {
             Some("get_ssh_hosts") => {
-                let hosts = ssh_config::list_ssh_hosts();
+                let hosts = tokio::task::spawn_blocking(ssh_config::list_ssh_hosts)
+                    .await
+                    .unwrap_or_default();
                 let resp = json!({ "type": "ssh_hosts", "hosts": hosts });
                 let _ = ws_tx
                     .lock()
@@ -544,8 +546,9 @@ async fn run_interactive_processor(
                 line_buf.push_str(&text);
 
                 while let Some(pos) = line_buf.find('\n') {
-                    let raw_line = line_buf[..pos].trim().to_string();
-                    line_buf.drain(..=pos);
+                    let raw_line: String = line_buf[..pos].trim().into();
+                    // replace_range is O(remaining) same as drain, but avoids reallocating
+                    line_buf.replace_range(..=pos, "");
 
                     if raw_line.is_empty() {
                         continue;
@@ -650,8 +653,8 @@ async fn forward_interactive_output(
                 line_buf.push_str(&text);
 
                 while let Some(pos) = line_buf.find('\n') {
-                    let raw_line = line_buf[..pos].trim().to_string();
-                    line_buf.drain(..=pos);
+                    let raw_line: String = line_buf[..pos].trim().into();
+                    line_buf.replace_range(..=pos, "");
 
                     if raw_line.is_empty() {
                         continue;
@@ -744,14 +747,12 @@ async fn forward_interactive_output(
     }
 }
 
-/// JSON 行が {"type": "result", ...} かチェック
+/// JSON 行が {"type": "result", ...} かチェック（文字列検索で高速判定）
 fn is_result_event(line: &str) -> bool {
-    // 軽量チェック: パース失敗時は false
-    if let Ok(v) = serde_json::from_str::<Value>(line) {
-        v.get("type").and_then(|t| t.as_str()) == Some("result")
-    } else {
-        false
-    }
+    // "type":"result" または "type": "result" のパターンを文字列検索で判定
+    // フルパースを回避して高速化
+    (line.contains("\"type\":\"result\"") || line.contains("\"type\": \"result\""))
+        && line.starts_with('{')
 }
 
 async fn send_error(ws_tx: &WsSink, message: &str) {

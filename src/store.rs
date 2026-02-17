@@ -1,13 +1,26 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+/// セッションメタキャッシュ
+struct SessionCache {
+    data: Vec<SessionMeta>,
+    updated_at: Instant,
+}
 
 /// サーバーサイド永続化ストア
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    /// セッションごとのイベントファイルハンドルキャッシュ（open() コスト削減）
+    event_files: Arc<Mutex<HashMap<String, fs::File>>>,
+    /// list_sessions のキャッシュ（ディスク読み込み削減）
+    session_cache: Arc<Mutex<Option<SessionCache>>>,
 }
 
 // --- データモデル ---
@@ -103,7 +116,11 @@ impl Store {
     /// 指定パスで初期化（ディレクトリ自動作成）
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(root.join("sessions"))?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            event_files: Arc::new(Mutex::new(HashMap::new())),
+            session_cache: Arc::new(Mutex::new(None)),
+        })
     }
 
     // --- Settings ---
@@ -142,6 +159,7 @@ impl Store {
 
         // events.jsonl を空で作成
         fs::File::create(session_dir.join("events.jsonl"))?;
+        self.invalidate_session_cache();
         Ok(())
     }
 
@@ -152,17 +170,31 @@ impl Store {
                 "Invalid session ID",
             ));
         }
-        let path = self
-            .root
-            .join("sessions")
-            .join(session_id)
-            .join("events.jsonl");
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let mut cache = self.event_files.lock().unwrap();
+        let file = match cache.get_mut(session_id) {
+            Some(f) => f,
+            None => {
+                let path = self
+                    .root
+                    .join("sessions")
+                    .join(session_id)
+                    .join("events.jsonl");
+                let f = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?;
+                cache.entry(session_id.to_string()).or_insert(f)
+            }
+        };
         writeln!(file, "{}", line)?;
         Ok(())
+    }
+
+    /// セッションのイベントファイルハンドルをキャッシュから削除
+    pub fn close_event_file(&self, session_id: &str) {
+        if let Ok(mut cache) = self.event_files.lock() {
+            cache.remove(session_id);
+        }
     }
 
     pub fn update_session_meta(&self, meta: &SessionMeta) -> std::io::Result<()> {
@@ -175,10 +207,20 @@ impl Store {
         let path = self.root.join("sessions").join(&meta.id).join("meta.json");
         let json = serde_json::to_string_pretty(meta)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(path, json)
+        fs::write(path, json)?;
+        self.invalidate_session_cache();
+        Ok(())
     }
 
     pub fn list_sessions(&self) -> Vec<SessionMeta> {
+        // キャッシュが有効（2秒以内）ならそのまま返す
+        if let Ok(cache) = self.session_cache.lock()
+            && let Some(ref c) = *cache
+            && c.updated_at.elapsed().as_secs() < 2
+        {
+            return c.data.clone();
+        }
+
         let sessions_dir = self.root.join("sessions");
         let mut sessions = Vec::new();
 
@@ -201,7 +243,23 @@ impl Store {
 
         // 新しい順
         sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        // キャッシュ更新
+        if let Ok(mut cache) = self.session_cache.lock() {
+            *cache = Some(SessionCache {
+                data: sessions.clone(),
+                updated_at: Instant::now(),
+            });
+        }
+
         sessions
+    }
+
+    /// セッションキャッシュを無効化
+    fn invalidate_session_cache(&self) {
+        if let Ok(mut cache) = self.session_cache.lock() {
+            *cache = None;
+        }
     }
 
     pub fn load_session_meta(&self, id: &str) -> Option<SessionMeta> {
@@ -248,7 +306,10 @@ impl Store {
                 "Session not found",
             ));
         }
-        fs::remove_dir_all(session_dir)
+        self.close_event_file(id);
+        fs::remove_dir_all(session_dir)?;
+        self.invalidate_session_cache();
+        Ok(())
     }
 
     fn load_session_meta_from_path(&self, dir: &Path) -> Option<SessionMeta> {

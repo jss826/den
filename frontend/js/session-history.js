@@ -144,10 +144,11 @@ const SessionHistory = (() => {
     return d.toLocaleDateString();
   }
 
+  const ESC_RE = /[&<>"']/g;
+  const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   function esc(str) {
-    const d = document.createElement('div');
-    d.textContent = str || '';
-    return d.innerHTML;
+    if (!str) return '';
+    return str.replace(ESC_RE, c => ESC_MAP[c]);
   }
 
   function getSessions() {

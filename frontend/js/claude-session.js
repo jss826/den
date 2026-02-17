@@ -8,6 +8,7 @@ const ClaudeSession = (() => {
   let currentDirParent = null; // 親ディレクトリ（サーバーレスポンスから取得）
   let onEvent = null;        // コールバック: (sessionId, event) => void
   let pendingSend = [];      // WebSocket 接続前のメッセージキュー
+  let historyReloadTimer = null; // loadHistory debounce
 
   function init(token, eventCallback) {
     onEvent = eventCallback;
@@ -100,8 +101,8 @@ const ClaudeSession = (() => {
           renderSessionList();
         }
         if (onEvent) onEvent(msg.session_id, msg);
-        // 履歴を再取得
-        loadHistory();
+        // 履歴を再取得（debounce）
+        scheduleHistoryReload();
         break;
 
       case 'claude_event':
@@ -114,7 +115,7 @@ const ClaudeSession = (() => {
           renderSessionList();
         }
         if (onEvent) onEvent(msg.session_id, msg);
-        loadHistory();
+        scheduleHistoryReload();
         break;
 
       case 'process_died':
@@ -123,7 +124,7 @@ const ClaudeSession = (() => {
           renderSessionList();
         }
         if (onEvent) onEvent(msg.session_id, msg);
-        loadHistory();
+        scheduleHistoryReload();
         break;
 
       case 'session_attached':
@@ -143,6 +144,15 @@ const ClaudeSession = (() => {
     if (container) {
       SessionHistory.render(container);
     }
+  }
+
+  /** loadHistory を 500ms debounce して連続呼び出しを抑制 */
+  function scheduleHistoryReload() {
+    if (historyReloadTimer) clearTimeout(historyReloadTimer);
+    historyReloadTimer = setTimeout(() => {
+      loadHistory();
+      historyReloadTimer = null;
+    }, 500);
   }
 
   function bindUI() {

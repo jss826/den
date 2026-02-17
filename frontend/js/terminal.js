@@ -6,6 +6,7 @@ const DenTerminal = (() => {
   let currentSession = 'default';
   let authToken = null;
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
+  const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
   /** fit + refresh + resize 通知をまとめて実行 */
   let fitRetryCount = 0;
@@ -99,8 +100,7 @@ const DenTerminal = (() => {
     // キー入力 → WebSocket
     term.onData((data) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        const encoder = new TextEncoder();
-        ws.send(encoder.encode(data));
+        ws.send(textEncoder.encode(data));
       }
     });
 
@@ -251,8 +251,7 @@ const DenTerminal = (() => {
 
   function sendInput(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      const encoder = new TextEncoder();
-      ws.send(encoder.encode(data));
+      ws.send(textEncoder.encode(data));
     }
   }
 
@@ -390,8 +389,17 @@ const DenTerminal = (() => {
       });
     }
 
-    // 定期更新
-    setInterval(refreshSessionList, 5000);
+    // 定期更新（ページ非表示時は停止）
+    let sessionRefreshTimer = setInterval(refreshSessionList, 5000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        clearInterval(sessionRefreshTimer);
+        sessionRefreshTimer = null;
+      } else {
+        refreshSessionList();
+        sessionRefreshTimer = setInterval(refreshSessionList, 5000);
+      }
+    });
   }
 
   return {

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use russh::keys::ssh_key;
@@ -9,15 +11,15 @@ use crate::pty::registry::{ClientKind, SessionRegistry};
 
 /// `{data_dir}/ssh/authorized_keys` から公開鍵を読み込む。
 /// 各行の "algorithm base64" 部分（コメント除去）を返す。
-fn load_authorized_keys(data_dir: &str) -> Vec<String> {
+fn load_authorized_keys(data_dir: &str) -> HashSet<String> {
     let path = std::path::Path::new(data_dir)
         .join("ssh")
         .join("authorized_keys");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(_) => return HashSet::new(),
     };
-    let keys: Vec<String> = content
+    let keys: HashSet<String> = content
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -53,7 +55,7 @@ pub async fn run(
     // ホストキー読み込み/生成
     let host_key = super::keys::load_or_generate_host_key(std::path::Path::new(&data_dir))?;
 
-    let authorized_keys = Arc::new(load_authorized_keys(&data_dir));
+    let authorized_keys: Arc<HashSet<String>> = Arc::new(load_authorized_keys(&data_dir));
 
     // auth_rejection_time を 0 にして、パスワード認証のみハンドラ側で遅延させる。
     // これにより公開鍵認証の拒否が即座に完了し、クライアントがパスワード認証に
@@ -86,7 +88,7 @@ pub async fn run(
 struct DenSshServer {
     registry: Arc<SessionRegistry>,
     password: String,
-    authorized_keys: Arc<Vec<String>>,
+    authorized_keys: Arc<HashSet<String>>,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -112,7 +114,7 @@ impl russh::server::Server for DenSshServer {
 struct DenSshHandler {
     registry: Arc<SessionRegistry>,
     password: String,
-    authorized_keys: Arc<Vec<String>>,
+    authorized_keys: Arc<HashSet<String>>,
     // Per-connection state
     session_name: Option<String>,
     client_id: Option<u64>,
@@ -524,13 +526,18 @@ impl Drop for DenSshHandler {
 /// ローカルターミナルがモード切替を実行してしまい入力形式が変わる。
 /// - `ESC[?9001h/l` — Win32 input mode: 全入力が `CSI ... _` 形式になり文字化け
 /// - `ESC[?1004h/l` — Focus events: 不要な `ESC[I`/`ESC[O` が入力に混入
-fn filter_output_for_ssh(data: &[u8]) -> Vec<u8> {
+fn filter_output_for_ssh(data: &[u8]) -> Cow<'_, [u8]> {
     const BLOCKED: &[&[u8]] = &[
         b"\x1b[?9001h",
         b"\x1b[?9001l",
         b"\x1b[?1004h",
         b"\x1b[?1004l",
     ];
+
+    // 高速パス: ESC がなければフィルタ不要
+    if !data.contains(&0x1b) {
+        return Cow::Borrowed(data);
+    }
 
     let mut result = Vec::with_capacity(data.len());
     let mut i = 0;
@@ -545,7 +552,12 @@ fn filter_output_for_ssh(data: &[u8]) -> Vec<u8> {
         }
     }
 
-    result
+    // フィルタで何も除去されなかった場合は元データを返す
+    if result.len() == data.len() {
+        Cow::Borrowed(data)
+    } else {
+        Cow::Owned(result)
+    }
 }
 
 /// SSH クライアントのターミナルが返す応答シーケンスをフィルタする。
@@ -554,7 +566,12 @@ fn filter_output_for_ssh(data: &[u8]) -> Vec<u8> {
 /// CPR (Cursor Position Report: `ESC[n;mR`) は ConPTY が必要とするので通過させるが、
 /// private prefix 付き CSI（DA, DECRQM 等）や DCS/OSC 文字列シーケンスは
 /// シェルに生入力として渡されて文字化けを起こすため除去する。
-fn filter_terminal_responses(data: &[u8]) -> Vec<u8> {
+fn filter_terminal_responses(data: &[u8]) -> Cow<'_, [u8]> {
+    // 高速パス: ESC がなければフィルタ不要
+    if !data.contains(&0x1b) {
+        return Cow::Borrowed(data);
+    }
+
     let mut result = Vec::with_capacity(data.len());
     let mut i = 0;
 
@@ -645,7 +662,11 @@ fn filter_terminal_responses(data: &[u8]) -> Vec<u8> {
         }
     }
 
-    result
+    if result.len() == data.len() {
+        Cow::Borrowed(data)
+    } else {
+        Cow::Owned(result)
+    }
 }
 
 /// ST (`ESC \`) で終端される文字列シーケンスをスキップする。
@@ -714,13 +735,13 @@ mod tests {
     fn keep_cpr_response() {
         // ESC [ 1 ; 1 R → CPR (Cursor Position Report) → ConPTY が必要 → 保持
         let data = b"\x1b[1;1R";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_cpr_large_numbers() {
         let data = b"\x1b[24;80R";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
@@ -741,41 +762,41 @@ mod tests {
     fn keep_arrow_keys() {
         // ESC [ A/B/C/D → 矢印キー → 保持
         let data = b"\x1b[A\x1b[B\x1b[C\x1b[D";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_function_keys() {
         // ESC [ 1 5 ~ → F5 → 保持
         let data = b"\x1b[15~";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_plain_text() {
         let data = b"hello world";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn filter_da_mixed_input() {
         // DA1 + 通常テキスト → DA のみ除去
         let data = b"\x1b[?1;2chello";
-        assert_eq!(filter_terminal_responses(data), b"hello".to_vec());
+        assert_eq!(filter_terminal_responses(data), &b"hello"[..]);
     }
 
     #[test]
     fn keep_cpr_filter_da() {
         // CPR + DA1 → CPR は保持、DA は除去
         let data = b"\x1b[24;80R\x1b[?1;2c";
-        assert_eq!(filter_terminal_responses(data), b"\x1b[24;80R".to_vec());
+        assert_eq!(filter_terminal_responses(data), &b"\x1b[24;80R"[..]);
     }
 
     #[test]
     fn keep_text_between_responses() {
         // テキスト + DA → テキスト保持
         let data = b"abc\x1b[?1;2c";
-        assert_eq!(filter_terminal_responses(data), b"abc".to_vec());
+        assert_eq!(filter_terminal_responses(data), &b"abc"[..]);
     }
 
     #[test]
@@ -818,21 +839,21 @@ mod tests {
     fn output_filter_keeps_other_sequences() {
         // ESC[?25h (show cursor) should be kept
         let data = b"\x1b[?25h";
-        assert_eq!(filter_output_for_ssh(data), data.to_vec());
+        assert_eq!(filter_output_for_ssh(data), &data[..]);
     }
 
     #[test]
     fn output_filter_mixed() {
         // win32 mode + text + focus events → text only
         let data = b"\x1b[?9001h\x1b[?1004hHello\x1b[?25h";
-        assert_eq!(filter_output_for_ssh(data), b"Hello\x1b[?25h".to_vec());
+        assert_eq!(filter_output_for_ssh(data), &b"Hello\x1b[?25h"[..]);
     }
 
     #[test]
     fn output_filter_strips_from_conpty_init() {
         // Realistic ConPTY init sequence: win32 + focus + DSR
         let data = b"\x1b[?9001h\x1b[?1004h\x1b[6n";
-        assert_eq!(filter_output_for_ssh(data), b"\x1b[6n".to_vec());
+        assert_eq!(filter_output_for_ssh(data), &b"\x1b[6n"[..]);
     }
 
     #[test]
@@ -881,63 +902,63 @@ mod tests {
     fn mixed_da_decrqm_cpr_dcs() {
         // DA + DECRQM + CPR + DCS → CPR のみ残る
         let data = b"\x1b[?1;2c\x1b[?1;1$y\x1b[24;80R\x1bP>|term\x1b\\";
-        assert_eq!(filter_terminal_responses(data), b"\x1b[24;80R".to_vec());
+        assert_eq!(filter_terminal_responses(data), &b"\x1b[24;80R"[..]);
     }
 
     #[test]
     fn keep_incomplete_csi() {
         // ESC [ 1 (no final byte) → keep
         let data = b"\x1b[1";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_unterminated_dcs() {
         // ESC P ... (no ST) → keep as-is to avoid losing input on chunk split
         let data = b"\x1bPsome data without terminator";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_unterminated_osc() {
         // ESC ] ... (no BEL/ST) → keep as-is
         let data = b"\x1b]10;rgb:ff/ff/ff";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_sgr_mouse_report() {
         // ESC [ < 0 ; 35 ; 5 M → SGR mouse press → keep
         let data = b"\x1b[<0;35;5M";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_sgr_mouse_release() {
         // ESC [ < 0 ; 35 ; 5 m → SGR mouse release → keep
         let data = b"\x1b[<0;35;5m";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_trailing_esc() {
         // text + trailing ESC → keep all
         let data = b"hello\x1b";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn keep_ss3_sequences() {
         // ESC O P → SS3 F1 key → keep
         let data = b"\x1bOP";
-        assert_eq!(filter_terminal_responses(data), data.to_vec());
+        assert_eq!(filter_terminal_responses(data), &data[..]);
     }
 
     #[test]
     fn filter_dcs_with_text_around() {
         // text + DCS + text → DCS のみ除去
         let data = b"before\x1bP>|ver\x1b\\after";
-        assert_eq!(filter_terminal_responses(data), b"beforeafter".to_vec());
+        assert_eq!(filter_terminal_responses(data), &b"beforeafter"[..]);
     }
 
     #[test]
@@ -963,7 +984,7 @@ mod tests {
         .unwrap();
         let keys = load_authorized_keys(dir.path().to_str().unwrap());
         assert_eq!(keys.len(), 2);
-        assert_eq!(keys[0], "ssh-ed25519 AAAAB3NzaKey1");
-        assert_eq!(keys[1], "ssh-rsa AAAAB3NzaKey2");
+        assert!(keys.contains("ssh-ed25519 AAAAB3NzaKey1"));
+        assert!(keys.contains("ssh-rsa AAAAB3NzaKey2"));
     }
 }
