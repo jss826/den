@@ -19,7 +19,12 @@ const DenFiler = (() => {
     FilerTree.init(document.getElementById('filer-tree'), {
       onFileSelect: (path) => FilerEditor.openFile(path),
       onContextMenu: showContextMenu,
-      onRootResolved: (resolvedPath) => { currentDir = resolvedPath; },
+      onRootResolved: (resolvedPath) => {
+        currentDir = resolvedPath;
+        renderBreadcrumb(resolvedPath);
+      },
+      onRename: promptRename,
+      onDelete: doDelete,
     });
 
     // ツールバーボタン
@@ -140,6 +145,59 @@ const DenFiler = (() => {
         FilerTree.refresh();
       }
     });
+  }
+
+  // --- ブレッドクラム ---
+
+  function renderBreadcrumb(dirPath) {
+    const container = document.getElementById('filer-breadcrumb');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const sep = dirPath.includes('/') ? '/' : '\\';
+    const parts = dirPath.split(sep).filter(Boolean);
+
+    // Windows ドライブレター対応（例: D:\）
+    const isWindows = sep === '\\';
+
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        const sepEl = document.createElement('span');
+        sepEl.className = 'breadcrumb-sep';
+        sepEl.textContent = sep;
+        container.appendChild(sepEl);
+      }
+
+      const isLast = i === parts.length - 1;
+      const segment = document.createElement('span');
+      segment.className = isLast ? 'breadcrumb-segment breadcrumb-current' : 'breadcrumb-segment';
+      segment.textContent = parts[i];
+
+      if (!isLast) {
+        // クリックでそのパスにナビゲート
+        const targetPath = isWindows
+          ? parts.slice(0, i + 1).join(sep) + sep
+          : sep + parts.slice(0, i + 1).join(sep);
+        segment.setAttribute('role', 'link');
+        segment.setAttribute('tabindex', '0');
+        segment.addEventListener('click', () => {
+          FilerTree.setRoot(targetPath);
+          currentDir = targetPath;
+        });
+        segment.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            FilerTree.setRoot(targetPath);
+            currentDir = targetPath;
+          }
+        });
+      }
+
+      container.appendChild(segment);
+    }
+
+    // 最後までスクロール
+    container.scrollLeft = container.scrollWidth;
   }
 
   // --- コンテキストメニュー ---
@@ -376,10 +434,13 @@ const DenFiler = (() => {
           item.appendChild(ctx);
         }
 
-        item.addEventListener('click', () => {
+        item.addEventListener('click', async () => {
           document.getElementById('filer-search-modal').hidden = true;
           if (!r.is_dir) {
-            FilerEditor.openFile(r.path);
+            await FilerEditor.openFile(r.path);
+            if (r.line) {
+              FilerEditor.goToLine(r.path, r.line);
+            }
           }
         });
 

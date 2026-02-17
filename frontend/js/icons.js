@@ -72,10 +72,46 @@ const DenIcons = (() => {
     return svg('<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>', size);
   }
 
+  // --- ファイルタイプ別アイコン色マッピング ---
+
+  const fileTypeColors = {
+    js: '#f7df1e', mjs: '#f7df1e', cjs: '#f7df1e',
+    jsx: '#61dafb', tsx: '#3178c6',
+    ts: '#3178c6', mts: '#3178c6',
+    rs: '#dea584',
+    py: '#3572a5',
+    go: '#00add8',
+    rb: '#cc342d',
+    java: '#b07219', kt: '#a97bff',
+    c: '#7b8894', h: '#7b8894', cpp: '#f34b7d', hpp: '#f34b7d',
+    cs: '#178600',
+    swift: '#f05138',
+    css: '#563d7c', scss: '#c6538c', less: '#1d365d',
+    html: '#e34c26', htm: '#e34c26',
+    vue: '#41b883', svelte: '#ff3e00',
+    json: '#a8b1c1', yaml: '#cb171e', yml: '#cb171e', toml: '#9c4121',
+    xml: '#0060ac', svg: '#ffb13b',
+    md: '#083fa1', mdx: '#083fa1',
+    sh: '#89e051', bash: '#89e051', zsh: '#89e051', ps1: '#2b5797',
+    sql: '#e38c00',
+    docker: '#384d54', dockerfile: '#384d54',
+    lock: '#8b95a3', gitignore: '#f05032',
+    env: '#ecd53f',
+    png: '#a4c639', jpg: '#a4c639', jpeg: '#a4c639', gif: '#a4c639', webp: '#a4c639', ico: '#a4c639',
+    wasm: '#654ff0',
+    txt: '#8b95a3',
+  };
+
+  /** 拡張子からアイコンカラーを返す（未知の拡張子は null） */
+  function fileColor(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    return fileTypeColors[ext] || null;
+  }
+
   return {
     filePlus, folderPlus, upload, refresh, gear,
     chevronLeft, chevronRight, download,
-    folder, file,
+    folder, file, fileColor,
     zap, checkCircle, xCircle,
   };
 })();

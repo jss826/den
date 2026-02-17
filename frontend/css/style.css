@@ -375,6 +375,8 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 html, body {
@@ -1552,6 +1554,47 @@ html, body {
   border-color: var(--border);
 }
 
+/* ブレッドクラム */
+.filer-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.7rem;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  overflow-x: auto;
+  white-space: nowrap;
+  min-height: 24px;
+}
+
+.breadcrumb-segment {
+  color: var(--accent);
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.breadcrumb-segment:hover {
+  background: var(--accent-tint);
+}
+
+.breadcrumb-current {
+  color: var(--fg);
+  cursor: default;
+}
+
+.breadcrumb-current:hover {
+  background: none;
+}
+
+.breadcrumb-sep {
+  color: var(--border);
+  flex-shrink: 0;
+  font-size: 0.6rem;
+}
+
 .filer-search {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
@@ -2166,6 +2209,16 @@ html, body {
   transition-delay: 300ms;
 }
 
+/* ツリーアイテムのツールチップは右側に表示 */
+.tree-item[data-tooltip]::after {
+  bottom: auto;
+  left: auto;
+  transform: none;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+}
+
 @media (hover: none) {
   [data-tooltip]::after {
     display: none;
@@ -2395,6 +2448,35 @@ select:focus-visible {
   order: -1;
   border-top: none;
   border-bottom: 1px solid var(--border);
+}
+
+/* === カスタムスクロールバー === */
+
+/* WebKit (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* === Reduced motion 対応 === */

@@ -6,6 +6,8 @@ const FilerTree = (() => {
   let onFileSelect; // callback(path)
   let onContextMenu; // callback(path, isDir, x, y)
   let onRootResolved; // callback(resolvedPath) — ルートパス解決通知
+  let onRename; // callback(path) — F2 リネーム
+  let onDelete; // callback(path) — Delete キー削除
   let rootPath = '~';
   let visibleItemsCache = null; // getVisibleTreeItems キャッシュ
   // expanded: Set<path> — 展開中ディレクトリのパス
@@ -17,6 +19,8 @@ const FilerTree = (() => {
     onFileSelect = callbacks.onFileSelect;
     onContextMenu = callbacks.onContextMenu;
     onRootResolved = callbacks.onRootResolved;
+    onRename = callbacks.onRename;
+    onDelete = callbacks.onDelete;
     loadDir(rootPath);
   }
 
@@ -52,6 +56,7 @@ const FilerTree = (() => {
   }
 
   function renderEntries(container, entries, parentPath, depth) {
+    const fragment = document.createDocumentFragment();
     for (const entry of entries) {
       const fullPath = joinPath(parentPath, entry.name);
       const item = document.createElement('div');
@@ -80,7 +85,13 @@ const FilerTree = (() => {
       // アイコン
       const icon = document.createElement('span');
       icon.className = 'tree-icon';
-      icon.innerHTML = entry.is_dir ? DenIcons.folder(14) : DenIcons.file(14);
+      if (entry.is_dir) {
+        icon.innerHTML = DenIcons.folder(14);
+      } else {
+        icon.innerHTML = DenIcons.file(14);
+        const color = DenIcons.fileColor(entry.name);
+        if (color) icon.style.color = color;
+      }
       row.appendChild(icon);
 
       // 名前
@@ -88,6 +99,12 @@ const FilerTree = (() => {
       name.className = `tree-name${entry.is_dir ? ' dir' : ''}`;
       name.textContent = entry.name;
       row.appendChild(name);
+
+      // ツールチップ: サイズ・更新日時
+      if (!entry.is_dir && entry.size !== undefined) {
+        const tooltip = formatSize(entry.size) + (entry.modified ? '  ' + formatDate(entry.modified) : '');
+        row.setAttribute('data-tooltip', tooltip);
+      }
 
       // クリック
       row.addEventListener('click', () => {
@@ -139,6 +156,16 @@ const FilerTree = (() => {
           } else {
             selectFile(fullPath);
           }
+        } else if (e.key === 'F2') {
+          e.preventDefault();
+          if (onRename) onRename(fullPath);
+        } else if (e.key === 'Delete') {
+          e.preventDefault();
+          if (onDelete) onDelete(fullPath);
+        } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+          e.preventDefault();
+          const rect = row.getBoundingClientRect();
+          if (onContextMenu) onContextMenu(fullPath, entry.is_dir, rect.left + rect.width / 2, rect.top + rect.height);
         }
       });
 
@@ -158,8 +185,9 @@ const FilerTree = (() => {
         item.appendChild(children);
       }
 
-      container.appendChild(item);
+      fragment.appendChild(item);
     }
+    container.appendChild(fragment);
   }
 
   async function toggleDir(dirPath) {
@@ -257,6 +285,20 @@ const FilerTree = (() => {
       node = node.parentElement;
     }
     return depth;
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  }
+
+  function formatDate(isoStr) {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
   function enc(s) {

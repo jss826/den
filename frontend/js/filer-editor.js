@@ -227,6 +227,12 @@ const FilerEditor = (() => {
       tab.appendChild(close);
 
       tab.addEventListener('click', () => setActive(path));
+      tab.addEventListener('mousedown', (e) => {
+        if (e.button === 1) { // 中クリック
+          e.preventDefault();
+          closeFile(path);
+        }
+      });
       tabsContainer.appendChild(tab);
     }
 
@@ -332,8 +338,23 @@ const FilerEditor = (() => {
     }
   }
 
+  /** 指定行にスクロールしてハイライト（事前に openFile 済みであること） */
+  function goToLine(filePath, lineNumber) {
+    if (!openFiles.has(filePath) || !lineNumber) return;
+    const file = openFiles.get(filePath);
+    if (activePath !== filePath) setActive(filePath);
+    const line = Math.max(1, lineNumber);
+    const doc = file.view.state.doc;
+    if (line > doc.lines) return;
+    const lineInfo = doc.line(line);
+    file.view.dispatch({
+      selection: { anchor: lineInfo.from, head: lineInfo.to },
+      effects: CM.EditorView.scrollIntoView(lineInfo.from, { y: 'center' }),
+    });
+  }
+
   return {
     init, openFile, closeFile, saveActive, hasUnsavedChanges,
-    notifyRenamed, notifyDeleted,
+    notifyRenamed, notifyDeleted, goToLine,
   };
 })();
