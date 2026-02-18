@@ -101,6 +101,50 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ツールチップ (body直下に配置して overflow:hidden を回避)
+  function initTooltip() {
+    const tip = document.createElement('div');
+    tip.id = 'den-tooltip';
+    document.body.appendChild(tip);
+
+    let showTimer = null;
+
+    document.addEventListener('pointerenter', (e) => {
+      const target = e.target.closest('[data-tooltip]');
+      if (!target) return;
+      // タッチデバイスではツールチップ不要
+      if (e.pointerType === 'touch') return;
+
+      clearTimeout(showTimer);
+      showTimer = setTimeout(() => {
+        tip.textContent = target.getAttribute('data-tooltip');
+        // 一旦表示して寸法を計測
+        tip.style.opacity = '0';
+        tip.style.display = 'block';
+        const rect = target.getBoundingClientRect();
+        const tipRect = tip.getBoundingClientRect();
+
+        // デフォルト: 上部中央。はみ出す場合は下部
+        let top = rect.top - tipRect.height - 6;
+        if (top < 4) top = rect.bottom + 6;
+        let left = rect.left + rect.width / 2 - tipRect.width / 2;
+        // 画面端クランプ
+        left = Math.max(4, Math.min(left, window.innerWidth - tipRect.width - 4));
+
+        tip.style.top = top + 'px';
+        tip.style.left = left + 'px';
+        tip.style.opacity = '1';
+      }, 400);
+    }, true);
+
+    document.addEventListener('pointerleave', (e) => {
+      const target = e.target.closest('[data-tooltip]');
+      if (!target) return;
+      clearTimeout(showTimer);
+      tip.style.opacity = '0';
+    }, true);
+  }
+
   // SVG アイコンを静的ボタンに注入
   function initIcons() {
     const map = {
@@ -124,6 +168,9 @@ document.addEventListener('DOMContentLoaded', () => {
   async function showMain() {
     loginScreen.hidden = true;
     mainScreen.hidden = false;
+
+    // ツールチップ初期化
+    initTooltip();
 
     // SVG アイコン注入
     initIcons();
