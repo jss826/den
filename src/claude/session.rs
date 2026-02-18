@@ -46,7 +46,11 @@ pub fn spawn_claude_session(
     }
 }
 
-/// Claude CLI をインタラクティブモードで起動（`-p` なし、プロンプトは stdin から入力）
+/// Claude CLI をストリーミングモードで起動（`-p --input-format stream-json --output-format stream-json`）
+///
+/// Claude CLI 2.x では `--output-format` は `--print` モードでのみ有効。
+/// `--input-format stream-json` を併用すると、stdin から NDJSON でユーザーメッセージを
+/// 受け取り続ける長寿命プロセスとして動作する。
 pub fn spawn_claude_interactive(
     connection: &ConnectionTarget,
     working_dir: &str,
@@ -57,6 +61,9 @@ pub fn spawn_claude_interactive(
     match connection {
         ConnectionTarget::Local => {
             let args = vec![
+                "-p".to_string(),
+                "--input-format".to_string(),
+                "stream-json".to_string(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
                 "--verbose".to_string(),
@@ -65,8 +72,7 @@ pub fn spawn_claude_interactive(
             spawn_command_pty("claude", &args, working_dir, cols, rows)
         }
         ConnectionTarget::Ssh { host } => {
-            let claude_args =
-                "claude --output-format stream-json --verbose --dangerously-skip-permissions";
+            let claude_args = "claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions";
             let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
             let args = build_ssh_args(host, &remote_cmd, agent_forwarding);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
@@ -221,28 +227,31 @@ mod tests {
     #[test]
     fn interactive_local_args() {
         let args = vec![
+            "-p".to_string(),
+            "--input-format".to_string(),
+            "stream-json".to_string(),
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--verbose".to_string(),
             "--dangerously-skip-permissions".to_string(),
         ];
-        assert_eq!(args.len(), 4);
-        assert!(!args.iter().any(|a| a == "-p"));
+        assert_eq!(args.len(), 7);
+        assert!(args.iter().any(|a| a == "-p"));
+        assert!(args.contains(&"--input-format".to_string()));
         assert!(args.contains(&"--output-format".to_string()));
-        assert!(args.contains(&"stream-json".to_string()));
     }
 
     #[test]
     fn interactive_ssh_args() {
         let host = "user@remote";
         let working_dir = "/home/user";
-        let claude_args =
-            "claude --output-format stream-json --verbose --dangerously-skip-permissions";
+        let claude_args = "claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions";
         let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
         let args = build_ssh_args(host, &remote_cmd, true);
         assert_eq!(args.len(), 6);
         assert_eq!(args[1], "-A"); // agent forwarding enabled
-        assert!(!remote_cmd.contains("claude -p"));
+        assert!(remote_cmd.contains("claude -p"));
+        assert!(remote_cmd.contains("--input-format stream-json"));
         assert!(remote_cmd.contains("--output-format stream-json"));
     }
 

@@ -285,9 +285,9 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                         let _ = store.update_session_meta(&meta);
                     }
 
-                    // プロンプトを stdin に書き込み
-                    let prompt_bytes = format!("{}\n", prompt);
-                    if let Err(e) = shared_session.write_input(prompt_bytes.as_bytes()).await {
+                    // プロンプトを NDJSON 形式で stdin に書き込み
+                    let input_msg = build_stream_json_input(&prompt);
+                    if let Err(e) = shared_session.write_input(input_msg.as_bytes()).await {
                         tracing::warn!("Failed to write prompt to stdin: {}", e);
                         // turn_started 済みなので turn_completed を送って UI をアンブロック
                         let mut map = state_map.lock().await;
@@ -383,9 +383,9 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     let _ = store.update_session_meta(&meta);
                 }
 
-                // プロンプトを stdin に書き込み（プロセス再起動なし）
-                let prompt_bytes = format!("{}\n", prompt);
-                if let Err(e) = shared_session.write_input(prompt_bytes.as_bytes()).await {
+                // プロンプトを NDJSON 形式で stdin に書き込み
+                let input_msg = build_stream_json_input(&prompt);
+                if let Err(e) = shared_session.write_input(input_msg.as_bytes()).await {
                     tracing::warn!("Failed to write prompt to stdin: {}", e);
                     send_error(&ws_tx, "Failed to send prompt to Claude process").await;
                     let mut map = state_map.lock().await;
@@ -782,6 +782,20 @@ fn extract_json_line(line: &str) -> Option<&str> {
     }
 }
 
+/// Claude CLI の stream-json 入力形式（NDJSON）でユーザーメッセージを構築
+fn build_stream_json_input(prompt: &str) -> String {
+    let msg = json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": prompt,
+        },
+        "session_id": "default",
+        "parent_tool_use_id": null,
+    });
+    format!("{}\n", msg)
+}
+
 fn uuid_v4() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -896,5 +910,27 @@ mod tests {
     fn is_result_event_invalid_json() {
         assert!(!is_result_event("not json"));
         assert!(!is_result_event(""));
+    }
+
+    #[test]
+    fn build_stream_json_input_format() {
+        let input = build_stream_json_input("hello world");
+        let parsed: Value = serde_json::from_str(input.trim()).unwrap();
+        assert_eq!(parsed["type"], "user");
+        assert_eq!(parsed["message"]["role"], "user");
+        assert_eq!(parsed["message"]["content"], "hello world");
+        assert_eq!(parsed["session_id"], "default");
+        assert!(parsed["parent_tool_use_id"].is_null());
+        assert!(input.ends_with('\n'));
+    }
+
+    #[test]
+    fn build_stream_json_input_escapes_special_chars() {
+        let input = build_stream_json_input("test \"quotes\" and\nnewlines");
+        let parsed: Value = serde_json::from_str(input.trim()).unwrap();
+        assert_eq!(
+            parsed["message"]["content"],
+            "test \"quotes\" and\nnewlines"
+        );
     }
 }
