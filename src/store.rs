@@ -200,6 +200,37 @@ impl Store {
         }
     }
 
+    /// サーバー起動時に status=="running" のセッションを "completed" にリセット。
+    /// 再起動後にプロセスが生き残ることはないため安全。
+    pub fn cleanup_stale_running_sessions(&self) {
+        let sessions_dir = self.root.join("sessions");
+        let entries = match fs::read_dir(&sessions_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if let Some(mut meta) = self.load_session_meta_from_path(&entry.path())
+                && meta.status == "running"
+            {
+                tracing::info!(
+                    "Cleaning up stale running session: {} (created {})",
+                    meta.id,
+                    meta.created_at
+                );
+                meta.status = "completed".to_string();
+                if meta.finished_at.is_none() {
+                    meta.finished_at = Some(chrono::Utc::now());
+                }
+                if let Err(e) = self.update_session_meta(&meta) {
+                    tracing::warn!("Failed to clean up session {}: {}", meta.id, e);
+                }
+            }
+        }
+    }
+
     pub fn update_session_meta(&self, meta: &SessionMeta) -> std::io::Result<()> {
         if !is_valid_session_id(&meta.id) {
             return Err(std::io::Error::new(
@@ -513,5 +544,37 @@ mod tests {
         let list = store.list_sessions();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "good");
+    }
+
+    #[test]
+    fn cleanup_stale_running_sessions() {
+        let (store, _tmp) = temp_store();
+        // sample_meta creates with status: "running"
+        let running = sample_meta("sess-running");
+        store.create_session(&running).unwrap();
+
+        let mut completed = sample_meta("sess-done");
+        completed.status = "completed".to_string();
+        completed.finished_at = Some(Utc::now());
+        store.create_session(&completed).unwrap();
+        store.update_session_meta(&completed).unwrap();
+
+        store.cleanup_stale_running_sessions();
+
+        let r = store.load_session_meta("sess-running").unwrap();
+        assert_eq!(r.status, "completed");
+        assert!(r.finished_at.is_some());
+
+        // already-completed session is untouched
+        let c = store.load_session_meta("sess-done").unwrap();
+        assert_eq!(c.status, "completed");
+    }
+
+    #[test]
+    fn cleanup_no_sessions_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::from_data_dir(tmp.path().to_str().unwrap()).unwrap();
+        // sessions dir exists but is empty — should not panic
+        store.cleanup_stale_running_sessions();
     }
 }

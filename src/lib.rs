@@ -40,6 +40,7 @@ pub fn create_app_with_secret(
     hmac_secret: Vec<u8>,
 ) -> Router {
     let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
+    store.cleanup_stale_running_sessions();
 
     let state = Arc::new(AppState {
         config,
