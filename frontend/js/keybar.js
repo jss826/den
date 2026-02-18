@@ -105,5 +105,10 @@ const Keybar = (() => {
     });
   }
 
-  return { init, reload, getDefaultKeys, isTouchDevice };
+  /** 現在の修飾キー状態を返す（外部参照用） */
+  function getModifiers() {
+    return modifiers;
+  }
+
+  return { init, reload, getDefaultKeys, isTouchDevice, getModifiers, resetModifiers };
 })();
