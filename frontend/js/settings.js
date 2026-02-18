@@ -160,6 +160,7 @@ const DenSettings = (() => {
       removeBtn.className = 'keybar-btn-remove';
       removeBtn.textContent = '\u00d7';
       removeBtn.type = 'button';
+      removeBtn.setAttribute('data-tooltip', 'Remove');
       removeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         editingKeybarButtons.splice(idx, 1);
@@ -297,6 +298,7 @@ const DenSettings = (() => {
           const btn = document.createElement('button');
           btn.className = 'dir-drive-btn';
           btn.textContent = d;
+          btn.setAttribute('data-tooltip', 'Switch to ' + d);
           btn.addEventListener('click', () => { settingsDirUserModified = true; loadSettingsDir(d); });
           drivesContainer.appendChild(btn);
         });

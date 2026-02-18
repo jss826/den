@@ -51,7 +51,7 @@
       <div class="claude-layout">
         <!-- サイドバー -->
         <div class="claude-sidebar">
-          <button class="sidebar-toggle claude-sidebar-toggle" aria-label="Toggle sidebar"></button>
+          <button class="sidebar-toggle claude-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
           <button id="claude-new-session" class="claude-new-btn">+ New Session</button>
           <div id="claude-session-list" class="claude-sessions"></div>
           <div class="sidebar-divider"></div>
@@ -75,13 +75,14 @@
       <div class="filer-layout">
         <!-- サイドバー: ツリービュー -->
         <div class="filer-sidebar">
-          <button class="sidebar-toggle filer-sidebar-toggle" aria-label="Toggle sidebar"></button>
+          <button class="sidebar-toggle filer-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
           <div class="filer-toolbar">
             <button id="filer-new-file" class="filer-tool-btn" data-tooltip="New File" aria-label="New file"></button>
             <button id="filer-new-folder" class="filer-tool-btn" data-tooltip="New Folder" aria-label="New folder"></button>
             <button id="filer-upload" class="filer-tool-btn" data-tooltip="Upload" aria-label="Upload file"></button>
             <button id="filer-refresh" class="filer-tool-btn" data-tooltip="Refresh" aria-label="Refresh tree"></button>
           </div>
+          <div id="filer-drives" class="dir-drives"></div>
           <nav id="filer-breadcrumb" class="filer-breadcrumb" aria-label="Current path"></nav>
           <div class="filer-search">
             <input type="text" id="filer-search-input" placeholder="Search files..." aria-label="Search files" />
@@ -91,9 +92,9 @@
         <!-- メインエリア: エディタ -->
         <div class="filer-main">
           <div class="filer-tabs-wrapper">
-            <button class="filer-tabs-scroll left" hidden aria-label="Scroll tabs left"></button>
+            <button class="filer-tabs-scroll left" hidden data-tooltip="Scroll Left" aria-label="Scroll tabs left"></button>
             <div id="filer-tabs" class="filer-tabs" role="tablist" aria-label="Open files"></div>
-            <button class="filer-tabs-scroll right" hidden aria-label="Scroll tabs right"></button>
+            <button class="filer-tabs-scroll right" hidden data-tooltip="Scroll Right" aria-label="Scroll tabs right"></button>
           </div>
           <div id="filer-editor" class="filer-editor">
             <div class="filer-welcome">
@@ -156,9 +157,9 @@
           <label>Working Directory</label>
           <div id="modal-dir-browser" class="dir-browser">
             <div class="dir-path">
-              <button id="dir-up" class="dir-up-btn">..</button>
+              <button id="dir-up" class="dir-up-btn" data-tooltip="Parent Directory">..</button>
               <input type="text" id="dir-path-input" class="dir-path-input" placeholder="Type path (e.g. D:\)" />
-              <button id="dir-go" class="dir-up-btn">Go</button>
+              <button id="dir-go" class="dir-up-btn" data-tooltip="Navigate">Go</button>
             </div>
             <div id="dir-list" class="dir-list"></div>
           </div>
@@ -221,9 +222,9 @@
           <label>Default Working Directory</label>
           <div id="settings-dir-browser" class="dir-browser">
             <div class="dir-path">
-              <button id="settings-dir-up" class="dir-up-btn">..</button>
+              <button id="settings-dir-up" class="dir-up-btn" data-tooltip="Parent Directory">..</button>
               <input type="text" id="setting-default-dir" class="dir-path-input" placeholder="~ (default)" />
-              <button id="settings-dir-go" class="dir-up-btn">Go</button>
+              <button id="settings-dir-go" class="dir-up-btn" data-tooltip="Navigate">Go</button>
             </div>
             <div id="settings-dir-drives" class="dir-drives"></div>
             <div id="settings-dir-list" class="dir-list"></div>

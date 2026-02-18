@@ -302,6 +302,7 @@ const ClaudeSession = (() => {
         const btn = document.createElement('button');
         btn.className = 'dir-drive-btn';
         btn.textContent = d;
+        btn.setAttribute('data-tooltip', 'Switch to ' + d);
         btn.addEventListener('click', () => navigateToPath(d));
         drivesContainer.appendChild(btn);
       });

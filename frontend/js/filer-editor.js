@@ -220,6 +220,7 @@ const FilerEditor = (() => {
       const close = document.createElement('button');
       close.className = 'filer-tab-close';
       close.textContent = '\u00D7';
+      close.setAttribute('data-tooltip', 'Close');
       close.addEventListener('click', (e) => {
         e.stopPropagation();
         closeFile(path);

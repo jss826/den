@@ -1554,6 +1554,12 @@ html, body {
   border-color: var(--border);
 }
 
+/* ファイラ ドライブ切替 */
+.filer-sidebar > .dir-drives {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 /* ブレッドクラム */
 .filer-breadcrumb {
   display: flex;

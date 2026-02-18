@@ -22,7 +22,10 @@ const DenFiler = (() => {
       onRootResolved: (resolvedPath) => {
         currentDir = resolvedPath;
         renderBreadcrumb(resolvedPath);
+        // 初回: ドライブ一覧がまだない場合、ルートドライブから取得
+        fetchDrivesIfNeeded(resolvedPath);
       },
+      onDrivesLoaded: renderDrives,
       onRename: promptRename,
       onDelete: doDelete,
     });
@@ -145,6 +148,41 @@ const DenFiler = (() => {
         FilerTree.refresh();
       }
     });
+  }
+
+  // --- ドライブ切替 ---
+
+  let drivesLoaded = false;
+
+  function renderDrives(drives) {
+    drivesLoaded = true;
+    const container = document.getElementById('filer-drives');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!drives || drives.length === 0) return;
+    drives.forEach(d => {
+      const btn = document.createElement('button');
+      btn.className = 'dir-drive-btn';
+      btn.textContent = d;
+      btn.setAttribute('data-tooltip', 'Switch to ' + d);
+      btn.addEventListener('click', () => {
+        FilerTree.setRoot(d);
+        currentDir = d;
+      });
+      container.appendChild(btn);
+    });
+  }
+
+  async function fetchDrivesIfNeeded(resolvedPath) {
+    if (drivesLoaded) return;
+    // ドライブルートを抽出（例: "D:\Documents\..." → "D:\"）
+    const match = resolvedPath.match(/^([A-Za-z]:\\)/);
+    if (!match) return;
+    const driveRoot = match[1];
+    const data = await apiFetch(`/api/filer/list?path=${enc(driveRoot)}&show_hidden=false`);
+    if (data && data.drives) {
+      renderDrives(data.drives);
+    }
   }
 
   // --- ブレッドクラム ---

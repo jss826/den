@@ -6,6 +6,7 @@ const FilerTree = (() => {
   let onFileSelect; // callback(path)
   let onContextMenu; // callback(path, isDir, x, y)
   let onRootResolved; // callback(resolvedPath) — ルートパス解決通知
+  let onDrivesLoaded; // callback(drives) — ドライブ一覧通知
   let onRename; // callback(path) — F2 リネーム
   let onDelete; // callback(path) — Delete キー削除
   let rootPath = '~';
@@ -19,6 +20,7 @@ const FilerTree = (() => {
     onFileSelect = callbacks.onFileSelect;
     onContextMenu = callbacks.onContextMenu;
     onRootResolved = callbacks.onRootResolved;
+    onDrivesLoaded = callbacks.onDrivesLoaded;
     onRename = callbacks.onRename;
     onDelete = callbacks.onDelete;
     loadDir(rootPath);
@@ -43,6 +45,7 @@ const FilerTree = (() => {
         treeEl.innerHTML = '';
         renderEntries(treeEl, data.entries, data.path, 0);
         if (onRootResolved) onRootResolved(data.path);
+        if (data.drives && onDrivesLoaded) onDrivesLoaded(data.drives);
       } else {
         const childrenEl = treeEl.querySelector(`[data-children="${CSS.escape(dirPath)}"]`);
         if (childrenEl) {
@@ -317,5 +320,9 @@ const FilerTree = (() => {
     }
   }
 
-  return { init, setRoot, refresh, refreshDir, getParentPath, selectFile };
+  function getRootPath() {
+    return rootPath;
+  }
+
+  return { init, setRoot, refresh, refreshDir, getParentPath, selectFile, getRootPath };
 })();
