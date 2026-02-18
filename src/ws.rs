@@ -124,8 +124,7 @@ async fn handle_socket(
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
-                    session.activate_client(client_id).await;
-                    if session.write_input(&data).await.is_err() {
+                    if session.write_input_from(client_id, &data).await.is_err() {
                         break;
                     }
                 }
@@ -136,8 +135,11 @@ async fn handle_socket(
                                 session.resize(client_id, cols, rows).await;
                             }
                             WsCommand::Input { data } => {
-                                session.activate_client(client_id).await;
-                                if session.write_input(data.as_bytes()).await.is_err() {
+                                if session
+                                    .write_input_from(client_id, data.as_bytes())
+                                    .await
+                                    .is_err()
+                                {
                                     break;
                                 }
                             }

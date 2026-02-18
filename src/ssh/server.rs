@@ -452,9 +452,6 @@ impl Handler for DenSshHandler {
         if let Some(ref name) = self.session_name
             && let Some(session) = self.registry.get(name).await
         {
-            if let Some(client_id) = self.client_id {
-                session.activate_client(client_id).await;
-            }
             let filtered = filter_terminal_responses(data);
             if data.len() != filtered.len() {
                 tracing::debug!(
@@ -464,7 +461,11 @@ impl Handler for DenSshHandler {
                 );
             }
             if !filtered.is_empty() {
-                let _ = session.write_input(&filtered).await;
+                if let Some(client_id) = self.client_id {
+                    let _ = session.write_input_from(client_id, &filtered).await;
+                } else {
+                    let _ = session.write_input(&filtered).await;
+                }
             }
         }
         Ok(())

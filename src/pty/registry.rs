@@ -414,7 +414,10 @@ impl SessionRegistry {
         let rx = session.subscribe();
         let replay = session.replay_buf.lock().unwrap().read_all();
 
-        // リサイズ再計算
+        // アクティブクライアントがいない場合は新クライアントをアクティブにする
+        if inner.active_client_id.is_none() {
+            inner.active_client_id = Some(client_id);
+        }
         Self::recalculate_size(&mut inner);
 
         drop(inner);
@@ -464,6 +467,7 @@ impl SessionRegistry {
                     rows,
                     last_active: std::time::Instant::now(),
                 });
+                inner.active_client_id = Some(client_id);
 
                 // first_rx は read_task 開始前に作成済みのため、
                 // ConPTY の初期出力（DSR 等）を確実に保持している。
@@ -502,6 +506,11 @@ impl SessionRegistry {
 
         let mut inner = session.inner.lock().await;
         inner.clients.retain(|c| c.id != client_id);
+
+        // アクティブクライアントが切断された場合はクリア
+        if inner.active_client_id == Some(client_id) {
+            inner.active_client_id = None;
+        }
 
         // リサイズ再計算（クライアントが残っている場合のみ）
         if !inner.clients.is_empty() {
@@ -635,6 +644,23 @@ impl SharedSession {
             return Err("Session is dead".to_string());
         }
         let mut inner = self.inner.lock().await;
+        std::io::Write::write_all(&mut inner.pty_writer, data)
+            .map_err(|e| format!("Write failed: {e}"))
+    }
+
+    /// クライアントのアクティブ化 + PTY 入力書き込み（1回のロックで実行）
+    pub async fn write_input_from(&self, client_id: u64, data: &[u8]) -> Result<(), String> {
+        if !self.is_alive() {
+            return Err("Session is dead".to_string());
+        }
+        let mut inner = self.inner.lock().await;
+        if inner.active_client_id != Some(client_id) {
+            if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+                client.last_active = std::time::Instant::now();
+            }
+            inner.active_client_id = Some(client_id);
+            SessionRegistry::recalculate_size(&mut inner);
+        }
         std::io::Write::write_all(&mut inner.pty_writer, data)
             .map_err(|e| format!("Write failed: {e}"))
     }
