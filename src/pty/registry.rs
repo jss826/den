@@ -84,6 +84,8 @@ pub struct SessionInner {
     resize_handle: Option<tokio::task::JoinHandle<()>>,
     // Clients
     clients: Vec<ClientInfo>,
+    /// 現在アクティブなクライアント ID（入力 or リサイズした最後のクライアント）
+    active_client_id: Option<u64>,
     // Resources
     #[cfg(windows)]
     pub job: Option<super::job::PtyJobObject>,
@@ -96,8 +98,8 @@ pub struct ClientInfo {
     pub kind: ClientKind,
     pub cols: u16,
     pub rows: u16,
-    /// 最後にリサイズした時刻（latest 戦略で使用）
-    pub last_resize: std::time::Instant,
+    /// 最後にアクティブだった時刻（入力 or リサイズ時に更新）
+    pub last_active: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +173,7 @@ impl SessionRegistry {
                 resize_tx: Some(resize_tx),
                 resize_handle: Some(resize_handle),
                 clients: Vec::new(),
+                active_client_id: None,
                 #[cfg(windows)]
                 job,
                 child: Some(child),
@@ -405,7 +408,7 @@ impl SessionRegistry {
             kind,
             cols,
             rows,
-            last_resize: std::time::Instant::now(),
+            last_active: std::time::Instant::now(),
         });
 
         let rx = session.subscribe();
@@ -459,7 +462,7 @@ impl SessionRegistry {
                     kind,
                     cols,
                     rows,
-                    last_resize: std::time::Instant::now(),
+                    last_active: std::time::Instant::now(),
                 });
 
                 // first_rx は read_task 開始前に作成済みのため、
@@ -602,19 +605,25 @@ impl SessionRegistry {
         self.sessions.read().await.get(name).cloned()
     }
 
-    /// リサイズ再計算: 最後にリサイズしたクライアントのサイズを採用（latest 戦略）
+    /// リサイズ再計算: アクティブなクライアントのサイズを PTY に反映する
     ///
-    /// 複数クライアントが接続中でも、アクティブに操作している端末のサイズが
-    /// PTY に反映される。TUI アプリの描画崩れを防止する。
+    /// アクティブなクライアントは、最後に入力またはリサイズしたクライアント。
+    /// フォールバックとして last_active が最新のクライアントを使用する。
     fn recalculate_size(inner: &mut SessionInner) {
         if inner.clients.is_empty() {
             return;
         }
 
-        let latest = inner.clients.iter().max_by_key(|c| c.last_resize).unwrap();
+        let active = if let Some(id) = inner.active_client_id {
+            inner.clients.iter().find(|c| c.id == id)
+        } else {
+            None
+        }
+        .or_else(|| inner.clients.iter().max_by_key(|c| c.last_active))
+        .unwrap();
 
         if let Some(ref tx) = inner.resize_tx {
-            let _ = tx.send((latest.cols, latest.rows));
+            let _ = tx.send((active.cols, active.rows));
         }
     }
 }
@@ -636,8 +645,23 @@ impl SharedSession {
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.cols = cols;
             client.rows = rows;
-            client.last_resize = std::time::Instant::now();
+            client.last_active = std::time::Instant::now();
         }
+        inner.active_client_id = Some(client_id);
+        SessionRegistry::recalculate_size(&mut inner);
+    }
+
+    /// クライアントをアクティブにする（入力時に呼ばれる）
+    /// アクティブなクライアントが変わった場合のみ PTY をリサイズする
+    pub async fn activate_client(&self, client_id: u64) {
+        let mut inner = self.inner.lock().await;
+        if inner.active_client_id == Some(client_id) {
+            return; // 既にアクティブ → 何もしない
+        }
+        if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+            client.last_active = std::time::Instant::now();
+        }
+        inner.active_client_id = Some(client_id);
         SessionRegistry::recalculate_size(&mut inner);
     }
 
