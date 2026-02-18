@@ -158,10 +158,11 @@ const ClaudeParser = (() => {
 
     // コードブロック ```lang\n...\n``` — プレースホルダーで退避
     const codeBlocks = [];
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => {
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
       const idx = codeBlocks.length;
-      codeBlocks.push('<div class="code-block-wrapper"><pre class="code-block"><code>' +
-        code + '</code></pre><button class="code-copy-btn">Copy</button></div>');
+      const langAttr = lang ? ` class="language-${lang}"` : '';
+      codeBlocks.push('<div class="code-block-wrapper"><pre class="code-block"><code' +
+        langAttr + '>' + code + '</code></pre><button class="code-copy-btn">Copy</button></div>');
       return '\x00CB' + idx + '\x00';
     });
 
@@ -219,13 +220,13 @@ const ClaudeParser = (() => {
 
     html = result.join('\n');
 
-    // リンク: [text](url) — 安全なスキームのみ許可
+    // リンク: [text](url) — 安全なスキームのみ許可（URL は esc() でエスケープ）
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text, url) => {
       const trimmed = url.trim().toLowerCase();
       if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('mailto:')) {
-        return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+        return `<a href="${esc(url.trim())}" target="_blank" rel="noopener">${text}</a>`;
       }
-      return `${text} (${url})`;
+      return `${text} (${esc(url)})`;
     });
 
     // 太字: **text**
@@ -254,9 +255,11 @@ const ClaudeParser = (() => {
   }
 
   function esc(str) {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   function truncate(str, max) {

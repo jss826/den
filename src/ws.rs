@@ -120,11 +120,13 @@ async fn handle_socket(
     };
 
     // WS → PTY 転送
+    let name_for_input = session_name.clone();
     let ws_to_pty = async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
-                    if session.write_input_from(client_id, &data).await.is_err() {
+                    if let Err(e) = session.write_input_from(client_id, &data).await {
+                        tracing::warn!("WS write_input failed for session {name_for_input}: {e}");
                         break;
                     }
                 }
@@ -135,11 +137,12 @@ async fn handle_socket(
                                 session.resize(client_id, cols, rows).await;
                             }
                             WsCommand::Input { data } => {
-                                if session
-                                    .write_input_from(client_id, data.as_bytes())
-                                    .await
-                                    .is_err()
+                                if let Err(e) =
+                                    session.write_input_from(client_id, data.as_bytes()).await
                                 {
+                                    tracing::warn!(
+                                        "WS write_input failed for session {name_for_input}: {e}"
+                                    );
                                     break;
                                 }
                             }

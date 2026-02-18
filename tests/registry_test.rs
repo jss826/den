@@ -232,6 +232,34 @@ fn pty_non_interactive() {
             assert!(!reg.exists(&name).await);
         }
 
+        // --- write_input_from: アクティブ切り替え + dead session エラー ---
+        {
+            let reg = new_registry();
+            let name = session_name("wif");
+
+            let (_s, _rx) = reg.create(&name, 80, 24).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            let (s, _rx1, _rp1, id1) = reg
+                .attach(&name, ClientKind::WebSocket, 120, 40)
+                .await
+                .unwrap();
+            let (_s2, _rx2, _rp2, id2) = reg.attach(&name, ClientKind::Ssh, 80, 24).await.unwrap();
+
+            // 登録済みクライアントからの書き込みは成功する
+            assert!(s.write_input_from(id1, b"test1").await.is_ok());
+            // 別クライアントに切り替えても成功する
+            assert!(s.write_input_from(id2, b"test2").await.is_ok());
+            // 既にアクティブなクライアントの再書き込みも成功する
+            assert!(s.write_input_from(id2, b"test3").await.is_ok());
+            // 未登録クライアント ID でも書き込み自体は成功する（アクティブ切替はスキップ）
+            assert!(s.write_input_from(99999, b"test4").await.is_ok());
+
+            // destroy 後は dead → エラー
+            reg.destroy(&name).await;
+            assert!(s.write_input_from(id1, b"test5").await.is_err());
+        }
+
         // --- resize (multiple clients) ---
         {
             let reg = new_registry();

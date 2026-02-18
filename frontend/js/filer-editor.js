@@ -10,6 +10,7 @@ const FilerEditor = (() => {
 
   let scrollLeftBtn;
   let scrollRightBtn;
+  let renderTabsScheduled = false;
 
   function init(editorEl, tabsEl) {
     editorContainer = editorEl;
@@ -41,11 +42,16 @@ const FilerEditor = (() => {
     if (mdBtn) mdBtn.addEventListener('click', toggleMdPreview);
   }
 
-  const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'];
+  const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp'];
+
+  function getExtension(filePath) {
+    const name = filePath.split(/[/\\]/).pop() || '';
+    const dotIdx = name.lastIndexOf('.');
+    return dotIdx > 0 ? name.slice(dotIdx + 1).toLowerCase() : '';
+  }
 
   function isImageFile(filePath) {
-    const ext = filePath.split('.').pop().toLowerCase();
-    return IMAGE_EXTS.includes(ext);
+    return IMAGE_EXTS.includes(getExtension(filePath));
   }
 
   async function openFile(filePath) {
@@ -109,25 +115,29 @@ const FilerEditor = (() => {
     wrapper.className = 'filer-image-preview';
 
     const img = document.createElement('img');
-    img.src = `/api/filer/download?path=${enc(filePath)}`;
     img.alt = fileName(filePath);
-    // 認証ヘッダーが必要なので fetch + blob URL を使用
+
+    // 認証ヘッダー付き fetch + blob URL で画像取得（AbortController でキャンセル可能）
+    const controller = new AbortController();
+    let blobUrl = null;
     fetch(`/api/filer/download?path=${enc(filePath)}`, {
       headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+      signal: controller.signal,
     }).then(resp => {
       if (!resp.ok) { Toast.error('Failed to load image'); return; }
       return resp.blob();
     }).then(blob => {
       if (!blob) return;
-      img.src = URL.createObjectURL(blob);
-    });
+      blobUrl = URL.createObjectURL(blob);
+      img.src = blobUrl;
+    }).catch(() => {});
 
     wrapper.appendChild(img);
 
     // 疑似 view オブジェクト（setActive / closeFile で EditorView と同じインターフェース）
     const pseudoView = {
       dom: wrapper,
-      destroy() { URL.revokeObjectURL(img.src); wrapper.remove(); },
+      destroy() { controller.abort(); if (blobUrl) URL.revokeObjectURL(blobUrl); wrapper.remove(); },
       focus() {},
       state: { doc: { toString() { return ''; } } },
     };
@@ -144,7 +154,7 @@ const FilerEditor = (() => {
   }
 
   function isMarkdownFile(filePath) {
-    const ext = filePath.split('.').pop().toLowerCase();
+    const ext = getExtension(filePath);
     return ext === 'md' || ext === 'mdx';
   }
 
@@ -172,25 +182,29 @@ const FilerEditor = (() => {
     // Markdown プレビューモード判定
     const mdBtn = document.getElementById('filer-md-preview-toggle');
     if (isMarkdownFile(filePath) && !file.isImage) {
-      mdBtn.hidden = false;
-      mdBtn.innerHTML = file.mdPreview ? '\u270E' : '\u25B6';
-      mdBtn.title = file.mdPreview ? 'Edit' : 'Preview';
+      if (mdBtn) {
+        mdBtn.hidden = false;
+        mdBtn.innerHTML = file.mdPreview ? '\u270E' : '\u25B6';
+        mdBtn.title = file.mdPreview ? 'Edit' : 'Preview';
+      }
 
       if (file.mdPreview) {
         if (!file.previewDom) {
           file.previewDom = document.createElement('div');
           file.previewDom.className = 'filer-md-preview';
         }
-        file.previewDom.innerHTML = ClaudeParser.renderMarkdown(
-          file.view.state.doc.toString()
-        );
+        const content = file.view.state.doc.toString();
+        if (!file.previewCache || file.previewCache !== content) {
+          file.previewDom.innerHTML = ClaudeParser.renderMarkdown(content);
+          file.previewCache = content;
+        }
         editorContainer.appendChild(file.previewDom);
       } else {
         editorContainer.appendChild(file.view.dom);
         file.view.focus();
       }
     } else {
-      mdBtn.hidden = true;
+      if (mdBtn) mdBtn.hidden = true;
       editorContainer.appendChild(file.view.dom);
       file.view.focus();
     }
@@ -216,8 +230,11 @@ const FilerEditor = (() => {
       }
     }
 
-    // エディタ破棄
+    // エディタ/プレビュー破棄
     file.view.destroy();
+    if (file.previewDom && file.previewDom.parentElement) {
+      file.previewDom.remove();
+    }
     openFiles.delete(filePath);
 
     // アクティブファイルが閉じられた場合
@@ -273,7 +290,7 @@ const FilerEditor = (() => {
   }
 
   function fileTypeIcon(path) {
-    const ext = path.split('.').pop().toLowerCase();
+    const ext = getExtension(path);
     const map = {
       js: 'JS', mjs: 'JS', jsx: 'JX', ts: 'TS', tsx: 'TX',
       rs: 'RS', py: 'PY', go: 'GO', rb: 'RB', java: 'JV',
@@ -282,7 +299,7 @@ const FilerEditor = (() => {
       json: '{}', yaml: 'YM', yml: 'YM', toml: 'TM',
       md: '\u00b6', txt: 'Tx',
       png: '\u25A3', jpg: '\u25A3', jpeg: '\u25A3', gif: '\u25A3',
-      webp: '\u25A3', svg: '\u25A3', ico: '\u25A3', bmp: '\u25A3',
+      webp: '\u25A3', ico: '\u25A3', bmp: '\u25A3',
       sh: '$', bash: '$', zsh: '$', ps1: 'PS',
       sql: 'SQ', graphql: 'GQ',
     };
@@ -290,6 +307,13 @@ const FilerEditor = (() => {
   }
 
   function renderTabs() {
+    if (renderTabsScheduled) return;
+    renderTabsScheduled = true;
+    requestAnimationFrame(renderTabsImmediate);
+  }
+
+  function renderTabsImmediate() {
+    renderTabsScheduled = false;
     tabsContainer.innerHTML = '';
     for (const [path, file] of openFiles) {
       const tab = document.createElement('div');
@@ -334,14 +358,12 @@ const FilerEditor = (() => {
       tabsContainer.appendChild(tab);
     }
 
-    // アクティブタブを可視領域にスクロール
-    requestAnimationFrame(() => {
-      const activeTab = tabsContainer.querySelector('.filer-tab.active');
-      if (activeTab) {
-        activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      }
-      updateScrollButtons();
-    });
+    // アクティブタブを可視領域にスクロール（renderTabsImmediate は rAF 内で実行済み）
+    const activeTab = tabsContainer.querySelector('.filer-tab.active');
+    if (activeTab) {
+      activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    updateScrollButtons();
   }
 
   function updateScrollButtons() {

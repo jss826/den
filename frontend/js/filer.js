@@ -82,10 +82,13 @@ const DenFiler = (() => {
     const layout = document.querySelector('.filer-layout');
     if (!btn || !sidebar || !layout) return;
 
-    let isRight = false;
+    // localStorage から状態を復元
+    let isRight = localStorage.getItem('filer-tree-right') === 'true';
+    const wasCollapsed = localStorage.getItem('filer-tree-collapsed') === 'true';
 
     function updateToggleIcon() {
       const collapsed = sidebar.classList.contains('collapsed');
+      btn.setAttribute('aria-expanded', String(!collapsed));
       if (isRight) {
         btn.innerHTML = collapsed ? DenIcons.chevronLeft(14) : DenIcons.chevronRight(14);
       } else {
@@ -93,21 +96,24 @@ const DenFiler = (() => {
       }
     }
 
-    btn.innerHTML = DenIcons.chevronLeft(14);
-    btn.setAttribute('aria-expanded', 'true');
+    // 初期状態を適用
+    if (isRight) layout.classList.add('tree-right');
+    if (wasCollapsed) sidebar.classList.add('collapsed');
+    updateToggleIcon();
 
     btn.addEventListener('click', () => {
       sidebar.classList.toggle('collapsed');
-      btn.setAttribute('aria-expanded', String(!sidebar.classList.contains('collapsed')));
+      localStorage.setItem('filer-tree-collapsed', String(sidebar.classList.contains('collapsed')));
       updateToggleIcon();
     });
 
     // 左右切替
     if (sideBtn) {
-      sideBtn.innerHTML = DenIcons.panelRight(14);
+      sideBtn.innerHTML = isRight ? DenIcons.panelLeft(14) : DenIcons.panelRight(14);
       sideBtn.addEventListener('click', () => {
         isRight = !isRight;
         layout.classList.toggle('tree-right', isRight);
+        localStorage.setItem('filer-tree-right', String(isRight));
         sideBtn.innerHTML = isRight ? DenIcons.panelLeft(14) : DenIcons.panelRight(14);
         updateToggleIcon();
       });
@@ -491,7 +497,7 @@ const DenFiler = (() => {
     }
 
     if (data.length === 0) {
-      resultsEl.innerHTML = '<div style="padding:16px;color:var(--border);text-align:center">No results</div>';
+      resultsEl.innerHTML = '<div style="padding:16px;color:var(--muted);text-align:center">No results</div>';
     } else {
       for (const r of data) {
         const item = document.createElement('div');

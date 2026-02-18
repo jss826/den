@@ -52,7 +52,7 @@ const Keybar = (() => {
 
   function render() {
     container.innerHTML = '';
-    modifiers = { ctrl: false, alt: false };
+    modifiers = { ctrl: false, alt: false, shift: false };
     activeKeys.forEach((key) => {
       const btn = document.createElement('button');
       btn.className = 'key-btn';
@@ -113,11 +113,12 @@ const Keybar = (() => {
     });
   }
 
-  /** CSI シーケンスに修飾パラメータを付加 */
+  /** CSI シーケンスに修飾パラメータを付加
+   *  制約: 既にセミコロン付きパラメータを含む CSI（例: ESC[1;5A）には未対応。
+   *  DEFAULT_KEYS の CSI は単一パラメータまたはパラメータなしのため現状問題なし。 */
   function addCsiModifier(seq, mod) {
     // ESC[X → ESC[1;modX  (例: ESC[A → ESC[1;2A)
     // ESC[n~ → ESC[n;mod~ (例: ESC[2~ → ESC[2;2~)
-    // ESC[n;mX は既存パラメータがある場合
     const body = seq.slice(2); // CSI 以降
     const finalChar = body[body.length - 1];
     const params = body.slice(0, -1);

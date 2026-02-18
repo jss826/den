@@ -86,6 +86,8 @@ pub struct SessionInner {
     clients: Vec<ClientInfo>,
     /// 現在アクティブなクライアント ID（入力 or リサイズした最後のクライアント）
     active_client_id: Option<u64>,
+    /// 前回の PTY サイズ（同一サイズでのリサイズ抑止用）
+    last_size: (u16, u16),
     // Resources
     #[cfg(windows)]
     pub job: Option<super::job::PtyJobObject>,
@@ -174,6 +176,7 @@ impl SessionRegistry {
                 resize_handle: Some(resize_handle),
                 clients: Vec::new(),
                 active_client_id: None,
+                last_size: (0, 0),
                 #[cfg(windows)]
                 job,
                 child: Some(child),
@@ -634,10 +637,15 @@ impl SessionRegistry {
             None
         }
         .or_else(|| inner.clients.iter().max_by_key(|c| c.last_active))
-        .unwrap();
+        .expect("clients is non-empty; checked above");
 
+        let new_size = (active.cols, active.rows);
+        if new_size == inner.last_size {
+            return;
+        }
+        inner.last_size = new_size;
         if let Some(ref tx) = inner.resize_tx {
-            let _ = tx.send((active.cols, active.rows));
+            let _ = tx.send(new_size);
         }
     }
 }
@@ -645,6 +653,8 @@ impl SessionRegistry {
 impl SharedSession {
     /// PTY への入力書き込み
     pub async fn write_input(&self, data: &[u8]) -> Result<(), String> {
+        // 楽観的 alive チェック（早期リターン用）: ロック取得までの間に死亡した場合は
+        // write_all がエラーを返すため安全
         if !self.is_alive() {
             return Err("Session is dead".to_string());
         }
@@ -654,22 +664,23 @@ impl SharedSession {
     }
 
     /// クライアントのアクティブ化 + PTY 入力書き込み（1回のロックで実行）
+    ///
+    /// 未登録の client_id でも PTY への書き込み自体は成功する（アクティブ切替のみスキップ）。
     pub async fn write_input_from(&self, client_id: u64, data: &[u8]) -> Result<(), String> {
+        // 楽観的 alive チェック（早期リターン用）: ロック取得までの間に死亡した場合は
+        // write_all がエラーを返すため安全
         if !self.is_alive() {
             return Err("Session is dead".to_string());
         }
         let mut inner = self.inner.lock().await;
-        // last_active は常に更新（フォールバック選択の精度向上）
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.last_active = std::time::Instant::now();
-        }
-        if inner.active_client_id != Some(client_id) {
-            if inner.clients.iter().any(|c| c.id == client_id) {
+            if inner.active_client_id != Some(client_id) {
                 inner.active_client_id = Some(client_id);
                 SessionRegistry::recalculate_size(&mut inner);
-            } else {
-                tracing::debug!("write_input_from: client_id {client_id} not found in session");
             }
+        } else {
+            tracing::debug!("write_input_from: client_id {client_id} not found in session");
         }
         std::io::Write::write_all(&mut inner.pty_writer, data)
             .map_err(|e| format!("Write failed: {e}"))
@@ -682,8 +693,8 @@ impl SharedSession {
             client.cols = cols;
             client.rows = rows;
             client.last_active = std::time::Instant::now();
+            inner.active_client_id = Some(client_id);
         }
-        inner.active_client_id = Some(client_id);
         SessionRegistry::recalculate_size(&mut inner);
     }
 

@@ -7,7 +7,7 @@ use russh::server::{Auth, Handler, Msg, Server as _, Session};
 use russh::{ChannelId, CryptoVec, Pty};
 use tokio::net::TcpListener;
 
-use crate::pty::registry::{ClientKind, SessionRegistry};
+use crate::pty::registry::{ClientKind, SessionRegistry, SharedSession};
 
 /// SSH セッション非アクティブタイムアウト
 const SSH_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3600);
@@ -112,6 +112,7 @@ impl russh::server::Server for DenSshServer {
             session_name: None,
             client_id: None,
             channel_id: None,
+            shared_session: None,
             output_task: None,
             pty_cols: 80,
             pty_rows: 24,
@@ -128,6 +129,7 @@ struct DenSshHandler {
     session_name: Option<String>,
     client_id: Option<u64>,
     channel_id: Option<ChannelId>,
+    shared_session: Option<Arc<SharedSession>>,
     output_task: Option<tokio::task::JoinHandle<()>>,
     pty_cols: u16,
     pty_rows: u16,
@@ -152,6 +154,7 @@ impl DenSshHandler {
 
         self.session_name = Some(session_name.to_string());
         self.client_id = Some(client_id);
+        self.shared_session = Some(Arc::clone(&shared_session));
 
         let channel_id = self
             .channel_id
@@ -225,6 +228,7 @@ impl DenSshHandler {
         if let (Some(name), Some(client_id)) = (self.session_name.take(), self.client_id.take()) {
             self.registry.detach(&name, client_id).await;
         }
+        self.shared_session.take();
         if let Some(task) = self.output_task.take() {
             task.abort();
         }
@@ -449,11 +453,11 @@ impl Handler for DenSshHandler {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         // stdin データ → PTY writer（ターミナル応答シーケンスを除去）
-        if let Some(ref name) = self.session_name
-            && let Some(session) = self.registry.get(name).await
-        {
+        if let Some(ref session) = self.shared_session {
             let filtered = filter_terminal_responses(data);
-            if data.len() != filtered.len() {
+            if data.len() != filtered.len()
+                && let Some(ref name) = self.session_name
+            {
                 tracing::debug!(
                     "SSH data: {} bytes in, {} bytes after filter (session {name})",
                     data.len(),
@@ -463,8 +467,12 @@ impl Handler for DenSshHandler {
             if !filtered.is_empty() {
                 if let Some(client_id) = self.client_id {
                     let _ = session.write_input_from(client_id, &filtered).await;
-                } else {
+                } else if let Some(ref name) = self.session_name {
                     tracing::warn!("SSH data: client_id is None, dropping input (session {name})");
+                } else {
+                    tracing::warn!(
+                        "SSH data: both client_id and session_name are None, dropping input"
+                    );
                 }
             }
         }
@@ -483,9 +491,7 @@ impl Handler for DenSshHandler {
         self.pty_cols = col_width as u16;
         self.pty_rows = row_height as u16;
 
-        if let (Some(name), Some(client_id)) = (&self.session_name, self.client_id)
-            && let Some(session) = self.registry.get(name).await
-        {
+        if let (Some(session), Some(client_id)) = (&self.shared_session, self.client_id) {
             session
                 .resize(client_id, col_width as u16, row_height as u16)
                 .await;
@@ -550,6 +556,14 @@ fn filter_output_for_ssh(data: &[u8]) -> Cow<'_, [u8]> {
         return Cow::Borrowed(data);
     }
 
+    // 二段階チェック: ブロック対象が含まれない場合はアロケーション不要
+    if !BLOCKED
+        .iter()
+        .any(|seq| data.windows(seq.len()).any(|w| w == *seq))
+    {
+        return Cow::Borrowed(data);
+    }
+
     let mut result = Vec::with_capacity(data.len());
     let mut i = 0;
 
@@ -563,12 +577,7 @@ fn filter_output_for_ssh(data: &[u8]) -> Cow<'_, [u8]> {
         }
     }
 
-    // フィルタで何も除去されなかった場合は元データを返す
-    if result.len() == data.len() {
-        Cow::Borrowed(data)
-    } else {
-        Cow::Owned(result)
-    }
+    Cow::Owned(result)
 }
 
 /// SSH クライアントのターミナルが返す応答シーケンスをフィルタする。
