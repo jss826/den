@@ -96,6 +96,8 @@ pub struct ClientInfo {
     pub kind: ClientKind,
     pub cols: u16,
     pub rows: u16,
+    /// 最後にリサイズした時刻（latest 戦略で使用）
+    pub last_resize: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,6 +405,7 @@ impl SessionRegistry {
             kind,
             cols,
             rows,
+            last_resize: std::time::Instant::now(),
         });
 
         let rx = session.subscribe();
@@ -456,6 +459,7 @@ impl SessionRegistry {
                     kind,
                     cols,
                     rows,
+                    last_resize: std::time::Instant::now(),
                 });
 
                 // first_rx は read_task 開始前に作成済みのため、
@@ -598,21 +602,19 @@ impl SessionRegistry {
         self.sessions.read().await.get(name).cloned()
     }
 
-    /// リサイズ再計算: 全 clients の min(cols), min(rows)
+    /// リサイズ再計算: 最後にリサイズしたクライアントのサイズを採用（latest 戦略）
+    ///
+    /// 複数クライアントが接続中でも、アクティブに操作している端末のサイズが
+    /// PTY に反映される。TUI アプリの描画崩れを防止する。
     fn recalculate_size(inner: &mut SessionInner) {
         if inner.clients.is_empty() {
             return;
         }
 
-        let (min_cols, min_rows) = inner
-            .clients
-            .iter()
-            .fold((u16::MAX, u16::MAX), |(mc, mr), c| {
-                (mc.min(c.cols), mr.min(c.rows))
-            });
+        let latest = inner.clients.iter().max_by_key(|c| c.last_resize).unwrap();
 
         if let Some(ref tx) = inner.resize_tx {
-            let _ = tx.send((min_cols, min_rows));
+            let _ = tx.send((latest.cols, latest.rows));
         }
     }
 }
@@ -634,6 +636,7 @@ impl SharedSession {
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.cols = cols;
             client.rows = rows;
+            client.last_resize = std::time::Instant::now();
         }
         SessionRegistry::recalculate_size(&mut inner);
     }
