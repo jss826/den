@@ -418,7 +418,7 @@ html, body {
 }
 
 .login-subtitle {
-  color: var(--border);
+  color: var(--muted);
   margin-bottom: 2rem;
   font-size: 0.9rem;
 }
@@ -478,7 +478,7 @@ html, body {
 .tab {
   background: none;
   border: none;
-  color: var(--border);
+  color: var(--muted);
   padding: 0.5rem 1rem;
   font-size: 0.85rem;
   cursor: pointer;
@@ -550,7 +550,7 @@ html, body {
 
 .session-clients {
   font-size: 0.7rem;
-  color: var(--border);
+  color: var(--muted);
 }
 
 .session-spacer {
@@ -692,12 +692,12 @@ html, body {
 }
 
 .session-conn {
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.7rem;
 }
 
 .session-prompt-preview {
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.65rem;
   white-space: nowrap;
   overflow: hidden;
@@ -748,7 +748,7 @@ html, body {
 }
 
 .header-hint {
-  color: var(--border);
+  color: var(--muted);
 }
 
 .claude-messages {
@@ -770,7 +770,7 @@ html, body {
 
 .msg-system {
   background: var(--accent-tint);
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.75rem;
   text-align: center;
 }
@@ -875,7 +875,7 @@ html, body {
 }
 
 .result-meta {
-  color: var(--border);
+  color: var(--muted);
 }
 
 /* ツール表示 */
@@ -1040,7 +1040,7 @@ html, body {
 .modal-section label {
   display: block;
   font-size: 0.8rem;
-  color: var(--border);
+  color: var(--muted);
   margin-bottom: 6px;
 }
 
@@ -1266,7 +1266,7 @@ html, body {
 .tab-icon-btn {
   background: none;
   border: none;
-  color: var(--border);
+  color: var(--muted);
   font-size: 1.1rem;
   cursor: pointer;
   padding: 0.4rem 0.6rem;
@@ -1385,7 +1385,7 @@ html, body {
 .keybar-form-row label {
   display: block;
   font-size: 0.75rem;
-  color: var(--border);
+  color: var(--muted);
   margin-bottom: 4px;
 }
 
@@ -1415,7 +1415,7 @@ html, body {
 .sidebar-section-label {
   padding: 4px 12px;
   font-size: 0.7rem;
-  color: var(--border);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -1428,7 +1428,7 @@ html, body {
 .history-empty {
   padding: 12px;
   font-size: 0.75rem;
-  color: var(--border);
+  color: var(--muted);
   text-align: center;
 }
 
@@ -1465,12 +1465,12 @@ html, body {
 
 .history-date {
   flex-shrink: 0;
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.65rem;
 }
 
 .history-prompt {
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.7rem;
   margin-top: 2px;
   white-space: nowrap;
@@ -1479,7 +1479,7 @@ html, body {
 }
 
 .history-meta {
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.65rem;
   margin-top: 1px;
 }
@@ -1542,7 +1542,7 @@ html, body {
 .filer-tool-btn {
   background: none;
   border: 1px solid transparent;
-  color: var(--border);
+  color: var(--muted);
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 0.8rem;
@@ -1600,7 +1600,7 @@ html, body {
 }
 
 .breadcrumb-sep {
-  color: var(--border);
+  color: var(--muted);
   flex-shrink: 0;
   font-size: 0.6rem;
 }
@@ -1655,7 +1655,7 @@ html, body {
   text-align: center;
   flex-shrink: 0;
   font-size: 0.65rem;
-  color: var(--border);
+  color: var(--muted);
 }
 
 .tree-icon {
@@ -1781,7 +1781,7 @@ html, body {
   border-right: 1px solid var(--border);
   white-space: nowrap;
   max-width: 180px;
-  color: var(--border);
+  color: var(--muted);
 }
 
 .filer-tab:hover {
@@ -1835,7 +1835,7 @@ html, body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
@@ -1948,7 +1948,7 @@ html, body {
 }
 
 .search-result-context {
-  color: var(--border);
+  color: var(--muted);
   font-family: monospace;
   font-size: 0.7rem;
   margin-top: 2px;
@@ -2334,7 +2334,7 @@ select:focus-visible {
   right: 6px;
   background: none;
   border: none;
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.8rem;
   cursor: pointer;
   padding: 2px 4px;
@@ -2368,7 +2368,7 @@ select:focus-visible {
 .session-close-btn {
   background: none;
   border: none;
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.8rem;
   cursor: pointer;
   padding: 2px 4px;
@@ -2399,7 +2399,7 @@ select:focus-visible {
 .header-export-btn {
   background: none;
   border: 1px solid var(--border);
-  color: var(--border);
+  color: var(--muted);
   border-radius: 4px;
   padding: 3px 6px;
   cursor: pointer;
