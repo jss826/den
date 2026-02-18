@@ -48,6 +48,14 @@ const DenIcons = (() => {
     return svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>', size);
   }
 
+  function panelLeft(size) {
+    return svg('<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/>', size);
+  }
+
+  function panelRight(size) {
+    return svg('<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="15" y1="3" x2="15" y2="21"/>', size);
+  }
+
   // --- ファイルツリー アイコン ---
 
   function folder(size) {
@@ -111,6 +119,7 @@ const DenIcons = (() => {
   return {
     filePlus, folderPlus, upload, refresh, gear,
     chevronLeft, chevronRight, download,
+    panelLeft, panelRight,
     folder, file, fileColor,
     zap, checkCircle, xCircle,
   };

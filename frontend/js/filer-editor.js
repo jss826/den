@@ -35,12 +35,29 @@ const FilerEditor = (() => {
         if (activePath) saveActive();
       }
     });
+
+    // Markdown プレビュートグル
+    const mdBtn = document.getElementById('filer-md-preview-toggle');
+    if (mdBtn) mdBtn.addEventListener('click', toggleMdPreview);
+  }
+
+  const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'];
+
+  function isImageFile(filePath) {
+    const ext = filePath.split('.').pop().toLowerCase();
+    return IMAGE_EXTS.includes(ext);
   }
 
   async function openFile(filePath) {
     // 既に開いている場合はアクティブにするだけ
     if (openFiles.has(filePath)) {
       setActive(filePath);
+      return;
+    }
+
+    // 画像ファイルの場合はプレビュー表示
+    if (isImageFile(filePath)) {
+      openImagePreview(filePath);
       return;
     }
 
@@ -87,14 +104,61 @@ const FilerEditor = (() => {
     setActive(filePath);
   }
 
+  function openImagePreview(filePath) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'filer-image-preview';
+
+    const img = document.createElement('img');
+    img.src = `/api/filer/download?path=${enc(filePath)}`;
+    img.alt = fileName(filePath);
+    // 認証ヘッダーが必要なので fetch + blob URL を使用
+    fetch(`/api/filer/download?path=${enc(filePath)}`, {
+      headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+    }).then(resp => {
+      if (!resp.ok) { Toast.error('Failed to load image'); return; }
+      return resp.blob();
+    }).then(blob => {
+      if (!blob) return;
+      img.src = URL.createObjectURL(blob);
+    });
+
+    wrapper.appendChild(img);
+
+    // 疑似 view オブジェクト（setActive / closeFile で EditorView と同じインターフェース）
+    const pseudoView = {
+      dom: wrapper,
+      destroy() { URL.revokeObjectURL(img.src); wrapper.remove(); },
+      focus() {},
+      state: { doc: { toString() { return ''; } } },
+    };
+
+    openFiles.set(filePath, {
+      view: pseudoView,
+      content: '',
+      dirty: false,
+      isImage: true,
+    });
+
+    renderTabs();
+    setActive(filePath);
+  }
+
+  function isMarkdownFile(filePath) {
+    const ext = filePath.split('.').pop().toLowerCase();
+    return ext === 'md' || ext === 'mdx';
+  }
+
   function setActive(filePath) {
     if (!openFiles.has(filePath)) return;
 
-    // 前のエディタを非表示
+    // 前のエディタ/プレビューを非表示
     if (activePath && openFiles.has(activePath)) {
       const prev = openFiles.get(activePath);
       if (prev.view.dom.parentElement) {
         prev.view.dom.remove();
+      }
+      if (prev.previewDom && prev.previewDom.parentElement) {
+        prev.previewDom.remove();
       }
     }
 
@@ -105,11 +169,41 @@ const FilerEditor = (() => {
     const welcome = editorContainer.querySelector('.filer-welcome');
     if (welcome) welcome.remove();
 
-    // エディタを表示
-    editorContainer.appendChild(file.view.dom);
-    file.view.focus();
+    // Markdown プレビューモード判定
+    const mdBtn = document.getElementById('filer-md-preview-toggle');
+    if (isMarkdownFile(filePath) && !file.isImage) {
+      mdBtn.hidden = false;
+      mdBtn.innerHTML = file.mdPreview ? '\u270E' : '\u25B6';
+      mdBtn.title = file.mdPreview ? 'Edit' : 'Preview';
+
+      if (file.mdPreview) {
+        if (!file.previewDom) {
+          file.previewDom = document.createElement('div');
+          file.previewDom.className = 'filer-md-preview';
+        }
+        file.previewDom.innerHTML = ClaudeParser.renderMarkdown(
+          file.view.state.doc.toString()
+        );
+        editorContainer.appendChild(file.previewDom);
+      } else {
+        editorContainer.appendChild(file.view.dom);
+        file.view.focus();
+      }
+    } else {
+      mdBtn.hidden = true;
+      editorContainer.appendChild(file.view.dom);
+      file.view.focus();
+    }
 
     renderTabs();
+  }
+
+  function toggleMdPreview() {
+    if (!activePath) return;
+    const file = openFiles.get(activePath);
+    if (!file || file.isImage) return;
+    file.mdPreview = !file.mdPreview;
+    setActive(activePath);
   }
 
   async function closeFile(filePath) {
@@ -187,6 +281,8 @@ const FilerEditor = (() => {
       html: '<>', htm: '<>', xml: '<>', svg: '<>',
       json: '{}', yaml: 'YM', yml: 'YM', toml: 'TM',
       md: '\u00b6', txt: 'Tx',
+      png: '\u25A3', jpg: '\u25A3', jpeg: '\u25A3', gif: '\u25A3',
+      webp: '\u25A3', svg: '\u25A3', ico: '\u25A3', bmp: '\u25A3',
       sh: '$', bash: '$', zsh: '$', ps1: 'PS',
       sql: 'SQ', graphql: 'GQ',
     };
@@ -198,6 +294,7 @@ const FilerEditor = (() => {
     for (const [path, file] of openFiles) {
       const tab = document.createElement('div');
       tab.className = `filer-tab${path === activePath ? ' active' : ''}`;
+      tab.title = path;
 
       const icon = fileTypeIcon(path);
       if (icon) {

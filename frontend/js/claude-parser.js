@@ -264,6 +264,6 @@ const ClaudeParser = (() => {
     return str.slice(0, max) + '\n... (truncated)';
   }
 
-  return { parse, renderEvent };
+  return { parse, renderEvent, renderMarkdown };
 })();
 if (typeof module !== 'undefined') module.exports = ClaudeParser;

@@ -36,6 +36,9 @@ const DenFiler = (() => {
     document.getElementById('filer-upload').addEventListener('click', showUploadModal);
     document.getElementById('filer-refresh').addEventListener('click', () => FilerTree.refresh());
 
+    // ツリー表示トグル
+    initTreeToggle();
+
     // 検索
     const searchInput = document.getElementById('filer-search-input');
     let searchTimeout;
@@ -68,6 +71,47 @@ const DenFiler = (() => {
 
     // ドラッグ&ドロップ アップロード
     initDragDrop();
+  }
+
+  // --- ツリー表示トグル ---
+
+  function initTreeToggle() {
+    const btn = document.getElementById('filer-tree-toggle');
+    const sideBtn = document.getElementById('filer-tree-side');
+    const sidebar = document.querySelector('.filer-sidebar');
+    const layout = document.querySelector('.filer-layout');
+    if (!btn || !sidebar || !layout) return;
+
+    let isRight = false;
+
+    function updateToggleIcon() {
+      const collapsed = sidebar.classList.contains('collapsed');
+      if (isRight) {
+        btn.innerHTML = collapsed ? DenIcons.chevronLeft(14) : DenIcons.chevronRight(14);
+      } else {
+        btn.innerHTML = collapsed ? DenIcons.chevronRight(14) : DenIcons.chevronLeft(14);
+      }
+    }
+
+    btn.innerHTML = DenIcons.chevronLeft(14);
+    btn.setAttribute('aria-expanded', 'true');
+
+    btn.addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+      btn.setAttribute('aria-expanded', String(!sidebar.classList.contains('collapsed')));
+      updateToggleIcon();
+    });
+
+    // 左右切替
+    if (sideBtn) {
+      sideBtn.innerHTML = DenIcons.panelRight(14);
+      sideBtn.addEventListener('click', () => {
+        isRight = !isRight;
+        layout.classList.toggle('tree-right', isRight);
+        sideBtn.innerHTML = isRight ? DenIcons.panelLeft(14) : DenIcons.panelRight(14);
+        updateToggleIcon();
+      });
+    }
   }
 
   // --- ドラッグ&ドロップ アップロード ---

@@ -92,9 +92,12 @@
         <!-- メインエリア: エディタ -->
         <div class="filer-main">
           <div class="filer-tabs-wrapper">
+            <button id="filer-tree-toggle" class="filer-tree-toggle" data-tooltip="Toggle Tree" aria-label="Toggle file tree"></button>
+            <button id="filer-tree-side" class="filer-tree-toggle" data-tooltip="Move Tree Right/Left" aria-label="Move tree to other side"></button>
             <button class="filer-tabs-scroll left" hidden data-tooltip="Scroll Left" aria-label="Scroll tabs left"></button>
             <div id="filer-tabs" class="filer-tabs" role="tablist" aria-label="Open files"></div>
             <button class="filer-tabs-scroll right" hidden data-tooltip="Scroll Right" aria-label="Scroll tabs right"></button>
+            <button id="filer-md-preview-toggle" class="filer-tree-toggle" hidden data-tooltip="Toggle Preview" aria-label="Toggle Markdown preview"></button>
           </div>
           <div id="filer-editor" class="filer-editor">
             <div class="filer-welcome">
@@ -252,11 +255,12 @@
               </div>
               <div class="keybar-form-row">
                 <label>
-                  <input type="checkbox" id="keybar-new-modifier"> Modifier key (Ctrl/Alt)
+                  <input type="checkbox" id="keybar-new-modifier"> Modifier key (Ctrl/Alt/Shift)
                 </label>
                 <select id="keybar-new-modkey" class="settings-input" hidden>
                   <option value="ctrl">Ctrl</option>
                   <option value="alt">Alt</option>
+                  <option value="shift">Shift</option>
                 </select>
               </div>
               <div class="keybar-form-actions">

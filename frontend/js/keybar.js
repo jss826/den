@@ -1,13 +1,14 @@
 // Den - タッチキーバーモジュール
 const Keybar = (() => {
   let container = null;
-  let modifiers = { ctrl: false, alt: false };
+  let modifiers = { ctrl: false, alt: false, shift: false };
   let activeKeys = [];
 
   // デフォルトキー配列
   const DEFAULT_KEYS = [
     { label: 'Ctrl', send: '', type: 'modifier', mod_key: 'ctrl' },
     { label: 'Alt', send: '', type: 'modifier', mod_key: 'alt' },
+    { label: 'Shift', send: '', type: 'modifier', mod_key: 'shift' },
     { label: 'Tab', send: '\t' },
     { label: 'Esc', send: '\x1b' },
     { label: '\u2191', send: '\x1b[A' },
@@ -72,17 +73,32 @@ const Keybar = (() => {
           e.preventDefault();
           let data = key.send;
 
-          // Ctrl 修飾
-          if (modifiers.ctrl && data.length === 1) {
-            const code = data.toUpperCase().charCodeAt(0);
-            if (code >= 0x40 && code <= 0x5f) {
-              data = String.fromCharCode(code - 0x40);
-            }
-          }
+          // 修飾パラメータ計算 (xterm: 1=none, 2=Shift, 3=Alt, 5=Ctrl, etc.)
+          const modParam = (modifiers.shift ? 1 : 0)
+            + (modifiers.alt ? 2 : 0)
+            + (modifiers.ctrl ? 4 : 0);
 
-          // Alt 修飾
-          if (modifiers.alt) {
-            data = '\x1b' + data;
+          if (modParam > 0 && data.length > 2 && data.startsWith('\x1b[')) {
+            // CSI シーケンス: ESC[A → ESC[1;2A, ESC[2~ → ESC[2;2~
+            data = addCsiModifier(data, modParam + 1);
+          } else {
+            // Shift 修飾（単一文字）
+            if (modifiers.shift && data.length === 1) {
+              data = data.toUpperCase();
+            }
+
+            // Ctrl 修飾（単一文字）
+            if (modifiers.ctrl && data.length === 1) {
+              const code = data.toUpperCase().charCodeAt(0);
+              if (code >= 0x40 && code <= 0x5f) {
+                data = String.fromCharCode(code - 0x40);
+              }
+            }
+
+            // Alt 修飾
+            if (modifiers.alt) {
+              data = '\x1b' + data;
+            }
           }
 
           DenTerminal.sendInput(data);
@@ -97,9 +113,24 @@ const Keybar = (() => {
     });
   }
 
+  /** CSI シーケンスに修飾パラメータを付加 */
+  function addCsiModifier(seq, mod) {
+    // ESC[X → ESC[1;modX  (例: ESC[A → ESC[1;2A)
+    // ESC[n~ → ESC[n;mod~ (例: ESC[2~ → ESC[2;2~)
+    // ESC[n;mX は既存パラメータがある場合
+    const body = seq.slice(2); // CSI 以降
+    const finalChar = body[body.length - 1];
+    const params = body.slice(0, -1);
+    if (params === '') {
+      return '\x1b[1;' + mod + finalChar;
+    }
+    return '\x1b[' + params + ';' + mod + finalChar;
+  }
+
   function resetModifiers() {
     modifiers.ctrl = false;
     modifiers.alt = false;
+    modifiers.shift = false;
     container.querySelectorAll('.modifier').forEach((btn) => {
       btn.classList.remove('active');
     });
