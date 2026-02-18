@@ -56,6 +56,13 @@ pub struct Settings {
     pub claude_input_position: Option<String>,
     #[serde(default)]
     pub ssh_agent_forwarding: bool,
+    /// Claude CLI の --dangerously-skip-permissions を有効にするか（デフォルト: true）
+    #[serde(default = "default_skip_permissions")]
+    pub claude_skip_permissions: Option<bool>,
+}
+
+fn default_skip_permissions() -> Option<bool> {
+    Some(true)
 }
 
 fn default_font_size() -> u8 {
@@ -79,6 +86,7 @@ impl Default for Settings {
             keybar_buttons: None,
             claude_input_position: None,
             ssh_agent_forwarding: false,
+            claude_skip_permissions: default_skip_permissions(),
         }
     }
 }

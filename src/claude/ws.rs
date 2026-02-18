@@ -25,6 +25,10 @@ use super::ssh_config;
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Claude CLI の PTY サイズ（stream-json モードでは TUI を描画しないため大きめに設定）
+const CLAUDE_PTY_COLS: u16 = 10000;
+const CLAUDE_PTY_ROWS: u16 = 50;
+
 #[derive(Deserialize)]
 pub struct ClaudeWsQuery {
     pub token: String,
@@ -151,11 +155,22 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 }
 
                 // インタラクティブモードで Claude CLI を起動
-                let agent_fwd = store.load_settings().ssh_agent_forwarding;
+                let settings = store.load_settings();
+                let agent_fwd = settings.ssh_agent_forwarding;
+                let skip_perms = settings.claude_skip_permissions.unwrap_or(true);
                 let pty_result = tokio::task::spawn_blocking({
                     let conn = conn.clone();
                     let dir = dir.clone();
-                    move || session::spawn_claude_interactive(&conn, &dir, agent_fwd, 10000, 50)
+                    move || {
+                        session::spawn_claude_interactive(
+                            &conn,
+                            &dir,
+                            agent_fwd,
+                            skip_perms,
+                            CLAUDE_PTY_COLS,
+                            CLAUDE_PTY_ROWS,
+                        )
+                    }
                 })
                 .await;
 
@@ -286,13 +301,18 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     }
 
                     // プロンプトを NDJSON 形式で stdin に書き込み
-                    let input_msg = build_stream_json_input(&prompt);
+                    let input_msg = build_stream_json_input(&prompt, &session_id);
                     if let Err(e) = shared_session.write_input(input_msg.as_bytes()).await {
                         tracing::warn!("Failed to write prompt to stdin: {}", e);
                         // turn_started 済みなので turn_completed を送って UI をアンブロック
                         let mut map = state_map.lock().await;
                         if let Some(state) = map.get_mut(&session_id) {
                             state.is_running = false;
+                        }
+                        // Store メタを idle に戻す（F006: running のまま残る問題を修正）
+                        if let Some(mut meta) = store.load_session_meta(&session_id) {
+                            meta.status = "idle".to_string();
+                            let _ = store.update_session_meta(&meta);
                         }
                         let resp = json!({ "type": "turn_completed", "session_id": &session_id });
                         let _ = ws_tx
@@ -384,13 +404,18 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 }
 
                 // プロンプトを NDJSON 形式で stdin に書き込み
-                let input_msg = build_stream_json_input(&prompt);
+                let input_msg = build_stream_json_input(&prompt, &session_id);
                 if let Err(e) = shared_session.write_input(input_msg.as_bytes()).await {
                     tracing::warn!("Failed to write prompt to stdin: {}", e);
                     send_error(&ws_tx, "Failed to send prompt to Claude process").await;
                     let mut map = state_map.lock().await;
                     if let Some(state) = map.get_mut(&session_id) {
                         state.is_running = false;
+                    }
+                    // Store メタを idle に戻す（F006: running のまま残る問題を修正）
+                    if let Some(mut meta) = store.load_session_meta(&session_id) {
+                        meta.status = "idle".to_string();
+                        let _ = store.update_session_meta(&meta);
                     }
                     // turn_started 済みなので turn_completed を送って UI をアンブロック
                     let resp = json!({ "type": "turn_completed", "session_id": &session_id });
@@ -783,14 +808,18 @@ fn extract_json_line(line: &str) -> Option<&str> {
 }
 
 /// Claude CLI の stream-json 入力形式（NDJSON）でユーザーメッセージを構築
-fn build_stream_json_input(prompt: &str) -> String {
+///
+/// `session_id` は Claude CLI 内部のセッション識別に使用される。
+/// 同一プロセス内では一貫した値を渡す必要がある。
+/// serde_json の compact 出力（改行なし）に依存して末尾 `\n` を NDJSON デリミタとする。
+fn build_stream_json_input(prompt: &str, session_id: &str) -> String {
     let msg = json!({
         "type": "user",
         "message": {
             "role": "user",
             "content": prompt,
         },
-        "session_id": "default",
+        "session_id": session_id,
         "parent_tool_use_id": null,
     });
     format!("{}\n", msg)
@@ -914,19 +943,19 @@ mod tests {
 
     #[test]
     fn build_stream_json_input_format() {
-        let input = build_stream_json_input("hello world");
+        let input = build_stream_json_input("hello world", "test-session-123");
         let parsed: Value = serde_json::from_str(input.trim()).unwrap();
         assert_eq!(parsed["type"], "user");
         assert_eq!(parsed["message"]["role"], "user");
         assert_eq!(parsed["message"]["content"], "hello world");
-        assert_eq!(parsed["session_id"], "default");
+        assert_eq!(parsed["session_id"], "test-session-123");
         assert!(parsed["parent_tool_use_id"].is_null());
         assert!(input.ends_with('\n'));
     }
 
     #[test]
     fn build_stream_json_input_escapes_special_chars() {
-        let input = build_stream_json_input("test \"quotes\" and\nnewlines");
+        let input = build_stream_json_input("test \"quotes\" and\nnewlines", "s1");
         let parsed: Value = serde_json::from_str(input.trim()).unwrap();
         assert_eq!(
             parsed["message"]["content"],

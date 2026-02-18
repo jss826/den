@@ -2,44 +2,55 @@ use crate::pty::manager::PtySession;
 
 use super::connection::ConnectionTarget;
 
+/// Claude CLI の共通フラグを構築（Local/SSH 共通）
+///
+/// `skip_permissions` が true の場合 `--dangerously-skip-permissions` を追加。
+fn build_claude_flags(skip_permissions: bool) -> Vec<String> {
+    let mut flags = vec![
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+    ];
+    if skip_permissions {
+        flags.push("--dangerously-skip-permissions".to_string());
+    }
+    flags
+}
+
 /// Claude CLI コマンドを組み立て、PTY で起動
 ///
 /// `is_continuation` が true の場合 `--continue` フラグを追加し、
 /// 同一 cwd での前回セッションを継続する。
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_claude_session(
     connection: &ConnectionTarget,
     working_dir: &str,
     prompt: &str,
     is_continuation: bool,
     agent_forwarding: bool,
+    skip_permissions: bool,
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
+    let mut flags = build_claude_flags(skip_permissions);
+    if is_continuation {
+        flags.push("--continue".to_string());
+    }
+
     match connection {
         ConnectionTarget::Local => {
-            // ローカル: claude を直接起動（cmd.exe/sh を経由しない）
-            let mut args = vec![
-                "-p".to_string(),
-                prompt.to_string(),
-                "--output-format".to_string(),
-                "stream-json".to_string(),
-                "--verbose".to_string(),
-                "--dangerously-skip-permissions".to_string(),
-            ];
-            if is_continuation {
-                args.push("--continue".to_string());
-            }
+            let mut args = vec!["-p".to_string(), prompt.to_string()];
+            args.extend(flags);
             spawn_command_pty("claude", &args, working_dir, cols, rows)
         }
         ConnectionTarget::Ssh { host } => {
-            let mut claude_args = format!(
-                "claude -p {} --output-format stream-json --verbose --dangerously-skip-permissions",
-                shell_escape_prompt(prompt),
+            let flags_str = flags.join(" ");
+            let remote_cmd = format!(
+                "cd {} && claude -p {} {}",
+                shell_escape(working_dir),
+                shell_escape(prompt),
+                flags_str,
             );
-            if is_continuation {
-                claude_args.push_str(" --continue");
-            }
-            let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
             let args = build_ssh_args(host, &remote_cmd, agent_forwarding);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
@@ -55,25 +66,26 @@ pub fn spawn_claude_interactive(
     connection: &ConnectionTarget,
     working_dir: &str,
     agent_forwarding: bool,
+    skip_permissions: bool,
     cols: u16,
     rows: u16,
 ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
+    let mut flags = build_claude_flags(skip_permissions);
+    // stream-json 入力はフラグリストの先頭に追加（--output-format の前に配置）
+    flags.splice(
+        0..0,
+        [
+            "-p".to_string(),
+            "--input-format".to_string(),
+            "stream-json".to_string(),
+        ],
+    );
+
     match connection {
-        ConnectionTarget::Local => {
-            let args = vec![
-                "-p".to_string(),
-                "--input-format".to_string(),
-                "stream-json".to_string(),
-                "--output-format".to_string(),
-                "stream-json".to_string(),
-                "--verbose".to_string(),
-                "--dangerously-skip-permissions".to_string(),
-            ];
-            spawn_command_pty("claude", &args, working_dir, cols, rows)
-        }
+        ConnectionTarget::Local => spawn_command_pty("claude", &flags, working_dir, cols, rows),
         ConnectionTarget::Ssh { host } => {
-            let claude_args = "claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions";
-            let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
+            let flags_str = flags.join(" ");
+            let remote_cmd = format!("cd {} && claude {}", shell_escape(working_dir), flags_str);
             let args = build_ssh_args(host, &remote_cmd, agent_forwarding);
             spawn_command_pty("ssh", &args, working_dir, cols, rows)
         }
@@ -143,12 +155,8 @@ fn build_ssh_args(host: &str, remote_cmd: &str, agent_forwarding: bool) -> Vec<S
     args
 }
 
-/// シングルクォートエスケープ（SSH リモートコマンド用）
+/// シングルクォートエスケープ（SSH リモートコマンド用、POSIX sh 前提）
 fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-fn shell_escape_prompt(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
@@ -157,115 +165,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_args_structure() {
-        let prompt = "hello world";
-        let args = vec![
-            "-p".to_string(),
-            prompt.to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--verbose".to_string(),
-            "--dangerously-skip-permissions".to_string(),
-        ];
-        assert_eq!(args.len(), 6);
-        assert_eq!(args[0], "-p");
-        assert_eq!(args[1], prompt);
-        assert_eq!(args[2], "--output-format");
-        assert_eq!(args[3], "stream-json");
-        assert_eq!(args[4], "--verbose");
-        assert_eq!(args[5], "--dangerously-skip-permissions");
+    fn build_claude_flags_with_permissions() {
+        let flags = build_claude_flags(true);
+        assert!(flags.contains(&"--output-format".to_string()));
+        assert!(flags.contains(&"stream-json".to_string()));
+        assert!(flags.contains(&"--verbose".to_string()));
+        assert!(flags.contains(&"--dangerously-skip-permissions".to_string()));
     }
 
     #[test]
-    fn local_args_continuation() {
-        let prompt = "follow up";
-        let mut args = vec![
-            "-p".to_string(),
-            prompt.to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--verbose".to_string(),
-            "--dangerously-skip-permissions".to_string(),
-        ];
-        args.push("--continue".to_string());
-        assert_eq!(args.len(), 7);
-        assert_eq!(args[6], "--continue");
+    fn build_claude_flags_without_permissions() {
+        let flags = build_claude_flags(false);
+        assert!(flags.contains(&"--verbose".to_string()));
+        assert!(!flags.contains(&"--dangerously-skip-permissions".to_string()));
     }
 
     #[test]
     fn ssh_args_with_agent_forwarding() {
-        let host = "user@remote";
-        let prompt = "test prompt";
-        let working_dir = "/home/user";
-        let claude_args = format!(
-            "claude -p {} --output-format stream-json --verbose --dangerously-skip-permissions",
-            shell_escape_prompt(prompt),
-        );
-        let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-        let args = build_ssh_args(host, &remote_cmd, true);
-        assert_eq!(args.len(), 6);
+        let args = build_ssh_args("user@remote", "echo hello", true);
         assert_eq!(args[0], "-t");
         assert_eq!(args[1], "-A");
-        assert_eq!(args[4], host);
-        assert!(args[5].contains("cd '/home/user'"));
-        assert!(args[5].contains("claude -p"));
+        assert_eq!(args[4], "user@remote");
     }
 
     #[test]
     fn ssh_args_without_agent_forwarding() {
-        let host = "user@remote";
-        let remote_cmd = "echo hello";
-        let args = build_ssh_args(host, remote_cmd, false);
-        assert_eq!(args.len(), 5);
+        let args = build_ssh_args("user@remote", "echo hello", false);
         assert_eq!(args[0], "-t");
         assert_eq!(args[1], "-o");
         assert_eq!(args[2], "BatchMode=yes");
-        assert_eq!(args[3], host);
         assert!(!args.contains(&"-A".to_string()));
-    }
-
-    #[test]
-    fn interactive_local_args() {
-        let args = vec![
-            "-p".to_string(),
-            "--input-format".to_string(),
-            "stream-json".to_string(),
-            "--output-format".to_string(),
-            "stream-json".to_string(),
-            "--verbose".to_string(),
-            "--dangerously-skip-permissions".to_string(),
-        ];
-        assert_eq!(args.len(), 7);
-        assert!(args.iter().any(|a| a == "-p"));
-        assert!(args.contains(&"--input-format".to_string()));
-        assert!(args.contains(&"--output-format".to_string()));
-    }
-
-    #[test]
-    fn interactive_ssh_args() {
-        let host = "user@remote";
-        let working_dir = "/home/user";
-        let claude_args = "claude -p --input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions";
-        let remote_cmd = format!("cd {} && {}", shell_escape(working_dir), claude_args);
-        let args = build_ssh_args(host, &remote_cmd, true);
-        assert_eq!(args.len(), 6);
-        assert_eq!(args[1], "-A"); // agent forwarding enabled
-        assert!(remote_cmd.contains("claude -p"));
-        assert!(remote_cmd.contains("--input-format stream-json"));
-        assert!(remote_cmd.contains("--output-format stream-json"));
-    }
-
-    #[test]
-    fn ssh_args_continuation() {
-        let prompt = "follow up";
-        let mut claude_args = format!(
-            "claude -p {} --output-format stream-json --verbose --dangerously-skip-permissions",
-            shell_escape_prompt(prompt),
-        );
-        claude_args.push_str(" --continue");
-        assert!(claude_args.contains("--continue"));
-        assert!(claude_args.contains("--verbose"));
-        assert!(claude_args.contains("--dangerously-skip-permissions"));
     }
 
     #[test]
@@ -274,8 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_escape_prompt_with_quotes() {
-        let result = shell_escape_prompt("it's a test");
-        assert_eq!(result, "'it'\\''s a test'");
+    fn shell_escape_with_quotes() {
+        assert_eq!(shell_escape("it's a test"), "'it'\\''s a test'");
     }
 }
