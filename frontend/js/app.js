@@ -199,10 +199,16 @@ document.addEventListener('DOMContentLoaded', () => {
     initSidebarToggles();
 
     // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
+    // Safari はキーボード表示時にページ自体をスクロールする（overflow:hidden でも）
+    // → scrollTo(0,0) でリセットし、offsetTop を補正する
     if (window.visualViewport) {
       const update = () => {
-        const vh = window.visualViewport.height;
-        document.documentElement.style.setProperty('--viewport-height', vh + 'px');
+        const vv = window.visualViewport;
+        document.documentElement.style.setProperty('--viewport-height', vv.height + 'px');
+        // Safari がページをスクロールした分をリセット
+        if (vv.offsetTop > 0) {
+          window.scrollTo(0, 0);
+        }
       };
       window.visualViewport.addEventListener('resize', update);
       window.visualViewport.addEventListener('scroll', update);

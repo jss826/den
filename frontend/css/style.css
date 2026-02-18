@@ -1230,6 +1230,10 @@ html, body {
 /* タッチデバイス検出 */
 @media (hover: none) and (pointer: coarse) {
   #main-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
     height: var(--viewport-height);
     overflow: hidden;
   }
