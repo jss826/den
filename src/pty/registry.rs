@@ -418,6 +418,7 @@ impl SessionRegistry {
         if inner.active_client_id.is_none() {
             inner.active_client_id = Some(client_id);
         }
+        // クライアント追加により最適サイズが変わる可能性があるため再計算
         Self::recalculate_size(&mut inner);
 
         drop(inner);
@@ -507,9 +508,13 @@ impl SessionRegistry {
         let mut inner = session.inner.lock().await;
         inner.clients.retain(|c| c.id != client_id);
 
-        // アクティブクライアントが切断された場合はクリア
+        // アクティブクライアントが切断された場合は後継を選出
         if inner.active_client_id == Some(client_id) {
-            inner.active_client_id = None;
+            inner.active_client_id = inner
+                .clients
+                .iter()
+                .max_by_key(|c| c.last_active)
+                .map(|c| c.id);
         }
 
         // リサイズ再計算（クライアントが残っている場合のみ）
@@ -654,12 +659,17 @@ impl SharedSession {
             return Err("Session is dead".to_string());
         }
         let mut inner = self.inner.lock().await;
+        // last_active は常に更新（フォールバック選択の精度向上）
+        if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+            client.last_active = std::time::Instant::now();
+        }
         if inner.active_client_id != Some(client_id) {
-            if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
-                client.last_active = std::time::Instant::now();
+            if inner.clients.iter().any(|c| c.id == client_id) {
+                inner.active_client_id = Some(client_id);
+                SessionRegistry::recalculate_size(&mut inner);
+            } else {
+                tracing::debug!("write_input_from: client_id {client_id} not found in session");
             }
-            inner.active_client_id = Some(client_id);
-            SessionRegistry::recalculate_size(&mut inner);
         }
         std::io::Write::write_all(&mut inner.pty_writer, data)
             .map_err(|e| format!("Write failed: {e}"))
@@ -671,20 +681,6 @@ impl SharedSession {
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.cols = cols;
             client.rows = rows;
-            client.last_active = std::time::Instant::now();
-        }
-        inner.active_client_id = Some(client_id);
-        SessionRegistry::recalculate_size(&mut inner);
-    }
-
-    /// クライアントをアクティブにする（入力時に呼ばれる）
-    /// アクティブなクライアントが変わった場合のみ PTY をリサイズする
-    pub async fn activate_client(&self, client_id: u64) {
-        let mut inner = self.inner.lock().await;
-        if inner.active_client_id == Some(client_id) {
-            return; // 既にアクティブ → 何もしない
-        }
-        if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.last_active = std::time::Instant::now();
         }
         inner.active_client_id = Some(client_id);

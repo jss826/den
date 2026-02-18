@@ -464,7 +464,7 @@ impl Handler for DenSshHandler {
                 if let Some(client_id) = self.client_id {
                     let _ = session.write_input_from(client_id, &filtered).await;
                 } else {
-                    let _ = session.write_input(&filtered).await;
+                    tracing::warn!("SSH data: client_id is None, dropping input (session {name})");
                 }
             }
         }
