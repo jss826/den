@@ -30,23 +30,23 @@ pub struct LoginResponse {
 
 /// パスワードと発行時刻からトークンを生成（HMAC-SHA256 + タイムスタンプ）
 /// フォーマット: "{issued_at_unix_hex}.{hmac_hex}"
-pub fn generate_token(password: &str) -> String {
+pub fn generate_token(password: &str, secret: &[u8]) -> String {
     let issued_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before epoch")
         .as_secs();
-    generate_token_at(password, issued_at)
+    generate_token_at(password, secret, issued_at)
 }
 
 /// 指定時刻でトークン生成（テスト用にも公開）
-pub fn generate_token_at(password: &str, issued_at: u64) -> String {
+pub fn generate_token_at(password: &str, secret: &[u8], issued_at: u64) -> String {
     let timestamp_hex = format!("{:x}", issued_at);
-    let sig = compute_hmac(password, issued_at);
+    let sig = compute_hmac(password, secret, issued_at);
     format!("{}.{}", timestamp_hex, sig)
 }
 
 /// トークンを検証（HMAC チェック + 有効期限チェック）
-pub fn validate_token(token: &str, password: &str) -> bool {
+pub fn validate_token(token: &str, password: &str, secret: &[u8]) -> bool {
     let Some((timestamp_hex, sig)) = token.split_once('.') else {
         return false;
     };
@@ -66,13 +66,12 @@ pub fn validate_token(token: &str, password: &str) -> bool {
     }
 
     // HMAC 検証
-    let expected = compute_hmac(password, issued_at);
+    let expected = compute_hmac(password, secret, issued_at);
     constant_time_eq(sig, &expected)
 }
 
-fn compute_hmac(password: &str, issued_at: u64) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(b"den-secret-key").expect("HMAC accepts any key length");
+fn compute_hmac(password: &str, secret: &[u8], issued_at: u64) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(password.as_bytes());
     mac.update(&issued_at.to_be_bytes());
     hex::encode(mac.finalize().into_bytes())
@@ -95,9 +94,11 @@ pub async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
     if req.password == state.config.password {
-        let token = generate_token(&state.config.password);
+        let token = generate_token(&state.config.password, &state.hmac_secret);
+        tracing::info!("Login successful");
         Ok(Json(LoginResponse { token }))
     } else {
+        tracing::warn!("Login failed: incorrect password");
         Err(StatusCode::UNAUTHORIZED)
     }
 }
@@ -108,6 +109,8 @@ pub async fn auth_middleware(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
+    let path = req.uri().path().to_string();
+
     // Authorization ヘッダーからトークンを取得
     let token = req
         .headers()
@@ -124,8 +127,13 @@ pub async fn auth_middleware(
         });
 
     match token {
-        Some(t) if validate_token(&t, &state.config.password) => next.run(req).await,
-        _ => StatusCode::UNAUTHORIZED.into_response(),
+        Some(t) if validate_token(&t, &state.config.password, &state.hmac_secret) => {
+            next.run(req).await
+        }
+        _ => {
+            tracing::debug!("Auth rejected: {path}");
+            StatusCode::UNAUTHORIZED.into_response()
+        }
     }
 }
 
@@ -133,21 +141,29 @@ pub async fn auth_middleware(
 mod tests {
     use super::*;
 
+    const TEST_SECRET: &[u8] = b"test-secret-key-for-unit-tests!!";
+
     #[test]
     fn token_roundtrip() {
-        let token = generate_token("password");
-        assert!(validate_token(&token, "password"));
+        let token = generate_token("password", TEST_SECRET);
+        assert!(validate_token(&token, "password", TEST_SECRET));
     }
 
     #[test]
     fn token_wrong_password_fails() {
-        let token = generate_token("password");
-        assert!(!validate_token(&token, "wrong"));
+        let token = generate_token("password", TEST_SECRET);
+        assert!(!validate_token(&token, "wrong", TEST_SECRET));
+    }
+
+    #[test]
+    fn token_wrong_secret_fails() {
+        let token = generate_token("password", TEST_SECRET);
+        assert!(!validate_token(&token, "password", b"different-secret"));
     }
 
     #[test]
     fn token_format() {
-        let token = generate_token("test");
+        let token = generate_token("test", TEST_SECRET);
         assert!(token.contains('.'));
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 2);
@@ -166,8 +182,8 @@ mod tests {
             .unwrap()
             .as_secs()
             - 25 * 60 * 60;
-        let token = generate_token_at("password", old_time);
-        assert!(!validate_token(&token, "password"));
+        let token = generate_token_at("password", TEST_SECRET, old_time);
+        assert!(!validate_token(&token, "password", TEST_SECRET));
     }
 
     #[test]
@@ -178,33 +194,33 @@ mod tests {
             .unwrap()
             .as_secs()
             - 23 * 60 * 60;
-        let token = generate_token_at("password", recent_time);
-        assert!(validate_token(&token, "password"));
+        let token = generate_token_at("password", TEST_SECRET, recent_time);
+        assert!(validate_token(&token, "password", TEST_SECRET));
     }
 
     #[test]
     fn token_tampered_signature() {
-        let mut token = generate_token("test");
+        let mut token = generate_token("test", TEST_SECRET);
         // 署名の末尾を改ざん
         let last = token.pop().unwrap();
         let replacement = if last == '0' { '1' } else { '0' };
         token.push(replacement);
-        assert!(!validate_token(&token, "test"));
+        assert!(!validate_token(&token, "test", TEST_SECRET));
     }
 
     #[test]
     fn token_tampered_timestamp() {
-        let token = generate_token("test");
+        let token = generate_token("test", TEST_SECRET);
         let parts: Vec<&str> = token.split('.').collect();
         // タイムスタンプを改ざん
         let tampered = format!("ff{}.{}", parts[0], parts[1]);
-        assert!(!validate_token(&tampered, "test"));
+        assert!(!validate_token(&tampered, "test", TEST_SECRET));
     }
 
     #[test]
     fn token_invalid_format() {
-        assert!(!validate_token("not-a-token", "password"));
-        assert!(!validate_token("", "password"));
-        assert!(!validate_token("abc.def.ghi", "password"));
+        assert!(!validate_token("not-a-token", "password", TEST_SECRET));
+        assert!(!validate_token("", "password", TEST_SECRET));
+        assert!(!validate_token("abc.def.ghi", "password", TEST_SECRET));
     }
 }

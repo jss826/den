@@ -128,7 +128,10 @@ impl Store {
     pub fn load_settings(&self) -> Settings {
         let path = self.root.join("settings.json");
         match fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Corrupt settings.json, using defaults: {e}");
+                Settings::default()
+            }),
             Err(_) => Settings::default(),
         }
     }

@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+const TEST_HMAC_SECRET: &[u8] = b"test-secret-key-for-filer-tests!";
+
 fn test_config() -> Config {
     let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!("den-filer-test-{}-{}", std::process::id(), id));
@@ -27,18 +29,18 @@ fn test_config() -> Config {
 
 fn test_app() -> axum::Router {
     let registry = SessionRegistry::new("powershell.exe".to_string());
-    den::create_app(test_config(), registry)
+    den::create_app_with_secret(test_config(), registry, TEST_HMAC_SECRET.to_vec())
 }
 
 fn auth_header() -> String {
-    format!("Bearer {}", generate_token("testpass"))
+    format!("Bearer {}", generate_token("testpass", TEST_HMAC_SECRET))
 }
 
 /// Helper: create a shared app with a tempdir for filer operations
 fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string());
-    let app = den::create_app(test_config(), registry);
+    let app = den::create_app_with_secret(test_config(), registry, TEST_HMAC_SECRET.to_vec());
     (app, dir)
 }
 

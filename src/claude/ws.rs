@@ -22,6 +22,9 @@ use super::connection::{self, ConnectionTarget};
 use super::session;
 use super::ssh_config;
 
+/// PTY 出力受信タイムアウト（alive チェック間隔）
+const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(Deserialize)]
 pub struct ClaudeWsQuery {
     pub token: String,
@@ -44,7 +47,7 @@ pub async fn ws_handler(
     Query(query): Query<ClaudeWsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if !validate_token(&query.token, &state.config.password) {
+    if !validate_token(&query.token, &state.config.password, &state.hmac_secret) {
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -533,7 +536,7 @@ async fn run_interactive_processor(
     let mut dsr_responded = false;
 
     loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+        match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
             Ok(Ok(bytes)) => {
                 // ConPTY DSR 検出 → CPR 応答（Windows のみ）
                 #[cfg(windows)]
@@ -647,7 +650,7 @@ async fn forward_interactive_output(
     let mut line_buf = String::new();
 
     loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+        match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
             Ok(Ok(bytes)) => {
                 let text = String::from_utf8_lossy(&bytes);
                 line_buf.push_str(&text);

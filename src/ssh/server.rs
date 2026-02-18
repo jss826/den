@@ -9,6 +9,15 @@ use tokio::net::TcpListener;
 
 use crate::pty::registry::{ClientKind, SessionRegistry};
 
+/// SSH セッション非アクティブタイムアウト
+const SSH_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// パスワード認証失敗時の遅延（ブルートフォース対策）
+const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// PTY 出力受信タイムアウト（alive チェック間隔）
+const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// `{data_dir}/ssh/authorized_keys` から公開鍵を読み込む。
 /// 各行の "algorithm base64" 部分（コメント除去）を返す。
 fn load_authorized_keys(data_dir: &str) -> HashSet<String> {
@@ -61,7 +70,7 @@ pub async fn run(
     // これにより公開鍵認証の拒否が即座に完了し、クライアントがパスワード認証に
     // 素早くフォールバックできる。
     let config = russh::server::Config {
-        inactivity_timeout: Some(std::time::Duration::from_secs(3600)),
+        inactivity_timeout: Some(SSH_INACTIVITY_TIMEOUT),
         auth_rejection_time: std::time::Duration::from_secs(0),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
         keys: vec![host_key],
@@ -170,9 +179,7 @@ impl DenSshHandler {
             loop {
                 // recv with timeout: ConPTY は子プロセス終了後も reader を
                 // ブロックし続けるため、定期的に alive を確認する
-                match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv())
-                    .await
-                {
+                match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
                     Ok(Ok(data)) => {
                         let filtered = filter_output_for_ssh(&data);
                         if filtered.is_empty() {
@@ -275,7 +282,7 @@ impl Handler for DenSshHandler {
         } else {
             tracing::warn!("SSH auth: password rejected");
             // auth_rejection_time を 0 にしたため、ブルートフォース対策の遅延をここで入れる
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            tokio::time::sleep(SSH_PASSWORD_DELAY).await;
             Ok(Auth::Reject {
                 proceed_with_methods: None,
                 partial_success: false,

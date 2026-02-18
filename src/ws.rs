@@ -15,6 +15,9 @@ use crate::AppState;
 use crate::auth::validate_token;
 use crate::pty::registry::{ClientKind, SessionInfo};
 
+/// PTY 出力受信タイムアウト（alive チェック間隔）
+const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub token: String,
@@ -39,7 +42,7 @@ pub async fn ws_handler(
     Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if !validate_token(&query.token, &state.config.password) {
+    if !validate_token(&query.token, &state.config.password, &state.hmac_secret) {
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -88,7 +91,7 @@ async fn handle_socket(
         loop {
             // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
             // 閉じないため、定期的に alive を確認する
-            match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+            match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
                 Ok(Ok(data)) => {
                     if ws_tx.send(Message::Binary(data.into())).await.is_err() {
                         break;

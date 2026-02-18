@@ -22,16 +22,30 @@ pub struct AppState {
     pub config: Config,
     pub store: Store,
     pub registry: Arc<SessionRegistry>,
+    pub hmac_secret: Vec<u8>,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
 pub fn create_app(config: Config, registry: Arc<SessionRegistry>) -> Router {
+    // 起動ごとにランダムな HMAC シークレットを生成
+    // 再起動で全トークンが無効化される（セキュリティ上望ましい）
+    let hmac_secret: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
+    create_app_with_secret(config, registry, hmac_secret)
+}
+
+/// テスト用: 固定シークレットで Router を構築
+pub fn create_app_with_secret(
+    config: Config,
+    registry: Arc<SessionRegistry>,
+    hmac_secret: Vec<u8>,
+) -> Router {
     let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
 
     let state = Arc::new(AppState {
         config,
         store,
         registry,
+        hmac_secret,
     });
 
     // 認証不要のルート

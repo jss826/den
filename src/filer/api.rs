@@ -226,7 +226,14 @@ pub async fn list(
         let read_dir = fs::read_dir(&path).map_err(io_err)?;
         let mut entries = Vec::new();
 
-        for entry in read_dir.flatten() {
+        for entry_result in read_dir {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::debug!("filer: list entry error in {}: {e}", path.display());
+                    continue;
+                }
+            };
             let name = entry.file_name().to_string_lossy().into_owned();
 
             if !q.show_hidden && (name.starts_with('.') || name.starts_with('$')) {
@@ -235,7 +242,10 @@ pub async fn list(
 
             let metadata = match entry.metadata() {
                 Ok(m) => m,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::debug!("filer: metadata error for {}: {e}", entry.path().display());
+                    continue;
+                }
             };
 
             let modified = metadata.modified().ok().map(|t| {
@@ -433,10 +443,12 @@ pub async fn download(
             .to_string_lossy()
             .into_owned();
 
-        // ヘッダーインジェクション防止: " と制御文字を除去
+        // ヘッダーインジェクション防止: ASCII 英数字 + 安全な記号のみ許可
         let safe_name: String = file_name
             .chars()
-            .filter(|c| !c.is_control() && *c != '"')
+            .filter(|c| {
+                c.is_ascii_alphanumeric() || *c == ' ' || *c == '.' || *c == '_' || *c == '-'
+            })
             .collect();
         let safe_name = if safe_name.is_empty() {
             "download".to_string()
@@ -577,10 +589,20 @@ fn search_recursive(
 
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(e) => {
+            tracing::debug!("filer: search read_dir error for {}: {e}", dir.display());
+            return;
+        }
     };
 
-    for entry in entries.flatten() {
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::debug!("filer: search entry error in {}: {e}", dir.display());
+                continue;
+            }
+        };
         if results.len() >= MAX_SEARCH_RESULTS {
             return;
         }

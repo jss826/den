@@ -46,6 +46,12 @@ const REPLAY_CAPACITY: usize = 64 * 1024;
 /// broadcast チャネル容量
 const BROADCAST_CAPACITY: usize = 256;
 
+/// 子プロセス監視ポーリング間隔
+const CHILD_MONITOR_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// タスク join タイムアウト
+const TASK_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// クライアント ID 生成用グローバルカウンター
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -210,7 +216,7 @@ impl SessionRegistry {
         let monitor_name = name.to_string();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(CHILD_MONITOR_INTERVAL).await;
                 // read_task が先に alive=false にした場合はロック不要
                 if !session_for_monitor.is_alive() {
                     break;
@@ -296,7 +302,7 @@ impl SessionRegistry {
                     inner.resize_handle.take()
                 };
                 if let Some(handle) = resize_handle {
-                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
                 }
                 return Err(RegistryError::AlreadyExists(name.to_string()));
             }
@@ -351,7 +357,7 @@ impl SessionRegistry {
                     inner.resize_handle.take()
                 };
                 if let Some(handle) = resize_handle {
-                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
                 }
                 return Err(RegistryError::AlreadyExists(name.to_string()));
             }
@@ -572,7 +578,7 @@ impl SessionRegistry {
         // resize_handle を await（master drop → ClosePseudoConsole）
         // OpenConsole は既に Job Object で terminate 済みなので即完了するはず
         if let Some(handle) = resize_handle
-            && tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            && tokio::time::timeout(TASK_JOIN_TIMEOUT, handle)
                 .await
                 .is_err()
         {
