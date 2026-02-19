@@ -233,6 +233,14 @@ const DenClaude = (() => {
       return;
     }
 
+    // スラッシュコマンドはstream-jsonモードでは未対応
+    if (prompt.startsWith('/')) {
+      Toast.info(
+        'Slash commands are not supported here. Use the Terminal tab to run "claude" interactively.',
+      );
+      return;
+    }
+
     // idle の場合は send_prompt で新ターンを開始
     // ユーザーメッセージを表示
     const container = document.getElementById('claude-messages');
