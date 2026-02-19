@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use crate::pty::registry::{ClientKind, SessionRegistry, SharedSession};
 
 /// SSH セッション非アクティブタイムアウト
-const SSH_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3600);
+const SSH_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// パスワード認証失敗時の遅延（ブルートフォース対策）
 const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3);

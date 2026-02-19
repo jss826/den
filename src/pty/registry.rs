@@ -82,6 +82,8 @@ pub struct SessionInner {
     resize_tx: Option<std::sync::mpsc::Sender<(u16, u16)>>,
     /// resize_task の JoinHandle（destroy 時に await → master drop → ConPTY 閉鎖保証）
     resize_handle: Option<tokio::task::JoinHandle<()>>,
+    /// child monitor task の JoinHandle（destroy 時に await）
+    monitor_handle: Option<tokio::task::JoinHandle<()>>,
     // Clients
     clients: Vec<ClientInfo>,
     /// 現在アクティブなクライアント ID（入力 or リサイズした最後のクライアント）
@@ -145,7 +147,11 @@ impl SessionRegistry {
         master: Box<dyn portable_pty::MasterPty + Send>,
         child: Box<dyn portable_pty::Child + Send + Sync>,
         #[cfg(windows)] job: Option<super::job::PtyJobObject>,
-    ) -> (Arc<SharedSession>, broadcast::Receiver<Vec<u8>>) {
+    ) -> (
+        Arc<SharedSession>,
+        broadcast::Receiver<Vec<u8>>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let (output_tx, first_rx) = broadcast::channel(BROADCAST_CAPACITY);
         let (resize_tx, resize_rx) = std::sync::mpsc::channel::<(u16, u16)>();
 
@@ -174,6 +180,7 @@ impl SessionRegistry {
                 pty_writer,
                 resize_tx: Some(resize_tx),
                 resize_handle: Some(resize_handle),
+                monitor_handle: None,
                 clients: Vec::new(),
                 active_client_id: None,
                 last_size: (0, 0),
@@ -222,7 +229,7 @@ impl SessionRegistry {
         // alive を false にする。SSH output_task がこれを参照して切断する。
         let session_for_monitor = Arc::clone(&session);
         let monitor_name = name.to_string();
-        tokio::spawn(async move {
+        let monitor_handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(CHILD_MONITOR_INTERVAL).await;
                 // read_task が先に alive=false にした場合はロック不要
@@ -249,7 +256,7 @@ impl SessionRegistry {
             session_for_monitor.output_tx.lock().unwrap().take();
         });
 
-        (session, first_rx)
+        (session, first_rx, monitor_handle)
     }
 
     /// セッション作成（デフォルトシェル）
@@ -280,7 +287,7 @@ impl SessionRegistry {
         .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?
         .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?;
 
-        let (session, first_rx) = Self::setup_pty_session(
+        let (session, first_rx, monitor_handle) = Self::setup_pty_session(
             name,
             pty.reader,
             pty.writer,
@@ -289,6 +296,7 @@ impl SessionRegistry {
             #[cfg(windows)]
             pty.job,
         );
+        session.inner.lock().await.monitor_handle = Some(monitor_handle);
 
         // 権威的な挿入: write lock で再チェック（TOCTOU 防止）
         {
@@ -296,7 +304,7 @@ impl SessionRegistry {
             if sessions.contains_key(name) {
                 // レース: 別の呼び出しが先に作成した → クリーンアップ
                 session.alive.store(false, Ordering::Release);
-                let resize_handle = {
+                let (resize_handle, monitor_handle) = {
                     let mut inner = session.inner.lock().await;
                     if let Some(mut child) = inner.child.take() {
                         let _ = tokio::task::spawn_blocking(move || {
@@ -307,8 +315,11 @@ impl SessionRegistry {
                     }
                     inner.pty_writer = Box::new(std::io::sink());
                     inner.resize_tx.take();
-                    inner.resize_handle.take()
+                    (inner.resize_handle.take(), inner.monitor_handle.take())
                 };
+                if let Some(handle) = monitor_handle {
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
+                }
                 if let Some(handle) = resize_handle {
                     let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
                 }
@@ -336,7 +347,7 @@ impl SessionRegistry {
             return Err(RegistryError::AlreadyExists(name.to_string()));
         }
 
-        let (session, first_rx) = Self::setup_pty_session(
+        let (session, first_rx, monitor_handle) = Self::setup_pty_session(
             name,
             pty.reader,
             pty.writer,
@@ -345,13 +356,14 @@ impl SessionRegistry {
             #[cfg(windows)]
             pty.job,
         );
+        session.inner.lock().await.monitor_handle = Some(monitor_handle);
 
         // 権威的な挿入（TOCTOU 防止）
         {
             let mut sessions = self.sessions.write().await;
             if sessions.contains_key(name) {
                 session.alive.store(false, Ordering::Release);
-                let resize_handle = {
+                let (resize_handle, monitor_handle) = {
                     let mut inner = session.inner.lock().await;
                     if let Some(mut child) = inner.child.take() {
                         let _ = tokio::task::spawn_blocking(move || {
@@ -362,8 +374,11 @@ impl SessionRegistry {
                     }
                     inner.pty_writer = Box::new(std::io::sink());
                     inner.resize_tx.take();
-                    inner.resize_handle.take()
+                    (inner.resize_handle.take(), inner.monitor_handle.take())
                 };
+                if let Some(handle) = monitor_handle {
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
+                }
                 if let Some(handle) = resize_handle {
                     let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
                 }
@@ -564,7 +579,7 @@ impl SessionRegistry {
 
         session.alive.store(false, Ordering::Release);
 
-        let resize_handle = {
+        let (resize_handle, monitor_handle) = {
             let mut inner = session.inner.lock().await;
 
             // 1. Job Object で child + OpenConsole を一括 terminate
@@ -596,8 +611,17 @@ impl SessionRegistry {
             // 4. resize_tx を drop → resize_task 終了 → master drop → ClosePseudoConsole
             inner.resize_tx.take();
 
-            inner.resize_handle.take()
+            (inner.resize_handle.take(), inner.monitor_handle.take())
         };
+
+        // monitor_handle を await（child monitor タスク終了保証）
+        if let Some(handle) = monitor_handle
+            && tokio::time::timeout(TASK_JOIN_TIMEOUT, handle)
+                .await
+                .is_err()
+        {
+            tracing::warn!("Session {name}: monitor_task did not finish within 5s");
+        }
 
         // resize_handle を await（master drop → ClosePseudoConsole）
         // OpenConsole は既に Job Object で terminate 済みなので即完了するはず

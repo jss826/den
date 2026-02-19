@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::AppState;
 use crate::auth::validate_token;
@@ -40,6 +41,8 @@ struct ClaudeSessionState {
     process_alive: bool,
     registry_name: String,
     shared_session: Option<Arc<SharedSession>>,
+    /// forwarder タスクのキャンセルトークン（attach 時に旧 forwarder を cancel）
+    forwarder_token: CancellationToken,
 }
 
 type WsSink = Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>;
@@ -64,6 +67,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
     let (ws_tx, mut ws_rx) = socket.split();
     let ws_tx: WsSink = Arc::new(Mutex::new(ws_tx));
     let state_map: SessionStateMap = Arc::new(Mutex::new(HashMap::new()));
+    let ws_cancel = CancellationToken::new();
 
     while let Some(Ok(msg)) = ws_rx.next().await {
         let Message::Text(text) = msg else {
@@ -198,6 +202,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 let forwarder_rx = shared_session.subscribe();
 
                 // セッション状態を作成
+                let forwarder_token = ws_cancel.child_token();
                 {
                     let mut map = state_map.lock().await;
                     map.insert(
@@ -207,6 +212,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                             process_alive: true,
                             registry_name: registry_name.clone(),
                             shared_session: Some(Arc::clone(&shared_session)),
+                            forwarder_token: forwarder_token.clone(),
                         },
                     );
                 }
@@ -234,6 +240,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 let processor_registry = Arc::clone(&registry);
                 let processor_registry_name = registry_name.clone();
                 let processor_ws_tx = Arc::clone(&ws_tx);
+                let processor_token = ws_cancel.child_token();
 
                 tokio::spawn(async move {
                     run_interactive_processor(
@@ -245,6 +252,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                         processor_registry_name,
                         processor_state_map,
                         processor_ws_tx,
+                        processor_token,
                     )
                     .await;
                 });
@@ -262,6 +270,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                         ws_tx_for_output,
                         session_for_output,
                         forwarder_state_map,
+                        forwarder_token,
                     )
                     .await;
                 });
@@ -433,16 +442,20 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     None => continue,
                 };
 
-                // 状態マップから削除 & registry 名を取得
+                // 状態マップから削除 & registry 名を取得 & forwarder cancel
                 let registry_name = {
                     let mut map = state_map.lock().await;
                     match map.remove(&session_id) {
-                        Some(state) => state.registry_name,
+                        Some(state) => {
+                            state.forwarder_token.cancel();
+                            state.registry_name
+                        }
                         None => format!("claude-{}", session_id),
                     }
                 };
 
                 registry.destroy(&registry_name).await;
+                store.close_event_file(&session_id);
 
                 // Store メタを stopped に更新
                 if let Some(mut meta) = store.load_session_meta(&session_id) {
@@ -486,6 +499,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                             .as_ref()
                             .map(|m| m.status == "running")
                             .unwrap_or(false);
+                        let new_forwarder_token = ws_cancel.child_token();
                         let mut map = state_map.lock().await;
                         map.insert(
                             session_id.clone(),
@@ -494,6 +508,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                                 process_alive: true,
                                 registry_name,
                                 shared_session: Some(Arc::clone(&shared)),
+                                forwarder_token: new_forwarder_token,
                             },
                         );
                         Some(shared)
@@ -503,6 +518,16 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                 };
 
                 if let Some(shared_session) = shared_session {
+                    // 旧 forwarder を cancel して新しい token を発行
+                    let new_forwarder_token = ws_cancel.child_token();
+                    {
+                        let mut map = state_map.lock().await;
+                        if let Some(state) = map.get_mut(&session_id) {
+                            state.forwarder_token.cancel();
+                            state.forwarder_token = new_forwarder_token.clone();
+                        }
+                    }
+
                     // 新しい forwarder を起動
                     let forwarder_rx = shared_session.subscribe();
                     let ws_tx_for_output = Arc::clone(&ws_tx);
@@ -517,6 +542,7 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                             ws_tx_for_output,
                             session_for_output,
                             forwarder_state_map,
+                            new_forwarder_token,
                         )
                         .await;
                     });
@@ -539,8 +565,9 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
         }
     }
 
-    // WS 切断 — processor/forwarder は続行（WS ライフサイクルから独立）
-    tracing::info!("Claude WebSocket disconnected");
+    // WS 切断 → 全 spawned タスク（processor/forwarder）を停止
+    ws_cancel.cancel();
+    tracing::info!("Claude WebSocket disconnected, cancelled all tasks");
 }
 
 /// インタラクティブプロセッサ: broadcast から出力を読み、Store に永続化
@@ -555,6 +582,7 @@ async fn run_interactive_processor(
     registry_name: String,
     state_map: SessionStateMap,
     ws_tx: WsSink,
+    cancel_token: CancellationToken,
 ) {
     let mut line_buf = String::new();
     #[cfg(windows)]
@@ -612,7 +640,7 @@ async fn run_interactive_processor(
                 break;
             }
             Err(_) => {
-                if !session.is_alive() {
+                if cancel_token.is_cancelled() || !session.is_alive() {
                     break;
                 }
             }
@@ -661,6 +689,9 @@ async fn run_interactive_processor(
     // registry から削除
     registry.destroy(&registry_name).await;
 
+    // イベントファイルハンドルを解放
+    store.close_event_file(&session_id);
+
     tracing::info!("Claude interactive process ended for session {session_id}");
 }
 
@@ -671,6 +702,7 @@ async fn forward_interactive_output(
     ws_tx: WsSink,
     session: Arc<SharedSession>,
     state_map: SessionStateMap,
+    cancel_token: CancellationToken,
 ) {
     let mut line_buf = String::new();
 
@@ -737,6 +769,9 @@ async fn forward_interactive_output(
                 break;
             }
             Err(_) => {
+                if cancel_token.is_cancelled() {
+                    break;
+                }
                 if !session.is_alive() {
                     let was_running = {
                         let map = state_map.lock().await;
