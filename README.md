@@ -5,22 +5,22 @@ iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用�
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Browser (iPad mini / Desktop)                       │
-│  ┌───────────┐  ┌────────────────┐  ┌─────────────┐ │
-│  │ Terminal   │  │ Claude Code UI │  │ File Manager│ │
-│  │ (xterm.js)│  │ (interactive)  │  │ (CodeMirror)│ │
-│  └─────┬─────┘  └───────┬────────┘  └──────┬──────┘ │
-└────────┼─────────────────┼──────────────────┼────────┘
-         │ WebSocket       │ WebSocket        │ REST API
-┌────────┼─────────────────┼──────────────────┼────────┐
-│  Axum  │                 │                  │        │
-│  ┌─────┴─────┐  ┌───────┴────────┐  ┌──────┴──────┐ │
-│  │PTY (shell)│  │PTY (claude CLI)│  │ Filer API   │ │
-│  └───────────┘  └────────────────┘  └─────────────┘ │
-│  Static files (rust-embed)    SSH Server (russh)     │
-│  Store (JSON persistence)     Job Object (ConPTY)    │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  Browser (iPad mini / Desktop)              │
+│  ┌───────────┐  ┌─────────────────────────┐ │
+│  │ Terminal   │  │ File Manager            │ │
+│  │ (xterm.js)│  │ (CodeMirror 6 + tree)   │ │
+│  └─────┬─────┘  └───────────┬─────────────┘ │
+└────────┼─────────────────────┼──────────────┘
+         │ WebSocket           │ REST API
+┌────────┼─────────────────────┼──────────────┐
+│  Axum  │                     │              │
+│  ┌─────┴─────┐  ┌────────────┴────────────┐ │
+│  │PTY (shell)│  │ Filer API               │ │
+│  └───────────┘  └─────────────────────────┘ │
+│  Static files (rust-embed)  SSH Server (russh) │
+│  Store (JSON persistence)   Job Object (ConPTY) │
+└────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -75,10 +75,9 @@ just prod strongpw    # パスワード上書き指定も可
 ## Features
 
 - **Web Terminal** - xterm.js v6 with touch-friendly keybar (Shift, Ctrl, F1-F12 etc.)
-- **Claude Code UI** - interactive mode (persistent process), multi-session, thinking spinner
 - **File Manager** - tree view, CodeMirror 6 editor, upload/download, search, image/Markdown preview
-- **7 Themes** - Dark, Light, Solarized Dark/Light, Monokai, Nord, System
-- **Server-side Persistence** - settings and session history saved to JSON files
+- **12 Themes** - Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin, One Dark, System
+- **Server-side Persistence** - settings saved to JSON files
 - **Authentication** - HMAC-SHA256 token with 24h expiry
 - **Built-in SSH Server** - russh-based, password + public key auth, session attach/create
 - **Accessibility** - ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion
@@ -134,13 +133,8 @@ den/
 │   ├── auth.rs             # HMAC token auth + middleware
 │   ├── ws.rs               # Terminal WebSocket handler
 │   ├── store.rs            # JSON file persistence
-│   ├── store_api.rs        # Settings/Sessions REST API
+│   ├── store_api.rs        # Settings REST API
 │   ├── assets.rs           # Static file serving (rust-embed)
-│   ├── claude/             # Claude Code integration
-│   │   ├── ws.rs           # Claude WebSocket (interactive mode)
-│   │   ├── session.rs      # Claude process management
-│   │   ├── connection.rs   # SSH connection config
-│   │   └── ssh_config.rs   # SSH config parser
 │   ├── filer/              # File manager API
 │   │   └── api.rs          # Tree, read, write, search, upload, download
 │   ├── pty/                # PTY management
@@ -157,11 +151,10 @@ den/
 │   ├── js/                 # App modules (IIFE pattern)
 │   │   ├── app.js          # Main app controller
 │   │   ├── terminal.js     # xterm.js terminal
-│   │   ├── claude.js       # Claude Code UI
-│   │   ├── claude-parser.js # Streaming JSON parser
 │   │   ├── filer.js        # File manager UI
 │   │   ├── filer-tree.js   # Tree view component
 │   │   ├── filer-editor.js # CodeMirror 6 editor
+│   │   ├── markdown.js     # Markdown renderer
 │   │   ├── keybar.js       # Touch keyboard bar
 │   │   ├── settings.js     # Settings modal
 │   │   ├── toast.js        # Toast + confirm/prompt modals
@@ -177,8 +170,9 @@ den/
 ## Version History
 
 - **v0.1** Web terminal + touch keybar + auth
-- **v0.2** Claude Code UI + persistence + security
+- **v0.2** Claude Code UI + persistence + security (removed in v0.6)
 - **v0.3** File manager (tree + editor + upload/download + search)
 - **v0.3.1** iPad keyboard layout + settings path browser + drive list
 - **v0.4** Built-in SSH server + SessionRegistry + session persistence
-- **v0.4+** UI/UX improvements (themes, accessibility, Claude interactive mode, file preview, performance optimization)
+- **v0.4+** UI/UX improvements (themes, accessibility, file preview, performance optimization)
+- **v0.6** Claude tab removed (use `claude` directly in Terminal)

@@ -14,11 +14,8 @@ export default [
         Auth: 'writable',
         DenTerminal: 'writable',
         Keybar: 'writable',
-        ClaudeParser: 'writable',
-        ClaudeSession: 'writable',
-        DenClaude: 'writable',
+        DenMarkdown: 'writable',
         DenSettings: 'writable',
-        SessionHistory: 'writable',
         // xterm.js vendor globals
         Terminal: 'readonly',
         FitAddon: 'readonly',
@@ -32,7 +29,7 @@ export default [
       'no-redeclare': ['error', { builtinGlobals: false }],
       'no-unused-vars': ['warn', {
         argsIgnorePattern: '^_',
-        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|ClaudeParser|ClaudeSession|DenClaude|DenSettings|SessionHistory)$',
+        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings)$',
         caughtErrorsIgnorePattern: '^_',
       }],
       'no-console': 'off',
