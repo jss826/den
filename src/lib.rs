@@ -1,6 +1,5 @@
 pub mod assets;
 pub mod auth;
-pub mod claude;
 pub mod config;
 pub mod filer;
 pub mod pty;
@@ -40,7 +39,6 @@ pub fn create_app_with_secret(
     hmac_secret: Vec<u8>,
 ) -> Router {
     let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
-    store.cleanup_stale_running_sessions();
 
     let state = Arc::new(AppState {
         config,
@@ -58,18 +56,8 @@ pub fn create_app_with_secret(
     // 認証必要のルート
     let protected_routes = Router::new()
         .route("/api/ws", get(ws::ws_handler))
-        .route("/api/claude/ws", get(claude::ws::ws_handler))
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
-        .route("/api/sessions", get(store_api::list_sessions))
-        .route(
-            "/api/sessions/{id}",
-            get(store_api::get_session).delete(store_api::delete_session),
-        )
-        .route(
-            "/api/sessions/{id}/events",
-            get(store_api::get_session_events),
-        )
         // Terminal session management API
         .route(
             "/api/terminal/sessions",

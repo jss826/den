@@ -28,7 +28,6 @@
     <!-- タブバー -->
     <div id="tab-bar" role="tablist" aria-label="Main navigation">
       <button class="tab active" data-tab="terminal" role="tab" aria-selected="true">Terminal</button>
-      <button class="tab" data-tab="claude" role="tab" aria-selected="false">Claude</button>
       <button class="tab" data-tab="filer" role="tab" aria-selected="false">Files</button>
       <div class="tab-spacer"></div>
       <button id="settings-btn" class="tab-icon-btn" data-tooltip="Settings" aria-label="Settings"></button>
@@ -44,30 +43,6 @@
         <button id="session-kill-btn" class="session-bar-btn danger" data-tooltip="Kill Session" aria-label="Kill session">x</button>
       </div>
       <div id="terminal-container"></div>
-    </div>
-
-    <!-- Claude -->
-    <div id="claude-pane" class="pane" hidden role="tabpanel" aria-label="Claude">
-      <div class="claude-layout">
-        <!-- サイドバー -->
-        <div class="claude-sidebar">
-          <button class="sidebar-toggle claude-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
-          <button id="claude-new-session" class="claude-new-btn">+ New Session</button>
-          <div id="claude-session-list" class="claude-sessions"></div>
-          <div class="sidebar-divider"></div>
-          <div class="sidebar-section-label">History</div>
-          <div id="claude-history-list" class="claude-history"></div>
-        </div>
-        <!-- メインエリア -->
-        <div class="claude-main">
-          <div id="claude-header" class="claude-header"></div>
-          <div id="claude-messages" class="claude-messages"></div>
-          <div class="claude-input-area">
-            <textarea id="claude-input" class="claude-input" placeholder="Message..." rows="3" aria-label="Message to Claude"></textarea>
-            <button id="claude-send" class="claude-send-btn" aria-label="Send message">Send</button>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- ファイラ -->
@@ -146,38 +121,6 @@
       </div>
     </div>
 
-    <!-- 新規セッションモーダル -->
-    <div id="claude-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="New Claude session">
-      <div class="modal-content">
-        <h3>New Claude Session</h3>
-        <div class="modal-section">
-          <label>Connection</label>
-          <div id="modal-connections" class="modal-connections">
-            <button class="conn-btn active" data-conn="local">Local</button>
-          </div>
-        </div>
-        <div class="modal-section">
-          <label>Working Directory</label>
-          <div id="modal-dir-browser" class="dir-browser">
-            <div class="dir-path">
-              <button id="dir-up" class="dir-up-btn" data-tooltip="Parent Directory">..</button>
-              <input type="text" id="dir-path-input" class="dir-path-input" placeholder="Type path (e.g. D:\)" />
-              <button id="dir-go" class="dir-up-btn" data-tooltip="Navigate">Go</button>
-            </div>
-            <div id="dir-list" class="dir-list"></div>
-          </div>
-        </div>
-        <div class="modal-section">
-          <label>Prompt <span class="label-optional">(optional)</span></label>
-          <textarea id="modal-prompt" class="modal-prompt" placeholder="What would you like Claude to do?" rows="3"></textarea>
-        </div>
-        <div class="modal-actions">
-          <button id="modal-cancel" class="modal-btn">Cancel</button>
-          <button id="modal-start" class="modal-btn primary">Start</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 設定モーダル -->
     <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-content">
@@ -208,30 +151,11 @@
           <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
         </div>
         <div class="modal-section">
-          <label>Claude Input Position</label>
-          <select id="setting-input-position" class="settings-input">
-            <option value="bottom">Bottom</option>
-            <option value="top">Top</option>
-          </select>
-        </div>
-        <div class="modal-section">
           <label>
             <input type="checkbox" id="setting-ssh-agent-fwd">
             SSH Agent Forwarding
           </label>
           <small class="setting-hint">Forward local SSH keys to remote hosts (security risk on untrusted hosts)</small>
-        </div>
-        <div class="modal-section">
-          <label>Default Working Directory</label>
-          <div id="settings-dir-browser" class="dir-browser">
-            <div class="dir-path">
-              <button id="settings-dir-up" class="dir-up-btn" data-tooltip="Parent Directory">..</button>
-              <input type="text" id="setting-default-dir" class="dir-path-input" placeholder="~ (default)" />
-              <button id="settings-dir-go" class="dir-up-btn" data-tooltip="Navigate">Go</button>
-            </div>
-            <div id="settings-dir-drives" class="dir-drives"></div>
-            <div id="settings-dir-list" class="dir-list"></div>
-          </div>
         </div>
         <div class="modal-section">
           <label>Keybar Buttons</label>
@@ -291,12 +215,9 @@
   <script src="/js/spinner.js"></script>
   <script src="/js/auth.js"></script>
   <script src="/js/settings.js"></script>
-  <script src="/js/session-history.js"></script>
   <script src="/js/terminal.js"></script>
   <script src="/js/keybar.js"></script>
-  <script src="/js/claude-parser.js"></script>
-  <script src="/js/claude-session.js"></script>
-  <script src="/js/claude.js"></script>
+  <script src="/js/markdown.js"></script>
   <script src="/js/filer-tree.js"></script>
   <script src="/js/filer-editor.js"></script>
   <script src="/js/filer.js"></script>

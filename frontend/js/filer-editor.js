@@ -1,4 +1,4 @@
-/* global CM, Auth */
+/* global CM, Auth, DenMarkdown */
 // Den - ファイラ CodeMirror 6 エディタ統合
 // eslint-disable-next-line no-unused-vars
 const FilerEditor = (() => {
@@ -195,7 +195,7 @@ const FilerEditor = (() => {
         }
         const content = file.view.state.doc.toString();
         if (!file.previewCache || file.previewCache !== content) {
-          file.previewDom.innerHTML = ClaudeParser.renderMarkdown(content);
+          file.previewDom.innerHTML = DenMarkdown.renderMarkdown(content);
           file.previewCache = content;
         }
         editorContainer.appendChild(file.previewDom);

@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::{fs, io};
 
 use crate::AppState;
-use crate::claude::connection::list_drives;
 
 // --- 定数 ---
 
@@ -665,6 +664,25 @@ fn search_recursive(
             search_recursive(&path, query, content_search, depth + 1, results);
         }
     }
+}
+
+/// Windows: GetLogicalDrives で接続済みドライブ一覧を返す。非 Windows は空。
+#[cfg(windows)]
+fn list_drives() -> Vec<String> {
+    let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+    let mut drives = Vec::new();
+    for i in 0..26u32 {
+        if mask & (1 << i) != 0 {
+            let letter = (b'A' + i as u8) as char;
+            drives.push(format!("{}:\\", letter));
+        }
+    }
+    drives
+}
+
+#[cfg(not(windows))]
+fn list_drives() -> Vec<String> {
+    Vec::new()
 }
 
 #[cfg(test)]

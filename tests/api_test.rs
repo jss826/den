@@ -136,20 +136,6 @@ async fn auth_valid_token_non_ws() {
     assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-// --- Claude WS ---
-
-#[tokio::test]
-async fn claude_ws_no_token() {
-    let app = test_app();
-    let req = Request::builder()
-        .uri("/api/claude/ws")
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-}
-
 // --- Static files ---
 
 #[tokio::test]
@@ -288,80 +274,6 @@ async fn settings_requires_auth() {
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-}
-
-// --- Sessions API ---
-
-#[tokio::test]
-async fn sessions_list_empty() {
-    let app = test_app();
-    let req = Request::builder()
-        .uri("/api/sessions")
-        .header(header::AUTHORIZATION, auth_header())
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn sessions_get_not_found() {
-    let app = test_app();
-    let req = Request::builder()
-        .uri("/api/sessions/nonexistent")
-        .header(header::AUTHORIZATION, auth_header())
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn sessions_events_not_found() {
-    let app = test_app();
-    let req = Request::builder()
-        .uri("/api/sessions/nonexistent/events")
-        .header(header::AUTHORIZATION, auth_header())
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-// --- Sessions API: invalid ID ---
-
-#[tokio::test]
-async fn sessions_get_invalid_id() {
-    let app = test_app();
-    // ID with special characters that is_valid_id should reject
-    let req = Request::builder()
-        .uri("/api/sessions/bad..id")
-        .header(header::AUTHORIZATION, auth_header())
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn sessions_events_invalid_id() {
-    let app = test_app();
-    let req = Request::builder()
-        .uri("/api/sessions/bad..id/events")
-        .header(header::AUTHORIZATION, auth_header())
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 // --- Settings API: edge cases ---

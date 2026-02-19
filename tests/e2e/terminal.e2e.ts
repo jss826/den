@@ -16,18 +16,18 @@ test.describe('Terminal', () => {
     });
   });
 
-  test('switch to Claude tab and back', async ({ page }) => {
+  test('switch to Files tab and back', async ({ page }) => {
     await login(page);
 
-    // Switch to Claude tab
-    await page.click('.tab[data-tab="claude"]');
-    await expect(page.locator('#claude-pane')).toBeVisible();
+    // Switch to Files tab
+    await page.click('.tab[data-tab="filer"]');
+    await expect(page.locator('#filer-pane')).toBeVisible();
     await expect(page.locator('#terminal-pane')).toBeHidden();
 
     // Switch back to terminal tab
     await page.click('.tab[data-tab="terminal"]');
     await expect(page.locator('#terminal-pane')).toBeVisible();
-    await expect(page.locator('#claude-pane')).toBeHidden();
+    await expect(page.locator('#filer-pane')).toBeHidden();
   });
 
   test('terminal receives command output', async ({ page }) => {

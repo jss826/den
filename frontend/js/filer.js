@@ -308,10 +308,6 @@ const DenFiler = (() => {
         if (window.DenApp) window.DenApp.switchTab('terminal');
         DenTerminal.sendInput('cd "' + path.replace(/"/g, '\\"') + '"\r');
       }});
-      items.push({ label: 'Open Claude Here', action: () => {
-        if (window.DenApp) window.DenApp.switchTab('claude');
-        ClaudeSession.openModal(path);
-      }});
       items.push({ separator: true });
     }
 

@@ -31,7 +31,6 @@ hmac = "0.12.1"
 russh = { version = "0.57", default-features = false, features = ["flate2", "ring", "rsa"] }
 async-trait = "0.1"
 anyhow = "1"
-tokio-util = "0.7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

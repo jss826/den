@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, Keybar, DenClaude, DenFiler, DenIcons */
+/* global Auth, DenSettings, DenTerminal, Keybar, DenFiler, DenIcons */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -7,7 +7,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const passwordInput = document.getElementById('password-input');
   const loginError = document.getElementById('login-error');
 
-  let claudeInitialized = false;
   let filerInitialized = false;
 
   // ログイン処理
@@ -55,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Esc キーで開いているモーダルを閉じる + Ctrl+1/2/3 タブ切替
   document.addEventListener('keydown', (e) => {
     // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-    const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'claude-modal', 'filer-quickopen-modal'];
+    const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal'];
     // ショートカット抑止にはすべてのモーダルを含める
     const allModals = ['confirm-modal', 'prompt-modal', ...escModals];
 
@@ -92,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Ctrl+1/2/3 タブ切替（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !anyModalOpen) {
-      const tabs = { '1': 'terminal', '2': 'claude', '3': 'filer' };
+      const tabs = { '1': 'terminal', '2': 'filer' };
       const tab = tabs[e.key];
       if (tab) {
         e.preventDefault();
@@ -231,7 +230,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ペイン表示切り替え
     document.getElementById('terminal-pane').hidden = tabName !== 'terminal';
-    document.getElementById('claude-pane').hidden = tabName !== 'claude';
     document.getElementById('filer-pane').hidden = tabName !== 'filer';
 
     // キーバーはターミナル時のみ
@@ -244,12 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
       keybar.classList.remove('visible');
     }
 
-    // Claude 初期化（初回のみ）
-    if (tabName === 'claude' && !claudeInitialized) {
-      claudeInitialized = true;
-      DenClaude.init(Auth.getToken());
-    }
-
     // Filer 初期化（初回のみ）
     if (tabName === 'filer' && !filerInitialized) {
       filerInitialized = true;
@@ -258,7 +250,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function initSidebarToggles() {
-    setupSidebarToggle('.claude-sidebar-toggle', '.claude-sidebar', '.claude-layout');
     setupSidebarToggle('.filer-sidebar-toggle', '.filer-sidebar', '.filer-layout');
   }
 

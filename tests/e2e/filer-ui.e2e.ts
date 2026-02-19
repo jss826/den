@@ -28,7 +28,6 @@ test.describe('Filer UI', () => {
 
     await expect(page.locator('#filer-pane')).toBeVisible();
     await expect(page.locator('#terminal-pane')).toBeHidden();
-    await expect(page.locator('#claude-pane')).toBeHidden();
     await expect(page.locator('.tab[data-tab="filer"]')).toHaveClass(/active/);
   });
 
