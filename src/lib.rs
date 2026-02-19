@@ -40,6 +40,10 @@ pub fn create_app_with_secret(
 ) -> Router {
     let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
 
+    // NOTE: 永続化状態を追加する場合は、ここでスタートアップ時の整合性チェックを実装すること。
+    // 例: 前回の異常終了で中断状態のままのリソースをリセットする（orphaned state cleanup）。
+    // 以前はセッション永続化に対して store.cleanup_stale_running_sessions() を呼んでいた。
+
     let state = Arc::new(AppState {
         config,
         store,

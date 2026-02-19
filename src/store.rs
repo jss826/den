@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 /// サーバーサイド永続化ストア
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    /// Write-through cache for settings (updated on save, avoids file I/O on read)
+    settings_cache: Arc<Mutex<Option<Settings>>>,
 }
 
 // --- データモデル ---
@@ -71,12 +74,24 @@ impl Store {
     /// 指定パスで初期化（ディレクトリ自動作成）
     pub fn new(root: PathBuf) -> std::io::Result<Self> {
         fs::create_dir_all(&root)?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            settings_cache: Arc::new(Mutex::new(None)),
+        })
     }
 
     // --- Settings ---
 
     pub fn load_settings(&self) -> Settings {
+        if let Some(cached) = self.settings_cache.lock().unwrap().as_ref() {
+            return cached.clone();
+        }
+        let settings = self.load_settings_from_disk();
+        *self.settings_cache.lock().unwrap() = Some(settings.clone());
+        settings
+    }
+
+    fn load_settings_from_disk(&self) -> Settings {
         let path = self.root.join("settings.json");
         match fs::read_to_string(&path) {
             Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
@@ -91,7 +106,9 @@ impl Store {
         let path = self.root.join("settings.json");
         let json = serde_json::to_string_pretty(settings)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(path, json)
+        fs::write(path, json)?;
+        *self.settings_cache.lock().unwrap() = Some(settings.clone());
+        Ok(())
     }
 }
 
@@ -140,5 +157,63 @@ mod tests {
         let settings = store.load_settings();
         assert_eq!(settings.font_size, 20);
         assert_eq!(settings.theme, "dark"); // default
+    }
+
+    #[test]
+    fn settings_unknown_fields_ignored() {
+        // 旧バージョンの settings.json に残っているフィールド（例: claude_default_dir）が
+        // デシリアライズ時にエラーにならないことを確認（後方互換性）
+        let (store, tmp) = temp_store();
+        fs::write(
+            tmp.path().join("settings.json"),
+            r#"{"font_size": 16, "claude_default_dir": "/old", "unknown_field": true}"#,
+        )
+        .unwrap();
+        let settings = store.load_settings();
+        assert_eq!(settings.font_size, 16);
+        assert_eq!(settings.theme, "dark");
+    }
+
+    #[test]
+    fn from_data_dir_creates_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a").join("b").join("c");
+        let store = Store::from_data_dir(&nested.to_string_lossy()).unwrap();
+        assert!(nested.exists());
+        // settings should return defaults for a fresh store
+        let settings = store.load_settings();
+        assert_eq!(settings.font_size, 14);
+    }
+
+    #[test]
+    fn settings_save_and_load_with_keybar() {
+        let (store, _tmp) = temp_store();
+        let settings = Settings {
+            keybar_buttons: Some(vec![KeybarButton {
+                label: "Tab".to_string(),
+                send: "\t".to_string(),
+                btn_type: Some("key".to_string()),
+                mod_key: None,
+            }]),
+            ..Settings::default()
+        };
+        store.save_settings(&settings).unwrap();
+        let loaded = store.load_settings();
+        let buttons = loaded.keybar_buttons.unwrap();
+        assert_eq!(buttons.len(), 1);
+        assert_eq!(buttons[0].label, "Tab");
+        assert_eq!(buttons[0].send, "\t");
+    }
+
+    #[test]
+    fn settings_empty_json_uses_all_defaults() {
+        let (store, tmp) = temp_store();
+        fs::write(tmp.path().join("settings.json"), "{}").unwrap();
+        let settings = store.load_settings();
+        assert_eq!(settings.font_size, 14);
+        assert_eq!(settings.theme, "dark");
+        assert_eq!(settings.terminal_scrollback, 1000);
+        assert!(settings.keybar_buttons.is_none());
+        assert!(!settings.ssh_agent_forwarding);
     }
 }

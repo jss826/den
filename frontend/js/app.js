@@ -51,13 +51,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Esc キーで開いているモーダルを閉じる + Ctrl+1/2/3 タブ切替
-  document.addEventListener('keydown', (e) => {
-    // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-    const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal'];
-    // ショートカット抑止にはすべてのモーダルを含める
-    const allModals = ['confirm-modal', 'prompt-modal', ...escModals];
+  // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
+  // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
+  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal'];
+  // ショートカット抑止にはすべてのモーダルを含める
+  const allModals = ['confirm-modal', 'prompt-modal', ...escModals];
 
+  // Esc キーで開いているモーダルを閉じる + Ctrl+1/2 タブ切替
+  document.addEventListener('keydown', (e) => {
     const anyModalOpen = allModals.some((id) => {
       const m = document.getElementById(id);
       return m && !m.hidden;
@@ -89,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Ctrl+1/2/3 タブ切替（モーダル中はスキップ）
+    // Ctrl+1/2 タブ切替（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !anyModalOpen) {
       const tabs = { '1': 'terminal', '2': 'filer' };
       const tab = tabs[e.key];

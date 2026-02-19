@@ -10,3 +10,4 @@ playwright-report/
 .env
 /.claude/tmp
 /.claude/*.local.md
+.ai-review/

@@ -85,9 +85,10 @@ const DenSettings = (() => {
   }
 
   async function save(updates) {
+    const previous = { ...current };
     Object.assign(current, updates);
     try {
-      await fetch('/api/settings', {
+      const resp = await fetch('/api/settings', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -95,8 +96,17 @@ const DenSettings = (() => {
         },
         body: JSON.stringify(current),
       });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return true;
     } catch (e) {
+      Object.assign(current, previous);
+      if (typeof Toast !== 'undefined' && Toast.error) {
+        Toast.error('Failed to save settings');
+      }
       console.warn('Failed to save settings:', e);
+      return false;
     }
   }
 
@@ -348,13 +358,14 @@ const DenSettings = (() => {
       const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
       const sshAgentFwd = agentFwdCheck ? agentFwdCheck.checked : false;
 
-      await save({
+      const ok = await save({
         font_size: Math.max(8, Math.min(32, fontSize)),
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
         theme: theme,
         keybar_buttons: keybarButtons,
         ssh_agent_forwarding: sshAgentFwd,
       });
+      if (!ok) return;
       apply();
 
       // キーバーを即時反映

@@ -169,6 +169,8 @@ async fn handle_socket(
 // --- REST API for terminal session management ---
 
 /// GET /api/terminal/sessions
+/// Returns all sessions. Previously filtered out "claude-" prefixed sessions
+/// (handled by the Claude tab), but that tab was removed in v0.6.
 pub async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
     let sessions = state.registry.list().await;
     Json(sessions)

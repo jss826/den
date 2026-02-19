@@ -195,8 +195,17 @@ const FilerEditor = (() => {
         }
         const content = file.view.state.doc.toString();
         if (!file.previewCache || file.previewCache !== content) {
-          file.previewDom.innerHTML = DenMarkdown.renderMarkdown(content);
-          file.previewCache = content;
+          const render = () => {
+            file.previewDom.innerHTML = DenMarkdown.sanitize(DenMarkdown.renderMarkdown(content));
+            file.previewCache = content;
+          };
+          // 大きなファイル（10KB超）は requestIdleCallback で遅延描画しメインスレッドブロックを回避
+          if (content.length > 10000 && window.requestIdleCallback) {
+            file.previewDom.textContent = 'Rendering\u2026';
+            requestIdleCallback(render);
+          } else {
+            render();
+          }
         }
         editorContainer.appendChild(file.previewDom);
       } else {

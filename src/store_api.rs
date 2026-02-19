@@ -1,3 +1,5 @@
+// テスト: tests/api_test.rs の Settings API セクションで統合テスト済み
+// （GET/PUT 正常系・認証必須・不正JSON・部分JSON）
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use std::sync::Arc;
 

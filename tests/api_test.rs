@@ -318,6 +318,22 @@ async fn settings_put_partial_json() {
     assert!(status == StatusCode::OK || status == StatusCode::UNPROCESSABLE_ENTITY);
 }
 
+#[tokio::test]
+async fn settings_put_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"font_size":20,"theme":"dark","terminal_scrollback":2000}"#,
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 // --- Terminal REST API ---
 
 #[tokio::test]
