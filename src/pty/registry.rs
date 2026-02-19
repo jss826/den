@@ -833,7 +833,8 @@ impl SharedSession {
         }
         let mut inner = self.inner.lock().await;
         std::io::Write::write_all(&mut inner.pty_writer, data)
-            .map_err(|e| format!("Write failed: {e}"))
+            .map_err(|e| format!("Write failed: {e}"))?;
+        std::io::Write::flush(&mut inner.pty_writer).map_err(|e| format!("Flush failed: {e}"))
     }
 
     /// クライアントのアクティブ化 + PTY 入力書き込み（1回のロックで実行）
