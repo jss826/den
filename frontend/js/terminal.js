@@ -287,6 +287,89 @@ const DenTerminal = (() => {
     }
   }
 
+  // --- Select Mode ---
+  let selectModeActive = false;
+  let selectModeOverlay = null;
+  let selectModeStartRow = null;
+  let selectModeOnExit = null;
+
+  function enterSelectMode(onExit) {
+    if (selectModeActive) return;
+    selectModeActive = true;
+    selectModeStartRow = null;
+    selectModeOnExit = onExit || null;
+
+    const container = document.getElementById('terminal-container');
+    if (!container) return;
+
+    container.classList.add('select-mode');
+
+    selectModeOverlay = document.createElement('div');
+    selectModeOverlay.className = 'select-mode-overlay';
+    container.style.position = 'relative';
+    container.appendChild(selectModeOverlay);
+
+    selectModeOverlay.addEventListener('click', onSelectModeTap);
+  }
+
+  function exitSelectMode() {
+    if (!selectModeActive) return;
+    selectModeActive = false;
+    selectModeStartRow = null;
+
+    const container = document.getElementById('terminal-container');
+    if (container) {
+      container.classList.remove('select-mode');
+    }
+
+    if (selectModeOverlay) {
+      selectModeOverlay.removeEventListener('click', onSelectModeTap);
+      selectModeOverlay.remove();
+      selectModeOverlay = null;
+    }
+
+    if (term) term.clearSelection();
+
+    const cb = selectModeOnExit;
+    selectModeOnExit = null;
+    if (cb) cb();
+  }
+
+  function isSelectMode() {
+    return selectModeActive;
+  }
+
+  function onSelectModeTap(e) {
+    if (!term) return;
+
+    const screen = term.element?.querySelector('.xterm-screen');
+    if (!screen) return;
+    const rect = screen.getBoundingClientRect();
+    const cellHeight = rect.height / term.rows;
+    const viewportRow = Math.floor((e.clientY - rect.top) / cellHeight);
+    const bufferRow = viewportRow + term.buffer.active.viewportY;
+
+    if (selectModeStartRow === null) {
+      // First tap — highlight single line
+      selectModeStartRow = bufferRow;
+      term.selectLines(bufferRow, bufferRow);
+    } else {
+      // Second tap — select range and copy
+      const startRow = Math.min(selectModeStartRow, bufferRow);
+      const endRow = Math.max(selectModeStartRow, bufferRow);
+      term.selectLines(startRow, endRow);
+      const sel = term.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel).then(() => {
+          if (typeof Toast !== 'undefined') Toast.success('Copied');
+        }).catch(() => {
+          if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
+        });
+      }
+      exitSelectMode();
+    }
+  }
+
   function focus() {
     if (term) term.focus();
   }
@@ -437,5 +520,6 @@ const DenTerminal = (() => {
   return {
     init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
     getCurrentSession, switchSession, refreshSessionList, initSessionBar,
+    enterSelectMode, exitSelectMode, isSelectMode,
   };
 })();

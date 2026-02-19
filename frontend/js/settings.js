@@ -58,6 +58,10 @@ const DenSettings = (() => {
     { label: 'F11', send: '\\x1b[23~', display: 'F11' },
     { label: 'F12', send: '\\x1b[24~', display: 'F12' },
     { label: 'S-Tab', send: '\\x1b[Z', display: 'Shift+Tab' },
+    { label: 'Copy', send: '', display: 'Copy (selection)', type: 'action', action: 'copy' },
+    { label: 'Paste', send: '', display: 'Paste (clipboard)', type: 'action', action: 'paste' },
+    { label: 'Sel', send: '', display: 'Select mode (tap lines)', type: 'action', action: 'select' },
+    { label: 'Screen', send: '', display: 'Copy screen (visible)', type: 'action', action: 'copy-screen' },
   ];
 
   // エスケープ文字列をリテラルに変換
@@ -165,6 +169,9 @@ const DenSettings = (() => {
       item.className = 'keybar-btn-item';
       if (key.type === 'modifier' || key.btn_type === 'modifier') {
         item.classList.add('modifier');
+      }
+      if (key.type === 'action' || key.btn_type === 'action') {
+        item.classList.add('action');
       }
       item.setAttribute('draggable', 'true');
       item.dataset.index = idx;
@@ -326,9 +333,11 @@ const DenSettings = (() => {
     if (presetSelect.options.length <= 1) {
       KEY_PRESETS.forEach(p => {
         const opt = document.createElement('option');
-        opt.value = p.send;
+        opt.value = p.type === 'action' ? '__action:' + p.action : p.send;
         opt.textContent = p.display;
         opt.dataset.label = p.label;
+        if (p.type) opt.dataset.btnType = p.type;
+        if (p.action) opt.dataset.btnAction = p.action;
         presetSelect.appendChild(opt);
       });
     }
@@ -425,6 +434,20 @@ const DenSettings = (() => {
       const label = newLabelInput.value.trim();
       if (!label) {
         newLabelInput.focus();
+        return;
+      }
+
+      // アクションプリセット（Copy/Paste）
+      const selectedOpt = presetSelect.selectedOptions[0];
+      if (selectedOpt && selectedOpt.dataset.btnType === 'action') {
+        editingKeybarButtons.push({
+          label,
+          send: '',
+          type: 'action',
+          action: selectedOpt.dataset.btnAction,
+        });
+        renderKeybarList();
+        addForm.hidden = true;
         return;
       }
 

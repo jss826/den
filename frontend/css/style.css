@@ -615,6 +615,35 @@ html, body {
   background: var(--error);
 }
 
+.key-btn.action {
+  background: var(--keybar-key);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.key-btn.action.active {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* Select mode overlay */
+.select-mode-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* Select mode visual indicator */
+.select-mode {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* モーダル */
 .modal {
   position: fixed;

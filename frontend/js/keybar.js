@@ -23,6 +23,9 @@ const Keybar = (() => {
     { label: 'C-d', send: '\x04' },
     { label: 'C-z', send: '\x1a' },
     { label: 'C-l', send: '\x0c' },
+    { label: 'Paste', send: '', type: 'action', action: 'paste' },
+    { label: 'Sel', send: '', type: 'action', action: 'select' },
+    { label: 'Screen', send: '', type: 'action', action: 'copy-screen' },
   ];
 
   function init(el, customKeys) {
@@ -60,6 +63,8 @@ const Keybar = (() => {
 
       const isModifier = key.type === 'modifier' || key.btn_type === 'modifier';
 
+      const isAction = key.type === 'action' || key.btn_type === 'action';
+
       if (isModifier) {
         const modKey = key.mod || key.mod_key;
         btn.classList.add('modifier');
@@ -67,6 +72,72 @@ const Keybar = (() => {
           e.preventDefault();
           modifiers[modKey] = !modifiers[modKey];
           btn.classList.toggle('active', modifiers[modKey]);
+        });
+      } else if (isAction) {
+        const actionName = key.action || key.btn_action;
+        btn.classList.add('action');
+        btn.dataset.action = actionName;
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          if (actionName === 'paste') {
+            try {
+              const text = await navigator.clipboard.readText();
+              if (text) {
+                const t = DenTerminal.getTerminal();
+                if (t) t.paste(text);
+              }
+            } catch (_) {
+              if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
+            }
+          } else if (actionName === 'copy') {
+            try {
+              const t = DenTerminal.getTerminal();
+              if (t) {
+                const sel = t.getSelection();
+                if (sel) {
+                  await navigator.clipboard.writeText(sel);
+                  t.clearSelection();
+                  if (typeof Toast !== 'undefined') Toast.success('Copied');
+                }
+              }
+            } catch (_) {
+              if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
+            }
+          } else if (actionName === 'select') {
+            if (DenTerminal.isSelectMode()) {
+              DenTerminal.exitSelectMode();
+            } else {
+              btn.classList.add('active');
+              DenTerminal.enterSelectMode(() => {
+                btn.classList.remove('active');
+              });
+              return; // Don't refocus terminal — overlay needs taps
+            }
+          } else if (actionName === 'copy-screen') {
+            try {
+              const t = DenTerminal.getTerminal();
+              if (t) {
+                const buf = t.buffer.active;
+                const lines = [];
+                for (let i = buf.viewportY; i < buf.viewportY + t.rows; i++) {
+                  const line = buf.getLine(i);
+                  if (line) lines.push(line.translateToString(true));
+                }
+                // Trim trailing empty lines
+                while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+                  lines.pop();
+                }
+                const text = lines.join('\n');
+                if (text) {
+                  await navigator.clipboard.writeText(text);
+                  if (typeof Toast !== 'undefined') Toast.success('Screen copied');
+                }
+              }
+            } catch (_) {
+              if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
+            }
+          }
+          DenTerminal.focus();
         });
       } else {
         btn.addEventListener('click', (e) => {
