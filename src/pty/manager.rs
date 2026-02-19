@@ -11,6 +11,15 @@ pub struct PtySession {
     pub job: Option<super::job::PtyJobObject>,
 }
 
+/// パイプベースのプロセスセッション（PTY なし、Claude stream-json モード用）
+pub struct ProcessSession {
+    pub reader: Box<dyn Read + Send>,
+    pub writer: Box<dyn Write + Send>,
+    pub child: Box<dyn portable_pty::Child + Send + Sync>,
+    #[cfg(windows)]
+    pub job: Option<super::job::PtyJobObject>,
+}
+
 pub struct PtyManager;
 
 impl PtyManager {

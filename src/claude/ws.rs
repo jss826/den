@@ -26,10 +26,6 @@ use super::ssh_config;
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Claude CLI の PTY サイズ（stream-json モードでは TUI を描画しないため大きめに設定）
-const CLAUDE_PTY_COLS: u16 = 10000;
-const CLAUDE_PTY_ROWS: u16 = 50;
-
 #[derive(Deserialize)]
 pub struct ClaudeWsQuery {
     pub token: String,
@@ -158,41 +154,22 @@ async fn handle_claude_ws(socket: WebSocket, store: Store, registry: Arc<Session
                     tracing::error!("Failed to persist session meta: {}", e);
                 }
 
-                // インタラクティブモードで Claude CLI を起動
+                // インタラクティブモードで Claude CLI を起動（パイプベース）
                 let settings = store.load_settings();
                 let agent_fwd = settings.ssh_agent_forwarding;
                 let skip_perms = settings.claude_skip_permissions.unwrap_or(true);
-                let pty_result = tokio::task::spawn_blocking({
-                    let conn = conn.clone();
-                    let dir = dir.clone();
-                    move || {
-                        session::spawn_claude_interactive(
-                            &conn,
-                            &dir,
-                            agent_fwd,
-                            skip_perms,
-                            CLAUDE_PTY_COLS,
-                            CLAUDE_PTY_ROWS,
-                        )
-                    }
-                })
-                .await;
-
-                let pty = match pty_result {
-                    Ok(Ok(pty)) => pty,
-                    Ok(Err(e)) => {
-                        send_error(&ws_tx, &format!("Failed to spawn claude: {}", e)).await;
-                        continue;
-                    }
-                    Err(e) => {
-                        send_error(&ws_tx, &format!("Spawn task failed: {}", e)).await;
-                        continue;
-                    }
-                };
+                let process =
+                    match session::spawn_claude_interactive(&conn, &dir, agent_fwd, skip_perms) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            send_error(&ws_tx, &format!("Failed to spawn claude: {}", e)).await;
+                            continue;
+                        }
+                    };
 
                 // SessionRegistry に登録
                 let (shared_session, pre_rx) =
-                    match registry.create_with_pty(&registry_name, pty).await {
+                    match registry.create_with_process(&registry_name, process).await {
                         Ok(result) => result,
                         Err(e) => {
                             send_error(&ws_tx, &format!("Registry error: {e}")).await;

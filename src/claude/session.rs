@@ -1,4 +1,4 @@
-use crate::pty::manager::PtySession;
+use crate::pty::manager::{ProcessSession, PtySession};
 
 use super::connection::ConnectionTarget;
 
@@ -62,14 +62,16 @@ pub fn spawn_claude_session(
 /// Claude CLI 2.x では `--output-format` は `--print` モードでのみ有効。
 /// `--input-format stream-json` を併用すると、stdin から NDJSON でユーザーメッセージを
 /// 受け取り続ける長寿命プロセスとして動作する。
+///
+/// PTY は使用せず、パイプで stdin/stdout を接続する。
+/// CLI 2.1.47 で追加された stdin TTY 検証を回避するため、ConPTY ではなく
+/// 素の `std::process::Command` でプロセスを起動する。
 pub fn spawn_claude_interactive(
     connection: &ConnectionTarget,
     working_dir: &str,
     agent_forwarding: bool,
     skip_permissions: bool,
-    cols: u16,
-    rows: u16,
-) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<ProcessSession, Box<dyn std::error::Error + Send + Sync>> {
     let mut flags = build_claude_flags(skip_permissions);
     // stream-json 入力はフラグリストの先頭に追加（--output-format の前に配置）
     flags.splice(
@@ -82,14 +84,82 @@ pub fn spawn_claude_interactive(
     );
 
     match connection {
-        ConnectionTarget::Local => spawn_command_pty("claude", &flags, working_dir, cols, rows),
+        ConnectionTarget::Local => spawn_command_pipe("claude", &flags, Some(working_dir)),
         ConnectionTarget::Ssh { host } => {
             let flags_str = flags.join(" ");
             let remote_cmd = format!("cd {} && claude {}", shell_escape(working_dir), flags_str);
-            let args = build_ssh_args(host, &remote_cmd, agent_forwarding);
-            spawn_command_pty("ssh", &args, working_dir, cols, rows)
+            // SSH: -t なし（stream-json はリモート側でも PTY 不要）
+            let mut args = vec![];
+            if agent_forwarding {
+                args.push("-A".to_string());
+            }
+            args.extend([
+                "-o".to_string(),
+                "BatchMode=yes".to_string(),
+                host.to_string(),
+                remote_cmd,
+            ]);
+            spawn_command_pipe("ssh", &args, None)
         }
     }
+}
+
+/// パイプベースでコマンドを起動（PTY なし）
+///
+/// stream-json モードでは TUI を描画しないため PTY は不要。
+/// stdin/stdout をパイプで接続し、stderr は親プロセスに継承する。
+fn spawn_command_pipe(
+    command: &str,
+    args: &[String],
+    cwd: Option<&str>,
+) -> Result<ProcessSession, Box<dyn std::error::Error + Send + Sync>> {
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new(command);
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    // Den 自体が Claude Code 内から起動された場合、子プロセスの claude CLI が
+    // ネストセッション検出で拒否されるのを防ぐ
+    cmd.env_remove("CLAUDECODE");
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = cmd.spawn()?;
+
+    let writer = Box::new(child.stdin.take().expect("stdin was piped"));
+    let reader = Box::new(child.stdout.take().expect("stdout was piped"));
+
+    // Windows: Job Object でプロセス管理（OpenConsole は存在しないため child のみ）
+    #[cfg(windows)]
+    let job = {
+        let pid = child.id();
+        match crate::pty::job::PtyJobObject::new() {
+            Ok(j) => {
+                if let Err(e) = j.assign_pid(pid) {
+                    tracing::warn!("Failed to assign child PID {pid} to Job Object: {e}");
+                }
+                tracing::debug!("Assigned pipe child PID {pid} to Job Object");
+                Some(j)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create Job Object: {e}");
+                None
+            }
+        }
+    };
+
+    let child: Box<dyn portable_pty::Child + Send + Sync> = Box::new(child);
+
+    Ok(ProcessSession {
+        reader,
+        writer,
+        child,
+        #[cfg(windows)]
+        job,
+    })
 }
 
 fn spawn_command_pty(

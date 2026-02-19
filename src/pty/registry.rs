@@ -259,6 +259,101 @@ impl SessionRegistry {
         (session, first_rx, monitor_handle)
     }
 
+    /// パイプベースセッションのセットアップ（PTY なし、Claude stream-json モード用）
+    ///
+    /// `setup_pty_session` と同様だが、resize_tx/resize_handle/master を持たない。
+    /// パイプの EOF でプロセス終了を即座に検知できるため、child monitor は補助的。
+    fn setup_pipe_session(
+        name: &str,
+        reader: Box<dyn std::io::Read + Send>,
+        writer: Box<dyn std::io::Write + Send>,
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+        #[cfg(windows)] job: Option<super::job::PtyJobObject>,
+    ) -> (
+        Arc<SharedSession>,
+        broadcast::Receiver<Vec<u8>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (output_tx, first_rx) = broadcast::channel(BROADCAST_CAPACITY);
+
+        let session = Arc::new(SharedSession {
+            name: name.to_string(),
+            created_at: Utc::now(),
+            alive: AtomicBool::new(true),
+            replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
+            output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
+            inner: Mutex::new(SessionInner {
+                pty_writer: writer,
+                resize_tx: None,
+                resize_handle: None,
+                monitor_handle: None,
+                clients: Vec::new(),
+                active_client_id: None,
+                last_size: (0, 0),
+                #[cfg(windows)]
+                job,
+                child: Some(child),
+            }),
+        });
+
+        // Read task: パイプ出力を replay buffer + broadcast に流す
+        let session_for_read = Arc::clone(&session);
+        let broadcast_tx = output_tx;
+
+        tokio::task::spawn_blocking(move || {
+            let mut buf = [0u8; 4096];
+            let mut reader = reader;
+            loop {
+                match std::io::Read::read(&mut reader, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        if let Ok(mut rb) = session_for_read.replay_buf.lock() {
+                            rb.write(&data);
+                        }
+                        let _ = broadcast_tx.send(data);
+                    }
+                    Err(_) => break,
+                }
+            }
+            session_for_read.alive.store(false, Ordering::Release);
+            session_for_read.output_tx.lock().unwrap().take();
+            drop(broadcast_tx);
+        });
+
+        // Child exit monitor（パイプ EOF で read_task が先に終了するケースが多いが、
+        // 念のため子プロセス終了も監視する）
+        let session_for_monitor = Arc::clone(&session);
+        let monitor_name = name.to_string();
+        let monitor_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CHILD_MONITOR_INTERVAL).await;
+                if !session_for_monitor.is_alive() {
+                    break;
+                }
+                let mut inner = session_for_monitor.inner.lock().await;
+                if let Some(ref mut child) = inner.child {
+                    match child.try_wait() {
+                        Ok(Some(_status)) => {
+                            tracing::debug!("Session {monitor_name}: child process exited");
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
+                    }
+                } else {
+                    break;
+                }
+            }
+            session_for_monitor
+                .alive
+                .store(false, std::sync::atomic::Ordering::Release);
+            session_for_monitor.output_tx.lock().unwrap().take();
+        });
+
+        (session, first_rx, monitor_handle)
+    }
+
     /// セッション作成（デフォルトシェル）
     ///
     /// 戻り値の `broadcast::Receiver` は PTY 出力の pre-subscriber。
@@ -388,6 +483,60 @@ impl SessionRegistry {
         }
 
         tracing::info!("Session created (custom PTY): {name}");
+        Ok((session, first_rx))
+    }
+
+    /// パイプベースプロセスでセッション作成（Claude stream-json モード用）
+    pub async fn create_with_process(
+        &self,
+        name: &str,
+        process: super::manager::ProcessSession,
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
+        if !is_valid_session_name(name) {
+            return Err(RegistryError::InvalidName(name.to_string()));
+        }
+
+        // 高速チェック
+        if self.sessions.read().await.contains_key(name) {
+            return Err(RegistryError::AlreadyExists(name.to_string()));
+        }
+
+        let (session, first_rx, monitor_handle) = Self::setup_pipe_session(
+            name,
+            process.reader,
+            process.writer,
+            process.child,
+            #[cfg(windows)]
+            process.job,
+        );
+        session.inner.lock().await.monitor_handle = Some(monitor_handle);
+
+        // 権威的な挿入（TOCTOU 防止）
+        {
+            let mut sessions = self.sessions.write().await;
+            if sessions.contains_key(name) {
+                session.alive.store(false, Ordering::Release);
+                let monitor_handle = {
+                    let mut inner = session.inner.lock().await;
+                    if let Some(mut child) = inner.child.take() {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        })
+                        .await;
+                    }
+                    inner.pty_writer = Box::new(std::io::sink());
+                    inner.monitor_handle.take()
+                };
+                if let Some(handle) = monitor_handle {
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
+                }
+                return Err(RegistryError::AlreadyExists(name.to_string()));
+            }
+            sessions.insert(name.to_string(), Arc::clone(&session));
+        }
+
+        tracing::info!("Session created (pipe process): {name}");
         Ok((session, first_rx))
     }
 
