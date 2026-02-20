@@ -56,6 +56,7 @@ pub fn create_app_with_secret(
     // 認証不要のルート
     let public_routes = Router::new()
         .route("/api/login", post(auth::login))
+        .route("/api/logout", post(auth::logout))
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 

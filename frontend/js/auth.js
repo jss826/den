@@ -19,10 +19,18 @@ const Auth = (() => {
     // トークンは HttpOnly Cookie としてサーバーが Set-Cookie で設定済み
   }
 
+  /** サーバー側で HttpOnly Cookie を無効化し、フラグ Cookie も削除 */
+  async function logout() {
+    try {
+      await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch (_) { /* ignore network errors */ }
+    clearToken();
+  }
+
   /** フラグ Cookie を削除（HttpOnly Cookie はサーバー側で期限切れ） */
   function clearToken() {
     document.cookie = LOGGED_IN_COOKIE + '=; Path=/; Max-Age=0';
   }
 
-  return { login, isLoggedIn, clearToken };
+  return { login, logout, isLoggedIn, clearToken };
 })();

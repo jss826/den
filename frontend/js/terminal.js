@@ -378,6 +378,7 @@ const DenTerminal = (() => {
 
     if (selectModeStartRow === null) {
       // First tap — highlight single line
+      // selectLines() is stable in xterm.js v6 (no allowProposedApi needed)
       selectModeStartRow = bufferRow;
       term.selectLines(bufferRow, bufferRow);
     } else {

@@ -43,8 +43,8 @@ impl LoginRateLimiter {
         }
     }
 
-    /// 試行を記録し、レートリミット内であれば true を返す
-    pub fn check_and_record(&self) -> bool {
+    /// レートリミット内であれば true を返す（記録はしない）
+    pub fn check(&self) -> bool {
         let mut attempts = self.attempts.lock().expect("rate limiter lock poisoned");
         let window = std::time::Duration::from_secs(RATE_LIMIT_WINDOW_SECS);
         let now = Instant::now();
@@ -58,12 +58,13 @@ impl LoginRateLimiter {
             }
         }
 
-        if attempts.len() >= MAX_LOGIN_ATTEMPTS {
-            false
-        } else {
-            attempts.push_back(now);
-            true
-        }
+        attempts.len() < MAX_LOGIN_ATTEMPTS
+    }
+
+    /// 失敗した試行を記録する
+    pub fn record_failure(&self) {
+        let mut attempts = self.attempts.lock().expect("rate limiter lock poisoned");
+        attempts.push_back(Instant::now());
     }
 }
 
@@ -73,8 +74,8 @@ pub struct LoginRequest {
 }
 
 #[derive(Serialize)]
-pub struct LoginResponse {
-    pub token: String,
+pub struct LoginSuccess {
+    pub ok: bool,
 }
 
 /// パスワードと発行時刻からトークンを生成（HMAC-SHA256 + タイムスタンプ）
@@ -143,13 +144,12 @@ const TOKEN_COOKIE: &str = "den_token";
 const LOGGED_IN_COOKIE: &str = "den_logged_in";
 
 /// ログイン API
-/// トークンを HttpOnly Cookie + レスポンスボディ両方で返す。
-/// ブラウザは Cookie を使用し、API クライアントはレスポンスボディを使用可能。
+/// トークンは HttpOnly Cookie で設定。レスポンスボディは `{"ok": true}` のみ。
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Response, StatusCode> {
-    if !state.rate_limiter.check_and_record() {
+    if !state.rate_limiter.check() {
         tracing::warn!("Login rate limited");
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
@@ -178,11 +178,33 @@ pub async fn login(
             HeaderValue::from_str(&flag_cookie).expect("valid cookie value"),
         );
 
-        Ok((headers, Json(LoginResponse { token })).into_response())
+        Ok((headers, Json(LoginSuccess { ok: true })).into_response())
     } else {
+        state.rate_limiter.record_failure();
         tracing::warn!("Login failed: incorrect password");
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+/// ログアウト API
+/// HttpOnly Cookie `den_token` と JS フラグ Cookie `den_logged_in` を削除する。
+/// 認証不要（無効クッキーの削除は無害）。
+pub async fn logout() -> Response {
+    let mut headers = HeaderMap::new();
+    let token_cookie = format!(
+        "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+        TOKEN_COOKIE
+    );
+    headers.insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&token_cookie).expect("valid cookie value"),
+    );
+    let flag_cookie = format!("{}=; SameSite=Strict; Path=/; Max-Age=0", LOGGED_IN_COOKIE);
+    headers.append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&flag_cookie).expect("valid cookie value"),
+    );
+    (StatusCode::NO_CONTENT, headers).into_response()
 }
 
 /// Cookie ヘッダーから指定名の値を抽出
@@ -363,5 +385,25 @@ mod tests {
     fn extract_cookie_no_header() {
         let headers = HeaderMap::new();
         assert_eq!(extract_cookie(&headers, "den_token"), None);
+    }
+
+    #[test]
+    fn rate_limiter_check_does_not_count() {
+        let limiter = LoginRateLimiter::new();
+        // check() を何度呼んでもカウントは増えない
+        for _ in 0..10 {
+            assert!(limiter.check());
+        }
+    }
+
+    #[test]
+    fn rate_limiter_record_failure_counts() {
+        let limiter = LoginRateLimiter::new();
+        // 5回失敗を記録 → check() が false になる
+        for _ in 0..5 {
+            assert!(limiter.check());
+            limiter.record_failure();
+        }
+        assert!(!limiter.check());
     }
 }
