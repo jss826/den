@@ -5,22 +5,25 @@ iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用�
 ## Architecture
 
 ```
-┌────────────────────────────────────────────┐
-│  Browser (iPad mini / Desktop)              │
-│  ┌───────────┐  ┌─────────────────────────┐ │
-│  │ Terminal   │  │ File Manager            │ │
-│  │ (xterm.js)│  │ (CodeMirror 6 + tree)   │ │
-│  └─────┬─────┘  └───────────┬─────────────┘ │
-└────────┼─────────────────────┼──────────────┘
-         │ WebSocket           │ REST API
-┌────────┼─────────────────────┼──────────────┐
-│  Axum  │                     │              │
-│  ┌─────┴─────┐  ┌────────────┴────────────┐ │
-│  │PTY (shell)│  │ Filer API               │ │
-│  └───────────┘  └─────────────────────────┘ │
-│  Static files (rust-embed)  SSH Server (russh) │
-│  Store (JSON persistence)   Job Object (ConPTY) │
-└────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Browser (iPad mini / Desktop)                    │
+│  ┌───────────┐  ┌──────────────┐  ┌────────────┐ │
+│  │ Terminal   │  │ File Manager │  │ Floating   │ │
+│  │ (xterm.js)│  │ (CM6 + tree) │  │ Terminal   │ │
+│  └─────┬─────┘  └──────┬───────┘  └─────┬──────┘ │
+└────────┼────────────────┼────────────────┼────────┘
+         │ WebSocket      │ REST API       │ WS
+┌────────┼────────────────┼────────────────┼────────┐
+│  Axum  │                │                │        │
+│  ┌─────┴─────┐  ┌───────┴───────┐  ┌────┴─────┐  │
+│  │PTY (shell)│  │ Filer API     │  │ SFTP API │  │
+│  └───────────┘  └───────────────┘  └────┬─────┘  │
+│                                    ┌────┴─────┐  │
+│  Static files (rust-embed)         │ russh +  │  │
+│  Store (JSON persistence)          │ russh-   │  │
+│  SSH Server (russh)                │ sftp     │  │
+│  Job Object (ConPTY)               └──────────┘  │
+└──────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -75,13 +78,15 @@ just prod strongpw    # パスワード上書き指定も可
 ## Features
 
 - **Web Terminal** - xterm.js v6 with touch-friendly keybar (Shift, Ctrl, F1-F12 etc.)
+- **Floating Terminal** - draggable/resizable overlay terminal (Ctrl+\` or tab bar button)
 - **File Manager** - tree view, CodeMirror 6 editor, upload/download, search, image/Markdown preview
-- **12 Themes** - Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin, One Dark, System
+- **SFTP Remote Files** - connect to remote SSH hosts and browse/edit files via russh-sftp
+- **12 Themes** - Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
 - **Server-side Persistence** - settings saved to JSON files
-- **Authentication** - HMAC-SHA256 token with 24h expiry
+- **Authentication** - HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
 - **Built-in SSH Server** - russh-based, password + public key auth, session attach/create
 - **Accessibility** - ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion
-- **Mobile Support** - sidebar toggle, iPad keyboard layout, drag & drop upload
+- **Mobile Support** - sidebar toggle, iPad keyboard layout, clipboard fallback for HTTP LAN access
 
 ## SSH Server
 
@@ -137,6 +142,9 @@ den/
 │   ├── assets.rs           # Static file serving (rust-embed)
 │   ├── filer/              # File manager API
 │   │   └── api.rs          # Tree, read, write, search, upload, download
+│   ├── sftp/               # SFTP remote file operations
+│   │   ├── api.rs          # 12 SFTP REST endpoints
+│   │   └── client.rs       # SSH/SFTP connection manager (russh-sftp)
 │   ├── pty/                # PTY management
 │   │   ├── manager.rs      # PTY creation + OpenConsole detection
 │   │   ├── registry.rs     # SessionRegistry (broadcast, ring buffer)
@@ -155,11 +163,14 @@ den/
 │   │   ├── filer-tree.js   # Tree view component
 │   │   ├── filer-editor.js # CodeMirror 6 editor
 │   │   ├── markdown.js     # Markdown renderer
+│   │   ├── float-terminal.js # Floating terminal overlay
+│   │   ├── filer-remote.js # SFTP remote connection UI
 │   │   ├── keybar.js       # Touch keyboard bar
 │   │   ├── settings.js     # Settings modal
 │   │   ├── toast.js        # Toast + confirm/prompt modals
 │   │   ├── icons.js        # SVG icon module
-│   │   └── spinner.js      # Loading spinner
+│   │   ├── spinner.js      # Loading spinner
+│   │   └── auth.js         # Login/logout handler
 │   ├── css/style.css       # Styles + theme definitions
 │   └── vendor/             # xterm.js v6, CodeMirror 6
 ├── tests/                  # Integration + SSH tests
@@ -174,5 +185,7 @@ den/
 - **v0.3** File manager (tree + editor + upload/download + search)
 - **v0.3.1** iPad keyboard layout + settings path browser + drive list
 - **v0.4** Built-in SSH server + SessionRegistry + session persistence
-- **v0.4+** UI/UX improvements (themes, accessibility, file preview, performance optimization)
-- **v0.6** Claude tab removed (use `claude` directly in Terminal)
+- **v0.5** UI/UX improvements (themes, accessibility, file preview, performance optimization)
+- **v0.6** Claude tab removed (-5,333 lines), iPad terminal copy fix
+- **v0.7** Floating terminal, HttpOnly Cookie auth, session limit, rate limiting, CSP
+- **v0.8** SFTP remote file operations (russh-sftp, 12 API endpoints, connection UI), clipboard fallback for HTTP LAN
