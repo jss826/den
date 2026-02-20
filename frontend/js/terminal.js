@@ -49,7 +49,7 @@ const DenTerminal = (() => {
     brightWhite: '#c0caf5',
   };
 
-  const FONT_FAMILY = '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", monospace';
+  const FONT_FAMILY = '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", "Symbols Nerd Font Mono", monospace';
 
   /** レンダラー選択: デスクトップ → WebGL、iOS/Safari → Canvas、フォールバック → DOM */
   function selectRenderer(t) {
