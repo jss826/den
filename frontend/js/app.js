@@ -159,6 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'filer-new-folder': DenIcons.folderPlus,
       'filer-upload': DenIcons.upload,
       'filer-refresh': DenIcons.refresh,
+      'float-terminal-btn': DenIcons.terminal,
       'settings-btn': DenIcons.gear,
     };
     for (const [id, fn] of Object.entries(map)) {
@@ -196,6 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
     FloatTerminal.init();
+    document.getElementById('float-terminal-btn').addEventListener('click', () => FloatTerminal.toggle());
 
     // SFTP 接続状態チェック（ページリロード時の復元）
     FilerRemote.checkStatus();
