@@ -56,6 +56,7 @@
             <button id="filer-new-folder" class="filer-tool-btn" data-tooltip="New Folder" aria-label="New folder"></button>
             <button id="filer-upload" class="filer-tool-btn" data-tooltip="Upload" aria-label="Upload file"></button>
             <button id="filer-refresh" class="filer-tool-btn" data-tooltip="Refresh" aria-label="Refresh tree"></button>
+            <button id="filer-remote-btn" class="filer-tool-btn filer-remote-btn" data-tooltip="Connect to remote SFTP" aria-label="Remote SFTP">Remote</button>
           </div>
           <div id="filer-drives" class="dir-drives"></div>
           <nav id="filer-breadcrumb" class="filer-breadcrumb" aria-label="Current path"></nav>
@@ -118,6 +119,44 @@
       <div class="modal-content modal-content-wide">
         <input type="text" id="quickopen-input" class="quickopen-input" placeholder="File name..." autocomplete="off" />
         <div id="quickopen-results" class="quickopen-results"></div>
+      </div>
+    </div>
+
+    <!-- SFTP 接続モーダル -->
+    <div id="sftp-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="SFTP Connection">
+      <div class="modal-content">
+        <h3>Remote SFTP Connection</h3>
+        <div class="modal-section">
+          <label>Host</label>
+          <input type="text" id="sftp-host" class="settings-input" placeholder="hostname or IP" autocomplete="off" />
+        </div>
+        <div class="modal-section">
+          <label>Port</label>
+          <input type="number" id="sftp-port" class="settings-input" value="22" min="1" max="65535" />
+        </div>
+        <div class="modal-section">
+          <label>Username</label>
+          <input type="text" id="sftp-username" class="settings-input" placeholder="username" autocomplete="off" />
+        </div>
+        <div class="modal-section">
+          <label>Authentication</label>
+          <select id="sftp-auth-type" class="settings-input">
+            <option value="password">Password</option>
+            <option value="key">Private Key</option>
+          </select>
+        </div>
+        <div class="modal-section" id="sftp-password-field">
+          <label>Password</label>
+          <input type="password" id="sftp-password" class="settings-input" autocomplete="off" />
+        </div>
+        <div class="modal-section" id="sftp-key-field" hidden>
+          <label>Key File Path</label>
+          <input type="text" id="sftp-key-path" class="settings-input" placeholder="~/.ssh/id_rsa" autocomplete="off" />
+        </div>
+        <div class="modal-actions">
+          <button id="sftp-connect-cancel" class="modal-btn">Cancel</button>
+          <button id="sftp-connect-submit" class="modal-btn primary">Connect</button>
+        </div>
       </div>
     </div>
 
@@ -242,6 +281,7 @@
   <script src="/js/float-terminal.js"></script>
   <script src="/js/keybar.js"></script>
   <script src="/js/markdown.js"></script>
+  <script src="/js/filer-remote.js"></script>
   <script src="/js/filer-tree.js"></script>
   <script src="/js/filer-editor.js"></script>
   <script src="/js/filer.js"></script>

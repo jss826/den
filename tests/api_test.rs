@@ -507,3 +507,294 @@ async fn logout_without_auth() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }
+
+// --- SFTP API ---
+
+#[tokio::test]
+async fn sftp_status_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sftp/status")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["connected"], false);
+    assert!(json["host"].is_null());
+    assert!(json["username"].is_null());
+}
+
+#[tokio::test]
+async fn sftp_disconnect_when_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/disconnect")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sftp_list_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sftp/list?path=/&show_hidden=false")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_read_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sftp/read?path=/tmp/test.txt")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_write_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/sftp/write")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"path":"/tmp/test.txt","content":"hello"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_mkdir_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/mkdir")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"path":"/tmp/newdir"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_rename_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/rename")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"from":"/tmp/a","to":"/tmp/b"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_delete_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/sftp/delete?path=/tmp/test.txt")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_download_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sftp/download?path=/tmp/test.txt")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_search_not_connected() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/sftp/search?path=/&query=test&content=false")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn sftp_connect_missing_fields() {
+    let app = test_app();
+    // host と username は必須
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"auth_type":"password"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    // axum deserialization error → 422
+    assert!(
+        resp.status() == StatusCode::BAD_REQUEST
+            || resp.status() == StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn sftp_connect_invalid_auth_type() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"host":"example.com","username":"user","auth_type":"invalid"}"#,
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sftp_connect_password_missing() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"host":"example.com","username":"user","auth_type":"password"}"#,
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sftp_connect_key_path_missing() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"host":"example.com","username":"user","auth_type":"key"}"#,
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sftp_requires_auth() {
+    let app = test_app();
+    // 全 SFTP エンドポイントは認証必須
+    for uri in [
+        "/api/sftp/status",
+        "/api/sftp/list?path=/&show_hidden=false",
+        "/api/sftp/read?path=/test",
+        "/api/sftp/search?path=/&query=test&content=false",
+    ] {
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "GET {} should require auth",
+            uri
+        );
+    }
+
+    for uri in [
+        "/api/sftp/connect",
+        "/api/sftp/disconnect",
+        "/api/sftp/mkdir",
+        "/api/sftp/rename",
+    ] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "POST {} should require auth",
+            uri
+        );
+    }
+}
+
+#[tokio::test]
+async fn sftp_write_empty_path() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/sftp/write")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"path":"","content":"hello"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sftp_write_null_byte_path() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/sftp/write")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"path":"/tmp/\u0000evil.txt","content":"hello"}"#,
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

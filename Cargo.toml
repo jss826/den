@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 hmac = "0.12.1"
 russh = { version = "0.57", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh-sftp = "2.1"
 async-trait = "0.1"
 anyhow = "1"
 

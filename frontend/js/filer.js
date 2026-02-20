@@ -1,4 +1,4 @@
-/* global Auth, FilerTree, FilerEditor */
+/* global Auth, FilerTree, FilerEditor, FilerRemote */
 // Den - ファイラ メインモジュール
 // eslint-disable-next-line no-unused-vars
 const DenFiler = (() => {
@@ -34,6 +34,9 @@ const DenFiler = (() => {
     document.getElementById('filer-upload').addEventListener('click', showUploadModal);
     document.getElementById('filer-refresh').addEventListener('click', () => FilerTree.refresh());
 
+    // Remote SFTP ボタン
+    initRemoteButton();
+
     // ツリー表示トグル
     initTreeToggle();
 
@@ -63,6 +66,16 @@ const DenFiler = (() => {
     document.getElementById('search-close').addEventListener('click', () => {
       document.getElementById('filer-search-modal').hidden = true;
     });
+
+    // SFTP 接続モーダル
+    const sftpAuthType = document.getElementById('sftp-auth-type');
+    if (sftpAuthType) sftpAuthType.addEventListener('change', updateAuthFields);
+    const sftpCancel = document.getElementById('sftp-connect-cancel');
+    if (sftpCancel) sftpCancel.addEventListener('click', () => {
+      document.getElementById('sftp-connect-modal').hidden = true;
+    });
+    const sftpSubmit = document.getElementById('sftp-connect-submit');
+    if (sftpSubmit) sftpSubmit.addEventListener('click', doSftpConnect);
 
     // グローバルクリックでコンテキストメニュー閉じる
     document.addEventListener('click', hideContextMenu);
@@ -116,6 +129,121 @@ const DenFiler = (() => {
         updateToggleIcon();
       });
     }
+  }
+
+  // --- Remote SFTP 接続 ---
+
+  function initRemoteButton() {
+    const btn = document.getElementById('filer-remote-btn');
+    if (!btn) return;
+
+    btn.addEventListener('click', () => {
+      if (FilerRemote.isRemote()) {
+        // 切断確認
+        doDisconnect();
+      } else {
+        showSftpModal();
+      }
+    });
+
+    // 接続/切断イベント
+    document.addEventListener('den:sftp-changed', (e) => {
+      const { connected } = e.detail;
+      updateRemoteButton();
+      const drives = document.getElementById('filer-drives');
+      if (connected) {
+        // リモートルートでツリー再読込
+        if (drives) drives.hidden = true;
+        closeAllTabs();
+        FilerTree.setRoot('/');
+        currentDir = '/';
+      } else {
+        // ローカルに戻す
+        if (drives) drives.hidden = false;
+        drivesLoaded = false;
+        closeAllTabs();
+        FilerTree.setRoot('~');
+        currentDir = '~';
+      }
+    });
+
+    // 初期状態更新
+    updateRemoteButton();
+  }
+
+  function updateRemoteButton() {
+    const btn = document.getElementById('filer-remote-btn');
+    if (!btn) return;
+    if (FilerRemote.isRemote()) {
+      const info = FilerRemote.getInfo();
+      btn.textContent = `${info.username}@${info.host}`;
+      btn.classList.add('active');
+      btn.setAttribute('data-tooltip', 'Disconnect SFTP');
+    } else {
+      btn.textContent = 'Remote';
+      btn.classList.remove('active');
+      btn.setAttribute('data-tooltip', 'Connect to remote SFTP');
+    }
+  }
+
+  function showSftpModal() {
+    const modal = document.getElementById('sftp-connect-modal');
+    if (!modal) return;
+    // フォームリセット
+    document.getElementById('sftp-host').value = '';
+    document.getElementById('sftp-port').value = '22';
+    document.getElementById('sftp-username').value = '';
+    document.getElementById('sftp-auth-type').value = 'password';
+    document.getElementById('sftp-password').value = '';
+    document.getElementById('sftp-key-path').value = '';
+    updateAuthFields();
+    modal.hidden = false;
+    document.getElementById('sftp-host').focus();
+  }
+
+  function updateAuthFields() {
+    const authType = document.getElementById('sftp-auth-type').value;
+    document.getElementById('sftp-password-field').hidden = authType !== 'password';
+    document.getElementById('sftp-key-field').hidden = authType !== 'key';
+  }
+
+  async function doSftpConnect() {
+    const host = document.getElementById('sftp-host').value.trim();
+    const port = parseInt(document.getElementById('sftp-port').value, 10) || 22;
+    const username = document.getElementById('sftp-username').value.trim();
+    const authType = document.getElementById('sftp-auth-type').value;
+    const password = document.getElementById('sftp-password').value;
+    const keyPath = document.getElementById('sftp-key-path').value.trim();
+
+    if (!host || !username) {
+      Toast.error('Host and username are required');
+      return;
+    }
+
+    const submitBtn = document.getElementById('sftp-connect-submit');
+    await Spinner.button(submitBtn, async () => {
+      try {
+        await FilerRemote.connect(host, port, username, authType, password, keyPath);
+        document.getElementById('sftp-connect-modal').hidden = true;
+        Toast.success(`Connected to ${username}@${host}`);
+      } catch (e) {
+        Toast.error(e.message || 'Connection failed');
+      }
+    });
+  }
+
+  async function doDisconnect() {
+    if (!(await Toast.confirm('Disconnect from remote SFTP?'))) return;
+    await FilerRemote.disconnect();
+    Toast.success('Disconnected');
+  }
+
+  /** 全タブを閉じる（dirty チェック付き） */
+  async function closeAllTabs() {
+    if (FilerEditor.hasUnsavedChanges()) {
+      if (!(await Toast.confirm('Unsaved changes will be lost. Continue?'))) return;
+    }
+    FilerEditor.closeAll();
   }
 
   // --- ドラッグ&ドロップ アップロード ---
@@ -175,7 +303,7 @@ const DenFiler = (() => {
         formData.append('file', file);
 
         try {
-          const resp = await fetch('/api/filer/upload', {
+          const resp = await fetch(`${FilerRemote.getApiBase()}/upload`, {
             method: 'POST',
             credentials: 'same-origin',
             body: formData,
@@ -227,7 +355,7 @@ const DenFiler = (() => {
     const match = resolvedPath.match(/^([A-Za-z]:\\)/);
     if (!match) return;
     const driveRoot = match[1];
-    const data = await apiFetch(`/api/filer/list?path=${enc(driveRoot)}&show_hidden=false`);
+    const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(driveRoot)}&show_hidden=false`);
     if (data && data.drives) {
       renderDrives(data.drives);
     }
@@ -363,7 +491,7 @@ const DenFiler = (() => {
     const name = await Toast.prompt('New file name:');
     if (!name) return;
     const fullPath = joinPath(dir, name);
-    const ok = await apiCall('/api/filer/write', 'PUT', { path: fullPath, content: '' });
+    const ok = await apiCall(`${FilerRemote.getApiBase()}/write`, 'PUT', { path: fullPath, content: '' });
     if (ok) {
       Toast.success('File created');
       FilerTree.refresh();
@@ -376,7 +504,7 @@ const DenFiler = (() => {
     const name = await Toast.prompt('New folder name:');
     if (!name) return;
     const fullPath = joinPath(dir, name);
-    const ok = await apiCall('/api/filer/mkdir', 'POST', { path: fullPath });
+    const ok = await apiCall(`${FilerRemote.getApiBase()}/mkdir`, 'POST', { path: fullPath });
     if (ok) {
       Toast.success('Folder created');
       FilerTree.refresh();
@@ -389,7 +517,7 @@ const DenFiler = (() => {
     if (!newName || newName === oldName) return;
     const parentDir = FilerTree.getParentPath(path);
     const newPath = joinPath(parentDir, newName);
-    const ok = await apiCall('/api/filer/rename', 'POST', { from: path, to: newPath });
+    const ok = await apiCall(`${FilerRemote.getApiBase()}/rename`, 'POST', { from: path, to: newPath });
     if (ok) {
       Toast.success('Renamed');
       FilerEditor.notifyRenamed(path, newPath);
@@ -400,7 +528,7 @@ const DenFiler = (() => {
   async function doDelete(path) {
     const name = path.split(/[/\\]/).pop();
     if (!(await Toast.confirm(`Delete "${name}"?`))) return;
-    const ok = await apiCallDelete(`/api/filer/delete?path=${enc(path)}`);
+    const ok = await apiCallDelete(`${FilerRemote.getApiBase()}/delete?path=${enc(path)}`);
     if (ok) {
       Toast.success('Deleted');
       FilerEditor.notifyDeleted(path);
@@ -410,7 +538,7 @@ const DenFiler = (() => {
 
   async function downloadFile(path) {
     try {
-      const resp = await fetch(`/api/filer/download?path=${enc(path)}`, {
+      const resp = await fetch(`${FilerRemote.getApiBase()}/download?path=${enc(path)}`, {
         credentials: 'same-origin',
       });
       if (!resp.ok) {
@@ -453,7 +581,7 @@ const DenFiler = (() => {
       formData.append('file', file);
 
       try {
-        const resp = await fetch('/api/filer/upload', {
+        const resp = await fetch(`${FilerRemote.getApiBase()}/upload`, {
           method: 'POST',
           credentials: 'same-origin',
           body: formData,
@@ -483,7 +611,7 @@ const DenFiler = (() => {
     resultsEl.innerHTML = '';
     modal.hidden = false;
     const data = await Spinner.wrap(resultsEl, () =>
-      apiFetch(`/api/filer/search?path=${enc(currentDir)}&query=${enc(query)}&content=true`)
+      apiFetch(`${FilerRemote.getApiBase()}/search?path=${enc(currentDir)}&query=${enc(query)}&content=true`)
     );
     if (!data) {
       modal.hidden = true;
@@ -534,7 +662,8 @@ const DenFiler = (() => {
   // --- ユーティリティ ---
 
   function joinPath(parent, name) {
-    const sep = parent.includes('/') ? '/' : '\\';
+    // リモートモードでは常に '/' を使用
+    const sep = FilerRemote.isRemote() ? '/' : (parent.includes('/') ? '/' : '\\');
     return parent.endsWith(sep) ? parent + name : parent + sep + name;
   }
 
@@ -670,7 +799,7 @@ const DenFiler = (() => {
       }
       debounceTimer = setTimeout(async () => {
         const data = await apiFetch(
-          `/api/filer/search?path=${enc(currentDir)}&query=${enc(q)}&content=false`
+          `${FilerRemote.getApiBase()}/search?path=${enc(currentDir)}&query=${enc(q)}&content=false`
         );
         renderResults(data);
       }, 300);

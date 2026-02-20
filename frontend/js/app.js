@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, DenIcons */
+/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal'];
+  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   const allModals = ['confirm-modal', 'prompt-modal', ...escModals];
 
@@ -196,6 +196,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
     FloatTerminal.init();
+
+    // SFTP 接続状態チェック（ページリロード時の復元）
+    FilerRemote.checkStatus();
 
     // キーバー初期化（カスタムキー設定があればそれを使用）
     Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'));

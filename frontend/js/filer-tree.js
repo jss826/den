@@ -1,4 +1,4 @@
-/* global Auth, DenIcons */
+/* global Auth, DenIcons, FilerRemote */
 // Den - ファイラ ツリービュー
 // eslint-disable-next-line no-unused-vars
 const FilerTree = (() => {
@@ -39,7 +39,7 @@ const FilerTree = (() => {
     const isRoot = dirPath === rootPath;
     if (isRoot) Spinner.show(treeEl);
     try {
-      const data = await apiFetch(`/api/filer/list?path=${enc(dirPath)}&show_hidden=false`);
+      const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(dirPath)}&show_hidden=false`);
       if (!data) return;
       if (isRoot) {
         treeEl.innerHTML = '';
@@ -244,7 +244,7 @@ const FilerTree = (() => {
 
   // パスを親に渡す
   function getParentPath(filePath) {
-    const sep = filePath.includes('/') ? '/' : '\\';
+    const sep = FilerRemote.isRemote() ? '/' : (filePath.includes('/') ? '/' : '\\');
     const parts = filePath.split(sep);
     parts.pop();
     return parts.join(sep) || sep;
@@ -276,7 +276,7 @@ const FilerTree = (() => {
   }
 
   function joinPath(parent, name) {
-    const sep = parent.includes('/') ? '/' : '\\';
+    const sep = FilerRemote.isRemote() ? '/' : (parent.includes('/') ? '/' : '\\');
     return parent.endsWith(sep) ? parent + name : parent + sep + name;
   }
 

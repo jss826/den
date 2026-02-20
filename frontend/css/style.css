@@ -993,6 +993,22 @@ html, body {
   border-color: var(--border);
 }
 
+/* Remote SFTP ボタン */
+.filer-remote-btn {
+  font-size: 0.7rem;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.filer-remote-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
 /* ファイラ ドライブ切替 */
 .filer-sidebar > .dir-drives {
   padding: 4px 8px;

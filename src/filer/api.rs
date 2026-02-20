@@ -26,9 +26,9 @@ const MAX_SEARCH_RESULTS: usize = 100;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
-    path: String,
+    pub path: String,
     #[serde(default)]
-    show_hidden: bool,
+    pub show_hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -37,6 +37,25 @@ pub struct FilerEntry {
     is_dir: bool,
     size: u64,
     modified: Option<String>,
+}
+
+impl FilerEntry {
+    pub fn new(name: String, is_dir: bool, size: u64, modified: Option<String>) -> Self {
+        Self {
+            name,
+            is_dir,
+            size,
+            modified,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
 }
 
 #[derive(Serialize)]
@@ -48,9 +67,25 @@ pub struct FilerListing {
     drives: Vec<String>,
 }
 
+impl FilerListing {
+    pub fn new(
+        path: String,
+        parent: Option<String>,
+        entries: Vec<FilerEntry>,
+        drives: Vec<String>,
+    ) -> Self {
+        Self {
+            path,
+            parent,
+            entries,
+            drives,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ReadQuery {
-    path: String,
+    pub path: String,
 }
 
 #[derive(Serialize)]
@@ -61,39 +96,50 @@ pub struct FileContent {
     is_binary: bool,
 }
 
+impl FileContent {
+    pub fn new(path: String, content: String, size: u64, is_binary: bool) -> Self {
+        Self {
+            path,
+            content,
+            size,
+            is_binary,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct WriteRequest {
-    path: String,
-    content: String,
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Deserialize)]
 pub struct MkdirRequest {
-    path: String,
+    pub path: String,
 }
 
 #[derive(Deserialize)]
 pub struct RenameRequest {
-    from: String,
-    to: String,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Deserialize)]
 pub struct DeleteQuery {
-    path: String,
+    pub path: String,
 }
 
 #[derive(Deserialize)]
 pub struct DownloadQuery {
-    path: String,
+    pub path: String,
 }
 
 #[derive(Deserialize)]
 pub struct SearchQuery {
-    path: String,
-    query: String,
+    pub path: String,
+    pub query: String,
     #[serde(default)]
-    content: bool,
+    pub content: bool,
 }
 
 #[derive(Serialize)]
@@ -104,6 +150,17 @@ pub struct SearchResult {
     context: Option<String>,
 }
 
+impl SearchResult {
+    pub fn new(path: String, is_dir: bool, line: Option<u32>, context: Option<String>) -> Self {
+        Self {
+            path,
+            is_dir,
+            line,
+            context,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     error: String,
@@ -112,7 +169,7 @@ pub struct ErrorResponse {
 /// 共通エラー型
 type ApiError = (StatusCode, Json<ErrorResponse>);
 
-fn err(status: StatusCode, msg: &str) -> ApiError {
+pub(crate) fn err(status: StatusCode, msg: &str) -> ApiError {
     (
         status,
         Json(ErrorResponse {
@@ -193,7 +250,7 @@ fn expand_home(path: &str) -> String {
 }
 
 /// バイナリファイル判定（先頭 8KB に null バイトがあるか）
-fn is_binary(data: &[u8]) -> bool {
+pub(crate) fn is_binary(data: &[u8]) -> bool {
     let check_len = data.len().min(8192);
     data[..check_len].contains(&0)
 }

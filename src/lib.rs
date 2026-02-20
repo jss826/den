@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod filer;
 pub mod pty;
+pub mod sftp;
 pub mod ssh;
 pub mod store;
 pub mod store_api;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub registry: Arc<SessionRegistry>,
     pub hmac_secret: Vec<u8>,
     pub rate_limiter: auth::LoginRateLimiter,
+    pub sftp_manager: sftp::client::SftpManager,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -51,6 +53,7 @@ pub fn create_app_with_secret(
         registry,
         hmac_secret,
         rate_limiter: auth::LoginRateLimiter::new(),
+        sftp_manager: sftp::client::SftpManager::new(),
     });
 
     // 認証不要のルート
@@ -82,6 +85,19 @@ pub fn create_app_with_secret(
         .route("/api/filer/download", get(filer::api::download))
         .route("/api/filer/upload", post(filer::api::upload))
         .route("/api/filer/search", get(filer::api::search))
+        // SFTP API
+        .route("/api/sftp/connect", post(sftp::api::connect))
+        .route("/api/sftp/status", get(sftp::api::status))
+        .route("/api/sftp/disconnect", post(sftp::api::disconnect))
+        .route("/api/sftp/list", get(sftp::api::list))
+        .route("/api/sftp/read", get(sftp::api::read))
+        .route("/api/sftp/write", put(sftp::api::write))
+        .route("/api/sftp/mkdir", post(sftp::api::mkdir))
+        .route("/api/sftp/rename", post(sftp::api::rename))
+        .route("/api/sftp/delete", delete(sftp::api::delete))
+        .route("/api/sftp/download", get(sftp::api::download))
+        .route("/api/sftp/upload", post(sftp::api::upload))
+        .route("/api/sftp/search", get(sftp::api::search))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::auth_middleware,

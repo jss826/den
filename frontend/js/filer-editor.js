@@ -1,4 +1,4 @@
-/* global CM, Auth, DenMarkdown */
+/* global CM, Auth, DenMarkdown, FilerRemote */
 // Den - ファイラ CodeMirror 6 エディタ統合
 // eslint-disable-next-line no-unused-vars
 const FilerEditor = (() => {
@@ -68,7 +68,7 @@ const FilerEditor = (() => {
     }
 
     // API からファイル読み込み
-    const data = await apiFetch(`/api/filer/read?path=${enc(filePath)}`);
+    const data = await apiFetch(`${FilerRemote.getApiBase()}/read?path=${enc(filePath)}`);
     if (!data) return;
 
     if (data.is_binary) {
@@ -120,7 +120,7 @@ const FilerEditor = (() => {
     // 認証ヘッダー付き fetch + blob URL で画像取得（AbortController でキャンセル可能）
     const controller = new AbortController();
     let blobUrl = null;
-    fetch(`/api/filer/download?path=${enc(filePath)}`, {
+    fetch(`${FilerRemote.getApiBase()}/download?path=${enc(filePath)}`, {
       credentials: 'same-origin',
       signal: controller.signal,
     }).then(resp => {
@@ -277,7 +277,7 @@ const FilerEditor = (() => {
     const content = file.view.state.doc.toString();
 
     await Spinner.wrap(editorContainer, async () => {
-      const resp = await fetch('/api/filer/write', {
+      const resp = await fetch(`${FilerRemote.getApiBase()}/write`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -480,8 +480,22 @@ const FilerEditor = (() => {
     });
   }
 
+  /** 全タブを強制クローズ（dirty チェックなし、呼び出し側で確認済みの前提） */
+  function closeAll() {
+    for (const file of openFiles.values()) {
+      file.view.destroy();
+      if (file.previewDom && file.previewDom.parentElement) {
+        file.previewDom.remove();
+      }
+    }
+    openFiles.clear();
+    activePath = null;
+    editorContainer.innerHTML = '<div class="filer-welcome"><p>Select a file to edit</p></div>';
+    tabsContainer.innerHTML = '';
+  }
+
   return {
-    init, openFile, closeFile, saveActive, hasUnsavedChanges,
+    init, openFile, closeFile, closeAll, saveActive, hasUnsavedChanges,
     notifyRenamed, notifyDeleted, goToLine,
   };
 })();
