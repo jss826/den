@@ -9,8 +9,16 @@ use tokio::net::TcpListener;
 
 use crate::pty::registry::{ClientKind, SessionRegistry, SharedSession};
 
-/// SSH セッション非アクティブタイムアウト
-const SSH_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// SSH セッション非アクティブタイムアウト（1時間）
+/// `claude -p` 等の長時間コマンドでも切断されないよう余裕を持たせる。
+/// 実際の死活監視は keepalive で行う。
+const SSH_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// SSH keepalive 送信間隔（30秒ごと）
+const SSH_KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// keepalive 無応答でコネクション切断する回数（3回 = 最大90秒）
+const SSH_KEEPALIVE_MAX: usize = 3;
 
 /// パスワード認証失敗時の遅延（ブルートフォース対策）
 const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3);
@@ -71,6 +79,8 @@ pub async fn run(
     // 素早くフォールバックできる。
     let config = russh::server::Config {
         inactivity_timeout: Some(SSH_INACTIVITY_TIMEOUT),
+        keepalive_interval: Some(SSH_KEEPALIVE_INTERVAL),
+        keepalive_max: SSH_KEEPALIVE_MAX,
         auth_rejection_time: std::time::Duration::from_secs(0),
         auth_rejection_time_initial: Some(std::time::Duration::from_secs(0)),
         keys: vec![host_key],
