@@ -23,6 +23,10 @@ const Keybar = (() => {
     { label: 'C-d', send: '\x04' },
     { label: 'C-z', send: '\x1a' },
     { label: 'C-l', send: '\x0c' },
+    { label: 'PgUp', send: '', type: 'action', action: 'scroll-page-up' },
+    { label: 'PgDn', send: '', type: 'action', action: 'scroll-page-down' },
+    { label: 'Top', send: '', type: 'action', action: 'scroll-top' },
+    { label: 'Btm', send: '', type: 'action', action: 'scroll-bottom' },
     { label: 'Paste', send: '', type: 'action', action: 'paste' },
     { label: 'Sel', send: '', type: 'action', action: 'select' },
     { label: 'Screen', send: '', type: 'action', action: 'copy-screen' },
@@ -116,6 +120,18 @@ const Keybar = (() => {
               });
               return; // Don't refocus terminal — overlay needs taps
             }
+          } else if (actionName === 'scroll-page-up') {
+            const t = DenTerminal.getTerminal();
+            if (t) t.scrollPages(-1);
+          } else if (actionName === 'scroll-page-down') {
+            const t = DenTerminal.getTerminal();
+            if (t) t.scrollPages(1);
+          } else if (actionName === 'scroll-top') {
+            const t = DenTerminal.getTerminal();
+            if (t) t.scrollToTop();
+          } else if (actionName === 'scroll-bottom') {
+            const t = DenTerminal.getTerminal();
+            if (t) t.scrollToBottom();
           } else if (actionName === 'copy-screen') {
             try {
               const t = DenTerminal.getTerminal();

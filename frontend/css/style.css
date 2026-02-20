@@ -1855,6 +1855,22 @@ select:focus-visible {
   background: transparent;
 }
 
+/* タッチデバイス: スクロールバーを太く */
+@media (hover: none) and (pointer: coarse) {
+  * {
+    scrollbar-width: auto;
+  }
+
+  ::-webkit-scrollbar {
+    width: 16px;
+    height: 16px;
+  }
+
+  .xterm .xterm-viewport::-webkit-scrollbar {
+    width: 16px;
+  }
+}
+
 /* === Reduced motion 対応 === */
 
 @media (prefers-reduced-motion: reduce) {

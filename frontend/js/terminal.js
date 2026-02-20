@@ -27,10 +27,12 @@ const DenTerminal = (() => {
   }
 
   function init(container) {
+    const scrollback = DenSettings.get('terminal_scrollback') || 1000;
     term = new Terminal({
       cursorBlink: true,
       fontSize: 15,
       fontFamily: '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", monospace',
+      scrollback,
       theme: {
         background: '#1a1b26',
         foreground: '#c0caf5',

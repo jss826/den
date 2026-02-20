@@ -62,6 +62,10 @@ const DenSettings = (() => {
     { label: 'Paste', send: '', display: 'Paste (clipboard)', type: 'action', action: 'paste' },
     { label: 'Sel', send: '', display: 'Select mode (tap lines)', type: 'action', action: 'select' },
     { label: 'Screen', send: '', display: 'Copy screen (visible)', type: 'action', action: 'copy-screen' },
+    { label: 'PgUp\u2195', send: '', display: 'Page Up (scroll)', type: 'action', action: 'scroll-page-up' },
+    { label: 'PgDn\u2195', send: '', display: 'Page Down (scroll)', type: 'action', action: 'scroll-page-down' },
+    { label: 'Top\u2195', send: '', display: 'Scroll to top', type: 'action', action: 'scroll-top' },
+    { label: 'Btm\u2195', send: '', display: 'Scroll to bottom', type: 'action', action: 'scroll-bottom' },
   ];
 
   // エスケープ文字列をリテラルに変換
