@@ -197,7 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
     FloatTerminal.init();
-    document.getElementById('float-terminal-btn').addEventListener('click', () => FloatTerminal.toggle());
+    document.getElementById('float-terminal-btn')?.addEventListener('click', () => FloatTerminal.toggle());
 
     // SFTP 接続状態チェック（ページリロード時の復元）
     FilerRemote.checkStatus();
