@@ -17,7 +17,7 @@ const DenMarkdown = (() => {
     const codeBlocks = [];
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
       const idx = codeBlocks.length;
-      const langAttr = lang ? ` class="language-${lang}"` : '';
+      const langAttr = lang ? ` class="language-${esc(lang)}"` : '';
       codeBlocks.push('<div class="code-block-wrapper"><pre class="code-block"><code' +
         langAttr + '>' + code + '</code></pre><button class="code-copy-btn">Copy</button></div>');
       return '\x00CB' + idx + '\x00';

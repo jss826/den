@@ -32,6 +32,7 @@ pub struct Settings {
     pub font_size: u8,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Valid range: 100–50000 (clamped server-side in put_settings)
     #[serde(default = "default_scrollback")]
     pub terminal_scrollback: u32,
     #[serde(default)]

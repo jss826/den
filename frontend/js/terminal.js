@@ -27,7 +27,7 @@ const DenTerminal = (() => {
   }
 
   function init(container) {
-    const scrollback = DenSettings.get('terminal_scrollback') || 1000;
+    const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
     term = new Terminal({
       cursorBlink: true,
       fontSize: 15,

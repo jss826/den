@@ -62,10 +62,10 @@ const DenSettings = (() => {
     { label: 'Paste', send: '', display: 'Paste (clipboard)', type: 'action', action: 'paste' },
     { label: 'Sel', send: '', display: 'Select mode (tap lines)', type: 'action', action: 'select' },
     { label: 'Screen', send: '', display: 'Copy screen (visible)', type: 'action', action: 'copy-screen' },
-    { label: 'PgUp\u2195', send: '', display: 'Page Up (scroll)', type: 'action', action: 'scroll-page-up' },
-    { label: 'PgDn\u2195', send: '', display: 'Page Down (scroll)', type: 'action', action: 'scroll-page-down' },
-    { label: 'Top\u2195', send: '', display: 'Scroll to top', type: 'action', action: 'scroll-top' },
-    { label: 'Btm\u2195', send: '', display: 'Scroll to bottom', type: 'action', action: 'scroll-bottom' },
+    { label: 'Sc\u2191', send: '', display: 'Scroll page up', type: 'action', action: 'scroll-page-up' },
+    { label: 'Sc\u2193', send: '', display: 'Scroll page down', type: 'action', action: 'scroll-page-down' },
+    { label: 'Top', send: '', display: 'Scroll to top', type: 'action', action: 'scroll-top' },
+    { label: 'Bot', send: '', display: 'Scroll to bottom', type: 'action', action: 'scroll-bottom' },
   ];
 
   // エスケープ文字列をリテラルに変換
@@ -380,6 +380,10 @@ const DenSettings = (() => {
       });
       if (!ok) return;
       apply();
+
+      // scrollback を即時反映（xterm.js は options.scrollback の動的変更に対応）
+      const t = DenTerminal.getTerminal();
+      if (t) t.options.scrollback = Math.max(100, Math.min(50000, scrollback));
 
       // キーバーを即時反映
       Keybar.reload(keybarButtons);

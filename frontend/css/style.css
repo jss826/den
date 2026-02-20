@@ -1855,12 +1855,8 @@ select:focus-visible {
   background: transparent;
 }
 
-/* タッチデバイス: スクロールバーを太く */
+/* タッチデバイス: スクロールバーを太く（webkit系ブラウザ向け） */
 @media (hover: none) and (pointer: coarse) {
-  * {
-    scrollbar-width: auto;
-  }
-
   ::-webkit-scrollbar {
     width: 16px;
     height: 16px;

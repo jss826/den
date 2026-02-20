@@ -4,6 +4,14 @@ const Keybar = (() => {
   let modifiers = { ctrl: false, alt: false, shift: false };
   let activeKeys = [];
 
+  // スクロールアクション → ターミナルメソッドのディスパッチマップ
+  const SCROLL_ACTIONS = {
+    'scroll-page-up':   t => t.scrollPages(-1),
+    'scroll-page-down': t => t.scrollPages(1),
+    'scroll-top':       t => t.scrollToTop(),
+    'scroll-bottom':    t => t.scrollToBottom(),
+  };
+
   // デフォルトキー配列
   const DEFAULT_KEYS = [
     { label: 'Ctrl', send: '', type: 'modifier', mod_key: 'ctrl' },
@@ -11,25 +19,25 @@ const Keybar = (() => {
     { label: 'Shift', send: '', type: 'modifier', mod_key: 'shift' },
     { label: 'Tab', send: '\t' },
     { label: 'Esc', send: '\x1b' },
-    { label: '\u2191', send: '\x1b[A' },
-    { label: '\u2193', send: '\x1b[B' },
-    { label: '\u2192', send: '\x1b[C' },
-    { label: '\u2190', send: '\x1b[D' },
-    { label: '|', send: '|' },
-    { label: '~', send: '~' },
+    { label: '\u2191', send: '\x1b[A', display: 'Up arrow' },
+    { label: '\u2193', send: '\x1b[B', display: 'Down arrow' },
+    { label: '\u2192', send: '\x1b[C', display: 'Right arrow' },
+    { label: '\u2190', send: '\x1b[D', display: 'Left arrow' },
+    { label: '|', send: '|', display: 'Pipe' },
+    { label: '~', send: '~', display: 'Tilde' },
     { label: '/', send: '/' },
     { label: '-', send: '-' },
-    { label: 'C-c', send: '\x03' },
-    { label: 'C-d', send: '\x04' },
-    { label: 'C-z', send: '\x1a' },
-    { label: 'C-l', send: '\x0c' },
-    { label: 'PgUp', send: '', type: 'action', action: 'scroll-page-up' },
-    { label: 'PgDn', send: '', type: 'action', action: 'scroll-page-down' },
-    { label: 'Top', send: '', type: 'action', action: 'scroll-top' },
-    { label: 'Btm', send: '', type: 'action', action: 'scroll-bottom' },
-    { label: 'Paste', send: '', type: 'action', action: 'paste' },
-    { label: 'Sel', send: '', type: 'action', action: 'select' },
-    { label: 'Screen', send: '', type: 'action', action: 'copy-screen' },
+    { label: 'C-c', send: '\x03', display: 'Ctrl+C' },
+    { label: 'C-d', send: '\x04', display: 'Ctrl+D' },
+    { label: 'C-z', send: '\x1a', display: 'Ctrl+Z' },
+    { label: 'C-l', send: '\x0c', display: 'Ctrl+L' },
+    { label: 'Sc\u2191', send: '', type: 'action', action: 'scroll-page-up', display: 'Scroll page up' },
+    { label: 'Sc\u2193', send: '', type: 'action', action: 'scroll-page-down', display: 'Scroll page down' },
+    { label: 'Top', send: '', type: 'action', action: 'scroll-top', display: 'Scroll to top' },
+    { label: 'Bot', send: '', type: 'action', action: 'scroll-bottom', display: 'Scroll to bottom' },
+    { label: 'Paste', send: '', type: 'action', action: 'paste', display: 'Paste (clipboard)' },
+    { label: 'Sel', send: '', type: 'action', action: 'select', display: 'Select mode' },
+    { label: 'Screen', send: '', type: 'action', action: 'copy-screen', display: 'Copy screen' },
   ];
 
   function init(el, customKeys) {
@@ -64,6 +72,9 @@ const Keybar = (() => {
       const btn = document.createElement('button');
       btn.className = 'key-btn';
       btn.textContent = key.label;
+      if (key.display && key.display !== key.label) {
+        btn.setAttribute('aria-label', key.display);
+      }
 
       const isModifier = key.type === 'modifier' || key.btn_type === 'modifier';
 
@@ -120,18 +131,18 @@ const Keybar = (() => {
               });
               return; // Don't refocus terminal — overlay needs taps
             }
-          } else if (actionName === 'scroll-page-up') {
-            const t = DenTerminal.getTerminal();
-            if (t) t.scrollPages(-1);
-          } else if (actionName === 'scroll-page-down') {
-            const t = DenTerminal.getTerminal();
-            if (t) t.scrollPages(1);
-          } else if (actionName === 'scroll-top') {
-            const t = DenTerminal.getTerminal();
-            if (t) t.scrollToTop();
-          } else if (actionName === 'scroll-bottom') {
-            const t = DenTerminal.getTerminal();
-            if (t) t.scrollToBottom();
+          } else if (SCROLL_ACTIONS[actionName]) {
+            try {
+              const t = DenTerminal.getTerminal();
+              if (t) {
+                SCROLL_ACTIONS[actionName](t);
+              } else {
+                console.warn('Scroll action ignored: terminal not available');
+              }
+            } catch (err) {
+              console.warn('Scroll error:', err);
+            }
+            return; // Don't refocus — avoids opening soft keyboard on touch devices
           } else if (actionName === 'copy-screen') {
             try {
               const t = DenTerminal.getTerminal();

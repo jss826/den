@@ -18,8 +18,10 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
 /// PUT /api/settings
 pub async fn put_settings(
     State(state): State<Arc<AppState>>,
-    Json(settings): Json<Settings>,
+    Json(mut settings): Json<Settings>,
 ) -> impl IntoResponse {
+    // Server-side validation: clamp to match frontend constraints (100–50000)
+    settings.terminal_scrollback = settings.terminal_scrollback.clamp(100, 50000);
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
         Ok(Ok(())) => StatusCode::OK.into_response(),
