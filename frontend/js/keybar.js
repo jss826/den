@@ -4,6 +4,37 @@ const Keybar = (() => {
   let modifiers = { ctrl: false, alt: false, shift: false };
   let activeKeys = [];
 
+  /**
+   * Clipboard fallback for non-secure contexts (HTTP over LAN).
+   * navigator.clipboard requires Secure Context (HTTPS or localhost).
+   */
+  async function clipboardWrite(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    // Fallback: temporary textarea + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+    } finally {
+      ta.remove();
+    }
+  }
+
+  async function clipboardRead() {
+    if (navigator.clipboard && window.isSecureContext) {
+      return await navigator.clipboard.readText();
+    }
+    // Fallback: prompt modal
+    const text = await Toast.prompt('Paste text:');
+    return text;
+  }
+
   // スクロールアクション → ターミナルメソッドのディスパッチマップ
   const SCROLL_ACTIONS = {
     'scroll-page-up':   t => t.scrollPages(-1),
@@ -97,13 +128,13 @@ const Keybar = (() => {
           e.preventDefault();
           if (actionName === 'paste') {
             try {
-              const text = await navigator.clipboard.readText();
+              const text = await clipboardRead();
               if (text) {
                 const t = DenTerminal.getTerminal();
                 if (t) t.paste(text);
               }
             } catch (err) {
-              console.warn('Paste error:', err); // F002
+              console.warn('Paste error:', err);
               if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
             }
           } else if (actionName === 'copy') {
@@ -112,13 +143,13 @@ const Keybar = (() => {
               if (t) {
                 const sel = t.getSelection();
                 if (sel) {
-                  await navigator.clipboard.writeText(sel);
+                  await clipboardWrite(sel);
                   t.clearSelection();
                   if (typeof Toast !== 'undefined') Toast.success('Copied');
                 }
               }
             } catch (err) {
-              console.warn('Copy error:', err); // F002
+              console.warn('Copy error:', err);
               if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
             }
           } else if (actionName === 'select') {
@@ -156,14 +187,13 @@ const Keybar = (() => {
                 }
                 const text = lines.join('\n').trimEnd(); // F007: single-pass trim
                 if (text) {
-                  await navigator.clipboard.writeText(text);
+                  await clipboardWrite(text);
                   if (typeof Toast !== 'undefined') Toast.success('Screen copied');
                 } else {
-                  if (typeof Toast !== 'undefined') Toast.info('Nothing to copy'); // F012
+                  if (typeof Toast !== 'undefined') Toast.info('Nothing to copy');
                 }
               }
             } catch (err) {
-              // F002: distinguish clipboard vs other errors
               if (typeof Toast !== 'undefined') {
                 Toast.error(err?.name === 'NotAllowedError' ? 'Clipboard access denied' : 'Copy failed');
               }
