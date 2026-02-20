@@ -22,6 +22,7 @@ pub struct AppState {
     pub store: Store,
     pub registry: Arc<SessionRegistry>,
     pub hmac_secret: Vec<u8>,
+    pub rate_limiter: auth::LoginRateLimiter,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -49,6 +50,7 @@ pub fn create_app_with_secret(
         store,
         registry,
         hmac_secret,
+        rate_limiter: auth::LoginRateLimiter::new(),
     });
 
     // 認証不要のルート
@@ -57,11 +59,12 @@ pub fn create_app_with_secret(
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
-    // 認証必要のルート
+    // 認証必要のルート（Cookie / Authorization ヘッダーで認証）
     let protected_routes = Router::new()
-        .route("/api/ws", get(ws::ws_handler))
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
+        // WebSocket: Cookie 認証（ブラウザが自動で Cookie を送信）
+        .route("/api/ws", get(ws::ws_handler))
         // Terminal session management API
         .route(
             "/api/terminal/sessions",
@@ -86,5 +89,7 @@ pub fn create_app_with_secret(
     Router::new()
         .merge(protected_routes)
         .merge(public_routes)
+        // CSP ヘッダーを全レスポンスに付与（XSS 防止）
+        .layer(middleware::from_fn(auth::csp_middleware))
         .with_state(state)
 }

@@ -24,6 +24,8 @@ pub enum RegistryError {
     SessionDead(String),
     /// PTY spawn 失敗
     SpawnFailed(String),
+    /// セッション数上限に達した
+    LimitExceeded,
 }
 
 impl fmt::Display for RegistryError {
@@ -34,11 +36,15 @@ impl fmt::Display for RegistryError {
             Self::NotFound(name) => write!(f, "Session not found: {name}"),
             Self::SessionDead(name) => write!(f, "Session is dead: {name}"),
             Self::SpawnFailed(msg) => write!(f, "Spawn failed: {msg}"),
+            Self::LimitExceeded => write!(f, "Session limit exceeded (max {MAX_SESSIONS})"),
         }
     }
 }
 
 impl std::error::Error for RegistryError {}
+
+/// 最大セッション数（DoS 対策）
+const MAX_SESSIONS: usize = 50;
 
 /// リプレイバッファ容量: 64KB
 const REPLAY_CAPACITY: usize = 64 * 1024;
@@ -274,8 +280,14 @@ impl SessionRegistry {
         }
 
         // 高速チェック（最適化: 大半のケースで不要な PTY spawn を回避）
-        if self.sessions.read().await.contains_key(name) {
-            return Err(RegistryError::AlreadyExists(name.to_string()));
+        {
+            let sessions = self.sessions.read().await;
+            if sessions.contains_key(name) {
+                return Err(RegistryError::AlreadyExists(name.to_string()));
+            }
+            if sessions.len() >= MAX_SESSIONS {
+                return Err(RegistryError::LimitExceeded);
+            }
         }
 
         // PTY を spawn（blocking）
@@ -301,8 +313,15 @@ impl SessionRegistry {
         // 権威的な挿入: write lock で再チェック（TOCTOU 防止）
         {
             let mut sessions = self.sessions.write().await;
-            if sessions.contains_key(name) {
-                // レース: 別の呼び出しが先に作成した → クリーンアップ
+            let race_err = if sessions.contains_key(name) {
+                Some(RegistryError::AlreadyExists(name.to_string()))
+            } else if sessions.len() >= MAX_SESSIONS {
+                Some(RegistryError::LimitExceeded)
+            } else {
+                None
+            };
+            if let Some(err) = race_err {
+                // レース: 別の呼び出しが先に作成した or 上限到達 → クリーンアップ
                 session.alive.store(false, Ordering::Release);
                 let (resize_handle, monitor_handle) = {
                     let mut inner = session.inner.lock().await;
@@ -323,7 +342,7 @@ impl SessionRegistry {
                 if let Some(handle) = resize_handle {
                     let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
                 }
-                return Err(RegistryError::AlreadyExists(name.to_string()));
+                return Err(err);
             }
             sessions.insert(name.to_string(), Arc::clone(&session));
         }

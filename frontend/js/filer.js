@@ -2,12 +2,10 @@
 // Den - ファイラ メインモジュール
 // eslint-disable-next-line no-unused-vars
 const DenFiler = (() => {
-  let token;
   let currentDir = '~';
   let contextMenu = null;
 
-  function init(authToken) {
-    token = authToken;
+  function init() {
 
     // エディタ初期化
     FilerEditor.init(
@@ -179,7 +177,7 @@ const DenFiler = (() => {
         try {
           const resp = await fetch('/api/filer/upload', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` },
+            credentials: 'same-origin',
             body: formData,
           });
           if (resp.ok) {
@@ -413,7 +411,7 @@ const DenFiler = (() => {
   async function downloadFile(path) {
     try {
       const resp = await fetch(`/api/filer/download?path=${enc(path)}`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'same-origin',
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: 'Download failed' }));
@@ -457,7 +455,7 @@ const DenFiler = (() => {
       try {
         const resp = await fetch('/api/filer/upload', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
+          credentials: 'same-origin',
           body: formData,
         });
         if (resp.ok) {
@@ -547,7 +545,7 @@ const DenFiler = (() => {
   async function apiFetch(url) {
     try {
       const resp = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'same-origin',
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => null);
@@ -564,10 +562,8 @@ const DenFiler = (() => {
     try {
       const resp = await fetch(url, {
         method,
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       if (!resp.ok) {
@@ -585,7 +581,7 @@ const DenFiler = (() => {
     try {
       const resp = await fetch(url, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` },
+        credentials: 'same-origin',
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => null);

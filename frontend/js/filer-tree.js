@@ -311,7 +311,7 @@ const FilerTree = (() => {
   async function apiFetch(url) {
     try {
       const resp = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+        credentials: 'same-origin',
       });
       if (!resp.ok) return null;
       return resp.json();

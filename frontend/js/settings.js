@@ -81,7 +81,7 @@ const DenSettings = (() => {
   async function load() {
     try {
       const resp = await fetch('/api/settings', {
-        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+        credentials: 'same-origin',
       });
       if (resp.ok) {
         current = await resp.json();
@@ -98,10 +98,8 @@ const DenSettings = (() => {
     try {
       const resp = await fetch('/api/settings', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${Auth.getToken()}`,
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(current),
       });
       if (!resp.ok) {
@@ -381,9 +379,13 @@ const DenSettings = (() => {
       if (!ok) return;
       apply();
 
-      // scrollback を即時反映（xterm.js は options.scrollback の動的変更に対応）
+      // scrollback / fontSize を即時反映（xterm.js は options の動的変更に対応）
       const t = DenTerminal.getTerminal();
-      if (t) t.options.scrollback = Math.max(100, Math.min(50000, scrollback));
+      if (t) {
+        t.options.scrollback = Math.max(100, Math.min(50000, scrollback));
+        t.options.fontSize = Math.max(8, Math.min(32, fontSize));
+        DenTerminal.fitAndRefresh();
+      }
 
       // フローティングターミナルにも設定反映
       if (typeof FloatTerminal !== 'undefined') FloatTerminal.applySettings();

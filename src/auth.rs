@@ -1,15 +1,16 @@
 use axum::{
     Json,
     extract::State,
-    http::{Request, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
 
@@ -17,6 +18,54 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// トークン有効期限（秒）: 24時間
 const TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// レートリミット: ウィンドウ内の最大ログイン試行回数
+const MAX_LOGIN_ATTEMPTS: usize = 5;
+/// レートリミット: スライディングウィンドウ（秒）
+const RATE_LIMIT_WINDOW_SECS: u64 = 60;
+
+/// ログイン試行のグローバルレートリミッター（スライディングウィンドウ方式）
+/// 単一パスワード認証のため、IP 単位ではなくグローバルで制限する。
+pub struct LoginRateLimiter {
+    attempts: Mutex<VecDeque<Instant>>,
+}
+
+impl Default for LoginRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LoginRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            attempts: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// 試行を記録し、レートリミット内であれば true を返す
+    pub fn check_and_record(&self) -> bool {
+        let mut attempts = self.attempts.lock().expect("rate limiter lock poisoned");
+        let window = std::time::Duration::from_secs(RATE_LIMIT_WINDOW_SECS);
+        let now = Instant::now();
+
+        // ウィンドウ外の古いエントリを削除
+        while let Some(front) = attempts.front() {
+            if now.duration_since(*front) > window {
+                attempts.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if attempts.len() >= MAX_LOGIN_ATTEMPTS {
+            false
+        } else {
+            attempts.push_back(now);
+            true
+        }
+    }
+}
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -88,22 +137,73 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         == 0
 }
 
+/// Cookie name for the auth token (HttpOnly)
+const TOKEN_COOKIE: &str = "den_token";
+/// Cookie name for the login flag (readable by JS for isLoggedIn check)
+const LOGGED_IN_COOKIE: &str = "den_logged_in";
+
 /// ログイン API
+/// トークンを HttpOnly Cookie + レスポンスボディ両方で返す。
+/// ブラウザは Cookie を使用し、API クライアントはレスポンスボディを使用可能。
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, StatusCode> {
+) -> Result<Response, StatusCode> {
+    if !state.rate_limiter.check_and_record() {
+        tracing::warn!("Login rate limited");
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
     if req.password == state.config.password {
         let token = generate_token(&state.config.password, &state.hmac_secret);
         tracing::info!("Login successful");
-        Ok(Json(LoginResponse { token }))
+
+        let mut headers = HeaderMap::new();
+        // HttpOnly Cookie: JS からアクセス不可（XSS 対策）
+        let token_cookie = format!(
+            "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+            TOKEN_COOKIE, token, TOKEN_TTL_SECS
+        );
+        headers.insert(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&token_cookie).expect("valid cookie value"),
+        );
+        // Flag Cookie: JS から isLoggedIn() チェック用（トークン値は含まない）
+        let flag_cookie = format!(
+            "{}=1; SameSite=Strict; Path=/; Max-Age={}",
+            LOGGED_IN_COOKIE, TOKEN_TTL_SECS
+        );
+        headers.append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&flag_cookie).expect("valid cookie value"),
+        );
+
+        Ok((headers, Json(LoginResponse { token })).into_response())
     } else {
         tracing::warn!("Login failed: incorrect password");
         Err(StatusCode::UNAUTHORIZED)
     }
 }
 
+/// Cookie ヘッダーから指定名の値を抽出
+fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            let prefix = format!("{}=", name);
+            cookies
+                .split(';')
+                .map(|c| c.trim())
+                .find(|c| c.starts_with(&prefix))
+                .map(|c| c[prefix.len()..].to_string())
+        })
+}
+
 /// トークン認証ミドルウェア
+/// 認証ソース（優先順）:
+/// 1. Authorization: Bearer <token> ヘッダー（API クライアント・テスト用）
+/// 2. den_token Cookie（ブラウザ用、HttpOnly）
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request<axum::body::Body>,
@@ -111,20 +211,15 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path().to_string();
 
-    // Authorization ヘッダーからトークンを取得
+    // Authorization ヘッダーからトークンを取得（優先）
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string())
-        // クエリパラメータからも取得（WebSocket 用）
-        .or_else(|| {
-            req.uri()
-                .query()
-                .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
-                .map(|s| s.to_string())
-        });
+        // フォールバック: Cookie からトークンを取得
+        .or_else(|| extract_cookie(req.headers(), TOKEN_COOKIE));
 
     match token {
         Some(t) if validate_token(&t, &state.config.password, &state.hmac_secret) => {
@@ -135,6 +230,19 @@ pub async fn auth_middleware(
             StatusCode::UNAUTHORIZED.into_response()
         }
     }
+}
+
+/// Content-Security-Policy ミドルウェア
+/// script-src 'self' で外部スクリプト注入を防止し、XSS リスクを軽減する。
+pub async fn csp_middleware(req: Request<axum::body::Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    resp.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:",
+        ),
+    );
+    resp
 }
 
 #[cfg(test)]
@@ -222,5 +330,38 @@ mod tests {
         assert!(!validate_token("not-a-token", "password", TEST_SECRET));
         assert!(!validate_token("", "password", TEST_SECRET));
         assert!(!validate_token("abc.def.ghi", "password", TEST_SECRET));
+    }
+
+    #[test]
+    fn extract_cookie_single() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, "den_token=abc123".parse().unwrap());
+        assert_eq!(extract_cookie(&headers, "den_token"), Some("abc123".into()));
+    }
+
+    #[test]
+    fn extract_cookie_multiple() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "other=x; den_token=abc123; den_logged_in=1"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(extract_cookie(&headers, "den_token"), Some("abc123".into()));
+        assert_eq!(extract_cookie(&headers, "den_logged_in"), Some("1".into()));
+    }
+
+    #[test]
+    fn extract_cookie_missing() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, "other=x".parse().unwrap());
+        assert_eq!(extract_cookie(&headers, "den_token"), None);
+    }
+
+    #[test]
+    fn extract_cookie_no_header() {
+        let headers = HeaderMap::new();
+        assert_eq!(extract_cookie(&headers, "den_token"), None);
     }
 }

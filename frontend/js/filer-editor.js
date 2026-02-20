@@ -121,7 +121,7 @@ const FilerEditor = (() => {
     const controller = new AbortController();
     let blobUrl = null;
     fetch(`/api/filer/download?path=${enc(filePath)}`, {
-      headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+      credentials: 'same-origin',
       signal: controller.signal,
     }).then(resp => {
       if (!resp.ok) { Toast.error('Failed to load image'); return; }
@@ -279,10 +279,8 @@ const FilerEditor = (() => {
     await Spinner.wrap(editorContainer, async () => {
       const resp = await fetch('/api/filer/write', {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${Auth.getToken()}`,
-          'Content-Type': 'application/json',
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: activePath, content }),
       });
 
@@ -458,7 +456,7 @@ const FilerEditor = (() => {
   async function apiFetch(url) {
     try {
       const resp = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+        credentials: 'same-origin',
       });
       if (!resp.ok) return null;
       return resp.json();

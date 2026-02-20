@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function validateAndShow() {
     try {
       const resp = await fetch('/api/settings', {
-        headers: { 'Authorization': `Bearer ${Auth.getToken()}` },
+        credentials: 'same-origin',
       });
       if (resp.ok) {
         showMain();
@@ -91,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Ctrl+` フローティングターミナル toggle（モーダル中はスキップ）
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '`' && !anyModalOpen) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'Backquote' && !anyModalOpen) {
       e.preventDefault();
       FloatTerminal.toggle();
       return;
@@ -190,7 +190,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ターミナル初期化
     const container = document.getElementById('terminal-container');
     DenTerminal.init(container);
-    DenTerminal.connect(Auth.getToken());
+    DenTerminal.connect();
     DenTerminal.initSessionBar();
     DenTerminal.refreshSessionList();
 
@@ -256,7 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Filer 初期化（初回のみ）
     if (tabName === 'filer' && !filerInitialized) {
       filerInitialized = true;
-      DenFiler.init(Auth.getToken());
+      DenFiler.init();
     }
   }
 

@@ -1,34 +1,28 @@
 // Den - 認証モジュール
+// トークンは HttpOnly Cookie で管理（XSS でのトークン窃取を防止）
 const Auth = (() => {
-  const TOKEN_KEY = 'den_token';
+  const LOGGED_IN_COOKIE = 'den_logged_in';
 
-  function getToken() {
-    return sessionStorage.getItem(TOKEN_KEY);
-  }
-
-  function setToken(token) {
-    sessionStorage.setItem(TOKEN_KEY, token);
-  }
-
-  function clearToken() {
-    sessionStorage.removeItem(TOKEN_KEY);
+  /** JS 可読な den_logged_in フラグ Cookie の存在を確認 */
+  function isLoggedIn() {
+    return document.cookie.split(';').some(c => c.trim().startsWith(LOGGED_IN_COOKIE + '='));
   }
 
   async function login(password) {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify({ password }),
     });
     if (!res.ok) throw new Error('Unauthorized');
-    const data = await res.json();
-    setToken(data.token);
-    return data.token;
+    // トークンは HttpOnly Cookie としてサーバーが Set-Cookie で設定済み
   }
 
-  function isLoggedIn() {
-    return !!getToken();
+  /** フラグ Cookie を削除（HttpOnly Cookie はサーバー側で期限切れ） */
+  function clearToken() {
+    document.cookie = LOGGED_IN_COOKIE + '=; Path=/; Max-Age=0';
   }
 
-  return { getToken, setToken, clearToken, login, isLoggedIn };
+  return { login, isLoggedIn, clearToken };
 })();

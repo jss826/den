@@ -4,7 +4,6 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = 'default';
-  let authToken = null;
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
@@ -26,42 +25,34 @@ const DenTerminal = (() => {
     sendResize();
   }
 
-  function init(container) {
-    const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
-    term = new Terminal({
-      cursorBlink: true,
-      fontSize: 15,
-      fontFamily: '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", monospace',
-      scrollback,
-      theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-        black: '#15161e',
-        red: '#f7768e',
-        green: '#9ece6a',
-        yellow: '#e0af68',
-        blue: '#7aa2f7',
-        magenta: '#bb9af7',
-        cyan: '#7dcfff',
-        white: '#a9b1d6',
-        brightBlack: '#414868',
-        brightRed: '#f7768e',
-        brightGreen: '#9ece6a',
-        brightYellow: '#e0af68',
-        brightBlue: '#7aa2f7',
-        brightMagenta: '#bb9af7',
-        brightCyan: '#7dcfff',
-        brightWhite: '#c0caf5',
-      },
-      allowProposedApi: true,
-    });
+  // Shared xterm.js theme (Tokyo Night)
+  const XTERM_THEME = {
+    background: '#1a1b26',
+    foreground: '#c0caf5',
+    cursor: '#c0caf5',
+    selectionBackground: '#33467c',
+    black: '#15161e',
+    red: '#f7768e',
+    green: '#9ece6a',
+    yellow: '#e0af68',
+    blue: '#7aa2f7',
+    magenta: '#bb9af7',
+    cyan: '#7dcfff',
+    white: '#a9b1d6',
+    brightBlack: '#414868',
+    brightRed: '#f7768e',
+    brightGreen: '#9ece6a',
+    brightYellow: '#e0af68',
+    brightBlue: '#7aa2f7',
+    brightMagenta: '#bb9af7',
+    brightCyan: '#7dcfff',
+    brightWhite: '#c0caf5',
+  };
 
-    fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
+  const FONT_FAMILY = '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", monospace';
 
-    // レンダラー選択: デスクトップ → WebGL、iOS/Safari → Canvas
+  /** レンダラー選択: デスクトップ → WebGL、iOS/Safari → Canvas、フォールバック → DOM */
+  function selectRenderer(t) {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     const isSafari = !isIOS && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
@@ -69,21 +60,38 @@ const DenTerminal = (() => {
       try {
         const webglAddon = new WebglAddon.WebglAddon();
         webglAddon.onContextLost(() => webglAddon.dispose());
-        term.loadAddon(webglAddon);
+        t.loadAddon(webglAddon);
       } catch (_e) {
         console.warn('WebGL not available, falling back to canvas renderer');
         try {
-          term.loadAddon(new CanvasAddon.CanvasAddon());
+          t.loadAddon(new CanvasAddon.CanvasAddon());
         } catch (_e2) { /* DOM fallback */ }
       }
     } else {
       // iOS/Safari: Canvas レンダラーを明示的にロード
       try {
-        term.loadAddon(new CanvasAddon.CanvasAddon());
+        t.loadAddon(new CanvasAddon.CanvasAddon());
       } catch (_e) {
         console.warn('Canvas addon not available, using DOM renderer');
       }
     }
+  }
+
+  function init(container) {
+    const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
+    const fontSize = DenSettings.get('font_size') ?? 15;
+    term = new Terminal({
+      cursorBlink: true,
+      fontSize,
+      fontFamily: FONT_FAMILY,
+      scrollback,
+      theme: XTERM_THEME,
+    });
+
+    fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+
+    selectRenderer(term);
 
     term.open(container);
     fitAndRefresh();
@@ -151,8 +159,7 @@ const DenTerminal = (() => {
     return term;
   }
 
-  function connect(token, sessionName) {
-    authToken = token;
+  function connect(sessionName) {
     currentSession = sessionName || 'default';
     doConnect();
   }
@@ -164,7 +171,8 @@ const DenTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(authToken)}&cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
+    // 認証は Cookie（HttpOnly）で自動送信 — URL にトークンを含めない
+    const url = `${proto}//${location.host}/api/ws?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
     let retries = 0;
 
@@ -215,7 +223,9 @@ const DenTerminal = (() => {
         startReconnect(generation);
       };
 
-      ws.onerror = () => {};
+      ws.onerror = (event) => {
+        console.error('[DenTerminal] WebSocket error', event);
+      };
 
       // Safari: WebSocket が CONNECTING のまま stall する問題のリトライ
       setTimeout(() => {
@@ -403,10 +413,9 @@ const DenTerminal = (() => {
   // --- Session management ---
 
   async function fetchSessions() {
-    if (!authToken) return [];
     try {
       const resp = await fetch('/api/terminal/sessions', {
-        headers: { 'Authorization': `Bearer ${authToken}` },
+        credentials: 'same-origin',
       });
       if (resp.ok) return await resp.json();
     } catch (_) { /* ignore */ }
@@ -414,14 +423,11 @@ const DenTerminal = (() => {
   }
 
   async function createSession(name) {
-    if (!authToken) return false;
     try {
       const resp = await fetch('/api/terminal/sessions', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
       return resp.ok || resp.status === 201;
@@ -431,11 +437,10 @@ const DenTerminal = (() => {
   }
 
   async function destroySession(name) {
-    if (!authToken) return false;
     try {
       const resp = await fetch(`/api/terminal/sessions/${encodeURIComponent(name)}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${authToken}` },
+        credentials: 'same-origin',
       });
       return resp.ok || resp.status === 204;
     } catch (_) {
@@ -476,10 +481,8 @@ const DenTerminal = (() => {
       clientsSpan.textContent = '';
     }
 
-    // Also refresh float terminal's session list
-    if (typeof FloatTerminal !== 'undefined') {
-      FloatTerminal.refreshSessionList();
-    }
+    // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
+    document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
   }
 
   function initSessionBar() {
@@ -498,12 +501,9 @@ const DenTerminal = (() => {
         const name = await Toast.prompt('Session name:');
         if (!name || !name.trim()) return;
         const trimmed = name.trim();
-        if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {
-          Toast.error('Session name must be alphanumeric + hyphens only');
-          return;
-        }
-        if (trimmed.length > 64) {
-          Toast.error('Session name too long (max 64 characters)');
+        const validationError = validateSessionName(trimmed);
+        if (validationError) {
+          Toast.error(validationError);
           return;
         }
         const ok = await createSession(trimmed);
@@ -540,10 +540,25 @@ const DenTerminal = (() => {
     });
   }
 
+  /** Validate session name. Returns error message string or null if valid. */
+  function validateSessionName(name) {
+    if (!/^[a-zA-Z0-9-]+$/.test(name)) {
+      return 'Session name must be alphanumeric + hyphens only';
+    }
+    if (name.length > 64) {
+      return 'Session name too long (max 64 characters)';
+    }
+    return null;
+  }
+
   return {
     init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
     getCurrentSession, switchSession, refreshSessionList, initSessionBar,
     fetchSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,
+    validateSessionName,
+    getXtermTheme() { return XTERM_THEME; },
+    getFontFamily() { return FONT_FAMILY; },
+    selectRenderer,
   };
 })();

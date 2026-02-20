@@ -2,6 +2,7 @@
 // Den - Floating Terminal module
 const FloatTerminal = (() => {
   // --- State ---
+  let initDone = false;
   let initialized = false;
   let visible = false;
   let minimized = false;
@@ -23,14 +24,30 @@ const FloatTerminal = (() => {
   let dragState = null;
   // Resize state
   let resizeState = null;
+  // Race condition guard for refreshSessionList
+  let refreshGeneration = 0;
 
   const STORAGE_KEY = 'den-float-pos';
   const MIN_W = 320;
   const MIN_H = 200;
   const HEADER_H = 32;
+  const SESSION_REFRESH_INTERVAL = 5000;
+  const CONNECT_DELAY_MS = 200;
+  const STALL_TIMEOUT_MS = 3000;
+  const RECONNECT_COUNTDOWN_S = 3;
+  const DRAG_VISIBLE_PX = 100;
+  const VIEWPORT_MARGIN = 20;
+  const DEFAULT_MAX_W = 800;
+  const DEFAULT_MAX_H = 500;
+  const DEFAULT_VIEWPORT_RATIO = 0.6;
+
+  // Session refresh timer (independent from DenTerminal's polling)
+  let sessionRefreshTimer = null;
 
   // --- Init (called once at app startup, does NOT create xterm) ---
   function init() {
+    if (initDone) return;
+    initDone = true;
     panel = document.getElementById('float-terminal');
     body = panel.querySelector('.float-terminal-body');
     restoreBtn = document.getElementById('float-terminal-restore');
@@ -44,6 +61,21 @@ const FloatTerminal = (() => {
     panel.querySelector('.float-session-kill').addEventListener('click', onKillSession);
     sessionSelect.addEventListener('change', () => switchSession(sessionSelect.value));
     restoreBtn.addEventListener('click', restore);
+
+    // Listen for session list updates from DenTerminal (event-driven, no circular dep)
+    document.addEventListener('den:sessions-changed', (e) => {
+      refreshSessionList(e.detail?.sessions);
+    });
+
+    // Pause/resume session polling when page visibility changes
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopSessionRefresh();
+      } else if (visible) {
+        refreshSessionList();
+        startSessionRefresh();
+      }
+    });
 
     // Drag (header bar)
     const header = panel.querySelector('.float-terminal-header');
@@ -61,54 +93,19 @@ const FloatTerminal = (() => {
     initialized = true;
 
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
+    const fontSize = DenSettings.get('font_size') ?? 15;
     term = new Terminal({
       cursorBlink: true,
-      fontSize: 15,
-      fontFamily: '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", monospace',
+      fontSize,
+      fontFamily: DenTerminal.getFontFamily(),
       scrollback,
-      theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-        black: '#15161e',
-        red: '#f7768e',
-        green: '#9ece6a',
-        yellow: '#e0af68',
-        blue: '#7aa2f7',
-        magenta: '#bb9af7',
-        cyan: '#7dcfff',
-        white: '#a9b1d6',
-        brightBlack: '#414868',
-        brightRed: '#f7768e',
-        brightGreen: '#9ece6a',
-        brightYellow: '#e0af68',
-        brightBlue: '#7aa2f7',
-        brightMagenta: '#bb9af7',
-        brightCyan: '#7dcfff',
-        brightWhite: '#c0caf5',
-      },
-      allowProposedApi: true,
+      theme: DenTerminal.getXtermTheme(),
     });
 
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
 
-    // Renderer selection (same logic as DenTerminal)
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    const isSafari = !isIOS && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-    if (!isIOS && !isSafari) {
-      try {
-        const webglAddon = new WebglAddon.WebglAddon();
-        webglAddon.onContextLost(() => webglAddon.dispose());
-        term.loadAddon(webglAddon);
-      } catch (_e) {
-        try { term.loadAddon(new CanvasAddon.CanvasAddon()); } catch (_e2) { /* DOM */ }
-      }
-    } else {
-      try { term.loadAddon(new CanvasAddon.CanvasAddon()); } catch (_e) { /* DOM */ }
-    }
+    DenTerminal.selectRenderer(term);
 
     term.open(body);
 
@@ -127,24 +124,36 @@ const FloatTerminal = (() => {
         ws.send(bytes);
       }
     });
+
+    // ResizeObserver: fit terminal when container size changes (replaces setTimeout polling)
+    resizeObserver = new ResizeObserver(() => scheduleFit());
+    resizeObserver.observe(body);
   }
 
   // --- Fit ---
-  let fitRetryCount = 0;
+  let fitRafId = null;
+  let resizeObserver = null;
+
   function fitAndRefresh() {
-    if (!term || !fitAddon) return;
+    if (!term || !fitAddon || !visible) return;
+    fitRafId = null;
     const container = term.element?.parentElement;
-    if (container && container.clientWidth === 0) {
-      if (fitRetryCount < 10) {
-        fitRetryCount++;
-        requestAnimationFrame(() => fitAndRefresh());
-      }
-      return;
-    }
-    fitRetryCount = 0;
+    if (container && container.clientWidth === 0) return;
     fitAddon.fit();
     term.refresh(0, term.rows - 1);
     sendResize();
+  }
+
+  function scheduleFit() {
+    if (fitRafId != null) return;
+    fitRafId = requestAnimationFrame(fitAndRefresh);
+  }
+
+  function cancelPendingFit() {
+    if (fitRafId != null) {
+      cancelAnimationFrame(fitRafId);
+      fitRafId = null;
+    }
   }
 
   function sendResize() {
@@ -157,21 +166,25 @@ const FloatTerminal = (() => {
   let reconnectAttempts = 0;
   const MAX_RECONNECT = 3;
   let manualReconnectDisposable = null;
+  let connectDelayTimer = null;
 
-  function doConnect() {
+  function doConnect(delay = CONNECT_DELAY_MS) {
+    if (!term) return;
     const generation = ++connectGeneration;
     reconnectAttempts = 0;
+    if (connectDelayTimer) { clearTimeout(connectDelayTimer); connectDelayTimer = null; }
     if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
-    const token = Auth.getToken();
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/api/ws?token=${encodeURIComponent(token)}&cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
+    // 認証は Cookie（HttpOnly）で自動送信 — URL にトークンを含めない
+    const url = `${proto}//${location.host}/api/ws?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
-    let retries = 0;
+    let stallTimer = null;
 
     const attemptConnect = () => {
       if (generation !== connectGeneration) return;
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
       if (ws) {
         ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
         ws.close();
@@ -183,7 +196,7 @@ const FloatTerminal = (() => {
       let sessionEnded = false;
 
       ws.onopen = () => {
-        retries = 0;
+        if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
         term.focus();
         fitAndRefresh();
       };
@@ -206,6 +219,7 @@ const FloatTerminal = (() => {
       };
 
       ws.onclose = () => {
+        if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
         if (generation !== connectGeneration) return;
         if (sessionEnded) return;
         // Only reconnect if still visible
@@ -213,18 +227,32 @@ const FloatTerminal = (() => {
         startReconnect(generation);
       };
 
-      ws.onerror = () => {};
+      ws.onerror = (event) => {
+        console.error('[FloatTerminal] WebSocket error', event);
+      };
 
-      setTimeout(() => {
+      // Safari WS stall detection: if stuck in CONNECTING after 3s,
+      // close stalled WS and delegate to startReconnect (unified retry budget)
+      stallTimer = setTimeout(() => {
+        stallTimer = null;
         if (generation !== connectGeneration) return;
-        if (ws && ws.readyState === WebSocket.CONNECTING && retries < 3) {
-          retries++;
-          attemptConnect();
+        if (ws && ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+          ws.close();
+          ws = null;
+          startReconnect(generation);
         }
-      }, 3000);
+      }, STALL_TIMEOUT_MS);
     };
 
-    setTimeout(attemptConnect, 200);
+    if (delay > 0) {
+      connectDelayTimer = setTimeout(() => {
+        connectDelayTimer = null;
+        attemptConnect();
+      }, delay);
+    } else {
+      attemptConnect();
+    }
   }
 
   function startReconnect(generation) {
@@ -236,13 +264,13 @@ const FloatTerminal = (() => {
           if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
           reconnectAttempts = 0;
           term.writeln('\r\n\x1b[33mReconnecting...\x1b[0m');
-          doConnect();
+          doConnect(0);
         }
       });
       return;
     }
 
-    let countdown = 3;
+    let countdown = RECONNECT_COUNTDOWN_S;
     term.write(`\r\n\x1b[31mDisconnected.\x1b[0m Reconnecting in \x1b[33m${countdown}\x1b[0m...`);
     const timer = setInterval(() => {
       if (generation !== connectGeneration) { clearInterval(timer); return; }
@@ -252,18 +280,32 @@ const FloatTerminal = (() => {
       } else {
         clearInterval(timer);
         term.writeln('');
-        if (generation === connectGeneration) doConnect();
+        if (generation === connectGeneration) doConnect(0);
       }
     }, 1000);
   }
 
   function disconnect() {
     connectGeneration++;
+    if (connectDelayTimer) { clearTimeout(connectDelayTimer); connectDelayTimer = null; }
     if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
     if (ws) {
       ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
       ws.close();
       ws = null;
+    }
+  }
+
+  // --- Session refresh timer ---
+  function startSessionRefresh() {
+    if (sessionRefreshTimer) return;
+    sessionRefreshTimer = setInterval(() => refreshSessionList(), SESSION_REFRESH_INTERVAL);
+  }
+
+  function stopSessionRefresh() {
+    if (sessionRefreshTimer) {
+      clearInterval(sessionRefreshTimer);
+      sessionRefreshTimer = null;
     }
   }
 
@@ -274,7 +316,7 @@ const FloatTerminal = (() => {
     visible = true;
     minimized = false;
 
-    // Restore position/size from sessionStorage
+    // Restore position/size from localStorage
     restorePosition();
 
     panel.hidden = false;
@@ -283,16 +325,14 @@ const FloatTerminal = (() => {
     // Connect WS
     doConnect();
 
+    // Single RAF for initial fit + focus; ResizeObserver handles late layout changes
     requestAnimationFrame(() => {
       fitAndRefresh();
       term.focus();
     });
 
-    // Extra fits for late layout
-    setTimeout(() => fitAndRefresh(), 100);
-    setTimeout(() => fitAndRefresh(), 500);
-
     refreshSessionList();
+    startSessionRefresh();
   }
 
   function hide() {
@@ -301,6 +341,11 @@ const FloatTerminal = (() => {
     minimized = false;
     panel.hidden = true;
     restoreBtn.hidden = true;
+    // Clean up any in-progress drag/resize operations
+    if (dragState) onDragEnd();
+    if (resizeState) onResizeEnd();
+    cancelPendingFit();
+    stopSessionRefresh();
     disconnect();
   }
 
@@ -338,19 +383,16 @@ const FloatTerminal = (() => {
     if (name === currentSession) return;
     currentSession = name;
     if (term) term.clear();
-    if (visible && !minimized) doConnect();
+    if (visible && !minimized) doConnect(0);
   }
 
   async function onNewSession() {
     const name = await Toast.prompt('Session name:');
     if (!name || !name.trim()) return;
     const trimmed = name.trim();
-    if (!/^[a-zA-Z0-9-]+$/.test(trimmed)) {
-      Toast.error('Session name must be alphanumeric + hyphens only');
-      return;
-    }
-    if (trimmed.length > 64) {
-      Toast.error('Session name too long (max 64 characters)');
+    const validationError = DenTerminal.validateSessionName(trimmed);
+    if (validationError) {
+      Toast.error(validationError);
       return;
     }
     const ok = await DenTerminal.createSession(trimmed);
@@ -361,16 +403,28 @@ const FloatTerminal = (() => {
 
   async function onKillSession() {
     if (!(await Toast.confirm(`Kill session "${currentSession}"?`))) return;
-    await DenTerminal.destroySession(currentSession);
-    currentSession = 'float';
-    if (term) term.clear();
-    if (visible && !minimized) doConnect();
+    const ok = await DenTerminal.destroySession(currentSession);
+    if (!ok) { Toast.error('Failed to kill session'); return; }
     await DenTerminal.refreshSessionList();
+    const sessions = (await DenTerminal.fetchSessions()) ?? [];
+    const alive = sessions.filter(s => s.status !== 'dead');
+    currentSession = alive.length > 0 ? alive[0].name : 'float';
+    if (term) term.clear();
+    if (visible && !minimized) doConnect(0);
   }
 
-  async function refreshSessionList() {
+  async function refreshSessionList(sessions) {
     if (!sessionSelect) return;
-    const sessions = await DenTerminal.fetchSessions();
+    const gen = ++refreshGeneration;
+    if (!sessions) {
+      try {
+        sessions = (await DenTerminal.fetchSessions()) ?? [];
+      } catch {
+        console.error('[FloatTerminal] Failed to fetch sessions');
+        return;
+      }
+    }
+    if (gen !== refreshGeneration) return; // stale response
 
     sessionSelect.innerHTML = '';
     if (sessions.length === 0) {
@@ -404,23 +458,27 @@ const FloatTerminal = (() => {
   function savePosition() {
     const r = panel.getBoundingClientRect();
     const data = { left: r.left, top: r.top, width: r.width, height: r.height };
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) { /* ignore */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) { /* ignore */ }
   }
 
   function restorePosition() {
     let data = null;
     try {
-      const raw = sessionStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) data = JSON.parse(raw);
     } catch (_) { /* ignore */ }
 
-    if (data && data.width >= MIN_W && data.height >= MIN_H) {
-      // Clamp to viewport
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const w = Math.min(data.width, vw - 20);
-      const h = Math.min(data.height, vh - 20);
-      const left = Math.max(0, Math.min(data.left, vw - 100));
+    const isValid = data
+      && Number.isFinite(data.left) && Number.isFinite(data.top)
+      && Number.isFinite(data.width) && Number.isFinite(data.height)
+      && data.width >= MIN_W && data.height >= MIN_H;
+    if (isValid) {
+      // Clamp to viewport (ensure minimums even on very small screens)
+      const vw = Math.max(MIN_W, window.innerWidth);
+      const vh = Math.max(MIN_H, window.innerHeight);
+      const w = Math.max(MIN_W, Math.min(data.width, vw - VIEWPORT_MARGIN));
+      const h = Math.max(MIN_H, Math.min(data.height, vh - VIEWPORT_MARGIN));
+      const left = Math.max(0, Math.min(data.left, vw - DRAG_VISIBLE_PX));
       const top = Math.max(0, Math.min(data.top, vh - HEADER_H));
       panel.style.left = left + 'px';
       panel.style.top = top + 'px';
@@ -430,8 +488,8 @@ const FloatTerminal = (() => {
       panel.style.transform = 'none';
     } else {
       // Default: centered, 60% of viewport
-      const w = Math.max(MIN_W, Math.min(800, window.innerWidth * 0.6));
-      const h = Math.max(MIN_H, Math.min(500, window.innerHeight * 0.6));
+      const w = Math.max(MIN_W, Math.min(DEFAULT_MAX_W, window.innerWidth * DEFAULT_VIEWPORT_RATIO));
+      const h = Math.max(MIN_H, Math.min(DEFAULT_MAX_H, window.innerHeight * DEFAULT_VIEWPORT_RATIO));
       panel.style.width = w + 'px';
       panel.style.height = h + 'px';
       panel.style.left = ((window.innerWidth - w) / 2) + 'px';
@@ -455,6 +513,7 @@ const FloatTerminal = (() => {
     panel.querySelector('.float-terminal-header').setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onDragMove);
     document.addEventListener('pointerup', onDragEnd);
+    document.addEventListener('pointercancel', onDragEnd);
   }
 
   function onDragMove(e) {
@@ -468,7 +527,7 @@ const FloatTerminal = (() => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const w = panel.offsetWidth;
-    newLeft = Math.max(-w + 100, Math.min(newLeft, vw - 100));
+    newLeft = Math.max(-w + DRAG_VISIBLE_PX, Math.min(newLeft, vw - DRAG_VISIBLE_PX));
     newTop = Math.max(0, Math.min(newTop, vh - HEADER_H));
 
     panel.style.left = newLeft + 'px';
@@ -479,6 +538,7 @@ const FloatTerminal = (() => {
     dragState = null;
     document.removeEventListener('pointermove', onDragMove);
     document.removeEventListener('pointerup', onDragEnd);
+    document.removeEventListener('pointercancel', onDragEnd);
     savePosition();
   }
 
@@ -500,6 +560,7 @@ const FloatTerminal = (() => {
     e.currentTarget.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onResizeMove);
     document.addEventListener('pointerup', onResizeEnd);
+    document.addEventListener('pointercancel', onResizeEnd);
   }
 
   function onResizeMove(e) {
@@ -533,13 +594,16 @@ const FloatTerminal = (() => {
     panel.style.width = newW + 'px';
     panel.style.height = newH + 'px';
 
-    fitAndRefresh();
+    // Throttle fit to once per animation frame
+    scheduleFit();
   }
 
   function onResizeEnd() {
     resizeState = null;
+    cancelPendingFit();
     document.removeEventListener('pointermove', onResizeMove);
     document.removeEventListener('pointerup', onResizeEnd);
+    document.removeEventListener('pointercancel', onResizeEnd);
     savePosition();
     fitAndRefresh();
   }
@@ -548,7 +612,11 @@ const FloatTerminal = (() => {
   function applySettings() {
     if (!term) return;
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
+    const fontSize = DenSettings.get('font_size') ?? 15;
     term.options.scrollback = Math.max(100, Math.min(50000, scrollback));
+    term.options.fontSize = Math.max(8, Math.min(32, fontSize));
+    term.options.theme = DenTerminal.getXtermTheme();
+    fitAndRefresh();
   }
 
   function getTerminal() {

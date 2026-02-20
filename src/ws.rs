@@ -12,15 +12,13 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::auth::validate_token;
-use crate::pty::registry::{ClientKind, SessionInfo};
+use crate::pty::registry::{ClientKind, RegistryError, SessionInfo};
 
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Deserialize)]
 pub struct WsQuery {
-    pub token: String,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     pub session: Option<String>,
@@ -37,15 +35,14 @@ enum WsCommand {
 }
 
 /// WebSocket エンドポイント
+/// 認証は auth_middleware（Cookie / Authorization ヘッダー）で行われる。
+/// WS upgrade リクエスト時にブラウザが自動で Cookie を送信するため、
+/// first-message auth は不要。
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if !validate_token(&query.token, &state.config.password, &state.hmac_secret) {
-        return axum::http::StatusCode::UNAUTHORIZED.into_response();
-    }
-
     let cols = query.cols.unwrap_or(80);
     let rows = query.rows.unwrap_or(24);
     let session_name = query.session.unwrap_or_else(|| "default".to_string());
@@ -188,6 +185,9 @@ pub async fn create_session(
 ) -> impl IntoResponse {
     match state.registry.create(&req.name, 80, 24).await {
         Ok(_session) => StatusCode::CREATED.into_response(),
+        Err(RegistryError::LimitExceeded) => {
+            (StatusCode::TOO_MANY_REQUESTS, "Session limit exceeded").into_response()
+        }
         Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     }
 }

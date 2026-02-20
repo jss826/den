@@ -94,10 +94,87 @@ async fn login_no_body() {
     );
 }
 
+#[tokio::test]
+async fn login_rate_limit() {
+    let app = test_app();
+
+    // 5回の失敗試行（MAX_LOGIN_ATTEMPTS = 5）— すべて 401
+    for _ in 0..5 {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"password":"wrong"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // 6回目 — レートリミットで 429
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"password":"wrong"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // 正しいパスワードでも 429
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"password":"testpass"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
 // --- Auth middleware ---
 
 #[tokio::test]
-async fn auth_no_token() {
+async fn auth_middleware_no_token() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/settings")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn auth_middleware_invalid_token() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::AUTHORIZATION, "Bearer invalidtoken")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn auth_middleware_valid_token() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ws_endpoint_requires_auth() {
+    // /api/ws is protected by auth_middleware (Cookie / Authorization header).
+    // Without auth, returns UNAUTHORIZED before WS upgrade.
     let app = test_app();
     let req = Request::builder()
         .uri("/api/ws")
@@ -106,34 +183,6 @@ async fn auth_no_token() {
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn auth_invalid_token() {
-    let app = test_app();
-    let req = Request::builder()
-        .uri("/api/ws?token=invalidtoken")
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn auth_valid_token_non_ws() {
-    // Valid token but not a WebSocket upgrade request -> still passes auth
-    // The WS handler itself will reject non-upgrade requests
-    let app = test_app();
-    let token = generate_token("testpass", TEST_HMAC_SECRET);
-    let req = Request::builder()
-        .uri(format!("/api/ws?token={}", token))
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    // Auth passes, but WS upgrade fails (not a real WS handshake)
-    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 // --- Static files ---
