@@ -560,6 +560,7 @@ html, body {
 #terminal-container {
   width: 100%;
   height: calc(100% - 32px);
+  position: relative;
 }
 
 /* xterm.js のオーバーライド */

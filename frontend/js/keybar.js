@@ -75,6 +75,7 @@ const Keybar = (() => {
         });
       } else if (isAction) {
         const actionName = key.action || key.btn_action;
+        if (!actionName) return; // F013: skip invalid action buttons
         btn.classList.add('action');
         btn.dataset.action = actionName;
         btn.addEventListener('click', async (e) => {
@@ -86,7 +87,8 @@ const Keybar = (() => {
                 const t = DenTerminal.getTerminal();
                 if (t) t.paste(text);
               }
-            } catch (_) {
+            } catch (err) {
+              console.warn('Paste error:', err); // F002
               if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
             }
           } else if (actionName === 'copy') {
@@ -100,7 +102,8 @@ const Keybar = (() => {
                   if (typeof Toast !== 'undefined') Toast.success('Copied');
                 }
               }
-            } catch (_) {
+            } catch (err) {
+              console.warn('Copy error:', err); // F002
               if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
             }
           } else if (actionName === 'select') {
@@ -119,22 +122,25 @@ const Keybar = (() => {
               if (t) {
                 const buf = t.buffer.active;
                 const lines = [];
-                for (let i = buf.viewportY; i < buf.viewportY + t.rows; i++) {
+                const end = Math.min(buf.viewportY + t.rows, buf.length); // F007: clamp
+                for (let i = buf.viewportY; i < end; i++) {
                   const line = buf.getLine(i);
                   if (line) lines.push(line.translateToString(true));
                 }
-                // Trim trailing empty lines
-                while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
-                  lines.pop();
-                }
-                const text = lines.join('\n');
+                const text = lines.join('\n').trimEnd(); // F007: single-pass trim
                 if (text) {
                   await navigator.clipboard.writeText(text);
                   if (typeof Toast !== 'undefined') Toast.success('Screen copied');
+                } else {
+                  if (typeof Toast !== 'undefined') Toast.info('Nothing to copy'); // F012
                 }
               }
-            } catch (_) {
-              if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
+            } catch (err) {
+              // F002: distinguish clipboard vs other errors
+              if (typeof Toast !== 'undefined') {
+                Toast.error(err?.name === 'NotAllowedError' ? 'Clipboard access denied' : 'Copy failed');
+              }
+              console.warn('Screen copy error:', err);
             }
           }
           DenTerminal.focus();

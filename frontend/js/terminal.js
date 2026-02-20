@@ -292,30 +292,36 @@ const DenTerminal = (() => {
   let selectModeOverlay = null;
   let selectModeStartRow = null;
   let selectModeOnExit = null;
+  let selectModeScreen = null; // F016: cached .xterm-screen element
 
   function enterSelectMode(onExit) {
     if (selectModeActive) return;
+    const container = document.getElementById('terminal-container');
+    if (!container) return;
     selectModeActive = true;
     selectModeStartRow = null;
     selectModeOnExit = onExit || null;
-
-    const container = document.getElementById('terminal-container');
-    if (!container) return;
+    selectModeScreen = term?.element?.querySelector('.xterm-screen') ?? null; // F016
 
     container.classList.add('select-mode');
 
     selectModeOverlay = document.createElement('div');
     selectModeOverlay.className = 'select-mode-overlay';
-    container.style.position = 'relative';
     container.appendChild(selectModeOverlay);
 
     selectModeOverlay.addEventListener('click', onSelectModeTap);
+    document.addEventListener('keydown', onSelectModeKeydown); // F011
+    document.addEventListener('visibilitychange', onSelectModeVisChange); // F008
   }
 
   function exitSelectMode() {
     if (!selectModeActive) return;
     selectModeActive = false;
     selectModeStartRow = null;
+    selectModeScreen = null; // F016
+
+    document.removeEventListener('keydown', onSelectModeKeydown); // F011
+    document.removeEventListener('visibilitychange', onSelectModeVisChange); // F008
 
     const container = document.getElementById('terminal-container');
     if (container) {
@@ -339,14 +345,23 @@ const DenTerminal = (() => {
     return selectModeActive;
   }
 
-  function onSelectModeTap(e) {
+  function onSelectModeKeydown(e) { // F011: Escape to exit
+    if (e.key === 'Escape') exitSelectMode();
+  }
+
+  function onSelectModeVisChange() { // F008: tab switch cleanup
+    if (document.hidden && selectModeActive) exitSelectMode();
+  }
+
+  async function onSelectModeTap(e) { // F009: async/await consistency
     if (!term) return;
 
-    const screen = term.element?.querySelector('.xterm-screen');
+    const screen = selectModeScreen || term.element?.querySelector('.xterm-screen'); // F016
     if (!screen) return;
     const rect = screen.getBoundingClientRect();
+    if (rect.height === 0 || term.rows === 0) return; // F004: zero guard
     const cellHeight = rect.height / term.rows;
-    const viewportRow = Math.floor((e.clientY - rect.top) / cellHeight);
+    const viewportRow = Math.max(0, Math.min(term.rows - 1, Math.floor((e.clientY - rect.top) / cellHeight))); // F004: clamp
     const bufferRow = viewportRow + term.buffer.active.viewportY;
 
     if (selectModeStartRow === null) {
@@ -360,11 +375,12 @@ const DenTerminal = (() => {
       term.selectLines(startRow, endRow);
       const sel = term.getSelection();
       if (sel) {
-        navigator.clipboard.writeText(sel).then(() => {
+        try {
+          await navigator.clipboard.writeText(sel);
           if (typeof Toast !== 'undefined') Toast.success('Copied');
-        }).catch(() => {
+        } catch (_) {
           if (typeof Toast !== 'undefined') Toast.error('Clipboard access denied');
-        });
+        }
       }
       exitSelectMode();
     }
