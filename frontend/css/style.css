@@ -1867,6 +1867,140 @@ select:focus-visible {
   }
 }
 
+/* === Floating Terminal === */
+
+.float-terminal {
+  position: fixed;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px var(--shadow);
+  overflow: hidden;
+  min-width: 320px;
+  min-height: 200px;
+}
+
+.float-terminal[hidden] {
+  display: none;
+}
+
+.float-terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  height: 32px;
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.float-terminal-header:active {
+  cursor: grabbing;
+}
+
+.float-header-spacer {
+  flex: 1;
+}
+
+.float-terminal-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.float-terminal-body .xterm {
+  padding: 4px;
+}
+
+/* Resize handles */
+.float-resize {
+  position: absolute;
+  z-index: 2;
+}
+
+.float-resize[data-dir="n"] {
+  top: -3px; left: 8px; right: 8px; height: 6px;
+  cursor: ns-resize;
+}
+.float-resize[data-dir="s"] {
+  bottom: -3px; left: 8px; right: 8px; height: 6px;
+  cursor: ns-resize;
+}
+.float-resize[data-dir="e"] {
+  right: -3px; top: 8px; bottom: 8px; width: 6px;
+  cursor: ew-resize;
+}
+.float-resize[data-dir="w"] {
+  left: -3px; top: 8px; bottom: 8px; width: 6px;
+  cursor: ew-resize;
+}
+.float-resize[data-dir="ne"] {
+  top: -3px; right: -3px; width: 12px; height: 12px;
+  cursor: nesw-resize;
+}
+.float-resize[data-dir="nw"] {
+  top: -3px; left: -3px; width: 12px; height: 12px;
+  cursor: nwse-resize;
+}
+.float-resize[data-dir="se"] {
+  bottom: -3px; right: -3px; width: 12px; height: 12px;
+  cursor: nwse-resize;
+}
+.float-resize[data-dir="sw"] {
+  bottom: -3px; left: -3px; width: 12px; height: 12px;
+  cursor: nesw-resize;
+}
+
+/* Touch: larger resize handles */
+@media (hover: none) and (pointer: coarse) {
+  .float-resize[data-dir="n"],
+  .float-resize[data-dir="s"] { height: 12px; }
+  .float-resize[data-dir="e"],
+  .float-resize[data-dir="w"] { width: 12px; }
+  .float-resize[data-dir="ne"],
+  .float-resize[data-dir="nw"],
+  .float-resize[data-dir="se"],
+  .float-resize[data-dir="sw"] { width: 20px; height: 20px; }
+}
+
+/* Restore button (minimized state) */
+.float-terminal-restore {
+  position: fixed;
+  z-index: 150;
+  bottom: 16px;
+  right: 16px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px var(--shadow);
+}
+
+.float-terminal-restore[hidden] {
+  display: none;
+}
+
+.float-terminal-restore:hover {
+  opacity: 0.9;
+}
+
+/* iPad: position restore button above keybar */
+@media (hover: none) and (pointer: coarse) {
+  .float-terminal-restore {
+    bottom: 64px;
+  }
+}
+
 /* === Reduced motion 対応 === */
 
 @media (prefers-reduced-motion: reduce) {

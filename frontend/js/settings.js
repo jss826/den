@@ -385,6 +385,9 @@ const DenSettings = (() => {
       const t = DenTerminal.getTerminal();
       if (t) t.options.scrollback = Math.max(100, Math.min(50000, scrollback));
 
+      // フローティングターミナルにも設定反映
+      if (typeof FloatTerminal !== 'undefined') FloatTerminal.applySettings();
+
       // キーバーを即時反映
       Keybar.reload(keybarButtons);
 

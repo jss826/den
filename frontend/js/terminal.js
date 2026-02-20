@@ -475,6 +475,11 @@ const DenTerminal = (() => {
     } else {
       clientsSpan.textContent = '';
     }
+
+    // Also refresh float terminal's session list
+    if (typeof FloatTerminal !== 'undefined') {
+      FloatTerminal.refreshSessionList();
+    }
   }
 
   function initSessionBar() {
@@ -538,6 +543,7 @@ const DenTerminal = (() => {
   return {
     init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
     getCurrentSession, switchSession, refreshSessionList, initSessionBar,
+    fetchSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,
   };
 })();

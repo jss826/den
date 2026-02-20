@@ -201,6 +201,29 @@
       </div>
     </div>
 
+    <!-- フローティングターミナル -->
+    <div id="float-terminal" class="float-terminal" hidden role="dialog" aria-label="Floating terminal">
+      <div class="float-terminal-header">
+        <select class="float-session-select session-select" aria-label="Session"></select>
+        <button class="float-session-new session-bar-btn" data-tooltip="New Session" aria-label="New session">+</button>
+        <span class="float-session-clients session-clients"></span>
+        <div class="float-header-spacer"></div>
+        <button class="float-session-kill session-bar-btn danger" data-tooltip="Kill Session" aria-label="Kill session">x</button>
+        <button class="float-minimize session-bar-btn" data-tooltip="Minimize" aria-label="Minimize">_</button>
+        <button class="float-close session-bar-btn" data-tooltip="Close" aria-label="Close">X</button>
+      </div>
+      <div class="float-terminal-body"></div>
+      <div class="float-resize" data-dir="n"></div>
+      <div class="float-resize" data-dir="s"></div>
+      <div class="float-resize" data-dir="e"></div>
+      <div class="float-resize" data-dir="w"></div>
+      <div class="float-resize" data-dir="ne"></div>
+      <div class="float-resize" data-dir="nw"></div>
+      <div class="float-resize" data-dir="se"></div>
+      <div class="float-resize" data-dir="sw"></div>
+    </div>
+    <button id="float-terminal-restore" class="float-terminal-restore" hidden aria-label="Restore floating terminal">Terminal</button>
+
     <!-- キーバー (タッチ用) -->
     <div id="keybar" role="toolbar" aria-label="Touch keyboard"></div>
   </div>
@@ -216,6 +239,7 @@
   <script src="/js/auth.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/terminal.js"></script>
+  <script src="/js/float-terminal.js"></script>
   <script src="/js/keybar.js"></script>
   <script src="/js/markdown.js"></script>
   <script src="/js/filer-tree.js"></script>

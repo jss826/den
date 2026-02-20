@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, Keybar, DenFiler, DenIcons */
+/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, DenIcons */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -87,6 +87,13 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       switchTab('filer');
       DenFiler.showQuickOpen();
+      return;
+    }
+
+    // Ctrl+` フローティングターミナル toggle（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '`' && !anyModalOpen) {
+      e.preventDefault();
+      FloatTerminal.toggle();
       return;
     }
 
@@ -186,6 +193,9 @@ document.addEventListener('DOMContentLoaded', () => {
     DenTerminal.connect(Auth.getToken());
     DenTerminal.initSessionBar();
     DenTerminal.refreshSessionList();
+
+    // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
+    FloatTerminal.init();
 
     // キーバー初期化（カスタムキー設定があればそれを使用）
     Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'));
