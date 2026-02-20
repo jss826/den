@@ -750,6 +750,7 @@ async fn sftp_requires_auth() {
         "/api/sftp/disconnect",
         "/api/sftp/mkdir",
         "/api/sftp/rename",
+        "/api/sftp/upload",
     ] {
         let req = Request::builder()
             .method("POST")
@@ -765,6 +766,67 @@ async fn sftp_requires_auth() {
             uri
         );
     }
+
+    // PUT
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/sftp/write")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "PUT /api/sftp/write should require auth"
+    );
+
+    // DELETE
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/sftp/delete?path=/test")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "DELETE /api/sftp/delete should require auth"
+    );
+
+    // GET download
+    let req = Request::builder()
+        .uri("/api/sftp/download?path=/test")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "GET /api/sftp/download should require auth"
+    );
+}
+
+#[tokio::test]
+async fn sftp_upload_not_connected() {
+    let app = test_app();
+    let boundary = "----TestBoundary";
+    let body = format!(
+        "------TestBoundary\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n/tmp\r\n------TestBoundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n------TestBoundary--\r\n"
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/upload")
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={}", boundary),
+        )
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
