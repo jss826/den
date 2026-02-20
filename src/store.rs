@@ -24,6 +24,10 @@ pub struct KeybarButton {
     pub btn_type: Option<String>,
     #[serde(default)]
     pub mod_key: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub display: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +199,8 @@ mod tests {
                 send: "\t".to_string(),
                 btn_type: Some("key".to_string()),
                 mod_key: None,
+                action: None,
+                display: None,
             }]),
             ..Settings::default()
         };
