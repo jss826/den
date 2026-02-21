@@ -515,9 +515,19 @@ const Keybar = (() => {
     return 'ok';
   }
 
+  /** エスケープ文字列をリテラルに変換（設定由来の \\r \\t \\xNN 等を修復） */
+  function unescapeSend(str) {
+    return str
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\t/g, '\t')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\\\/g, '\\');
+  }
+
   /** 通常キー送信（修飾キー適用） */
   function executeNormalKey(key) {
-    let data = key.send;
+    let data = unescapeSend(key.send);
 
     // 修飾パラメータ計算 (xterm: 1=none, 2=Shift, 3=Alt, 5=Ctrl, etc.)
     const modParam = (modifiers.shift ? 1 : 0)

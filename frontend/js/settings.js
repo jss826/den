@@ -523,6 +523,7 @@ const DenSettings = (() => {
       const selectedOpt = presetSelect.selectedOptions[0];
       if (selectedOpt && selectedOpt.dataset.btnType === 'stack') {
         const items = JSON.parse(selectedOpt.dataset.stackItems);
+        items.forEach(i => { if (i.send) i.send = unescapeSend(i.send); });
         editingKeybarButtons.push({
           type: 'stack',
           items: items,
