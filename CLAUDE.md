@@ -14,8 +14,10 @@ $env:DEN_PASSWORD="test"; $env:DEN_DATA_DIR="./data-dev"; cargo run
 ```powershell
 cargo fmt -- --check
 cargo clippy -- -D warnings
-cargo test
+cargo test --target-dir target-test
 ```
+
+**`--target-dir target-test`**: dev サーバー実行中でもバイナリロックを回避してテスト可能。
 
 ## 技術スタック
 

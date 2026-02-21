@@ -111,27 +111,54 @@ const DenSettings = (() => {
     return current;
   }
 
-  async function save(updates) {
-    const previous = { ...current };
+  let saveInFlight = false;
+  let savePending = false;
+
+  /**
+   * Save settings to server. Merges `updates` into the in-memory `current` state
+   * and PUTs the full object. Serializes concurrent calls to prevent race conditions
+   * where an earlier response overwrites a later one.
+   * @param {Object} updates - partial settings to merge
+   * @param {Object} [opts] - options (e.g. { keepalive: true } for page-hide saves)
+   */
+  async function save(updates, opts) {
     Object.assign(current, updates);
+
+    if (saveInFlight) {
+      // Another save is in progress — mark pending so it re-saves after completion.
+      savePending = true;
+      return true;
+    }
+
+    saveInFlight = true;
+    const snapshot = { ...current };
     try {
       const resp = await fetch('/api/settings', {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(current),
+        keepalive: !!(opts && opts.keepalive),
       });
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
       }
       return true;
     } catch (e) {
-      Object.assign(current, previous);
+      // Restore only fields from this batch that failed
+      Object.assign(current, snapshot);
       if (typeof Toast !== 'undefined' && Toast.error) {
         Toast.error('Failed to save settings');
       }
       console.warn('Failed to save settings:', e);
       return false;
+    } finally {
+      saveInFlight = false;
+      if (savePending) {
+        savePending = false;
+        // Re-save with the latest accumulated state
+        save({}, opts);
+      }
     }
   }
 

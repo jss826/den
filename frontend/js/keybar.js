@@ -117,6 +117,11 @@ const Keybar = (() => {
 
     // Viewport resize → clamp (named function for potential removeEventListener)
     window.addEventListener('resize', onWindowResize);
+
+    // Flush pending saves on page hide (tab switch, navigation, reload)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushPendingSaves();
+    });
   }
 
   // F014: Debounce resize with rAF to avoid high-frequency DOM writes
@@ -317,6 +322,27 @@ const Keybar = (() => {
 
   // --- Position persistence ---
 
+  /** Immediately flush any pending debounced saves (position + stack selection).
+   *  Called on visibilitychange→hidden to prevent data loss on page unload. */
+  function flushPendingSaves() {
+    if (typeof DenSettings === 'undefined') return;
+    let updates = null;
+    if (positionSaveTimer) {
+      clearTimeout(positionSaveTimer);
+      positionSaveTimer = null;
+      updates = { keybar_position: getCurrentPosition() };
+    }
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+      updates = updates || {};
+      updates.keybar_buttons = activeKeys;
+    }
+    if (updates) {
+      DenSettings.save(updates, { keepalive: true }).catch(() => {});
+    }
+  }
+
   function schedulePositionSave() {
     if (positionSaveTimer) clearTimeout(positionSaveTimer);
     positionSaveTimer = setTimeout(async () => {
@@ -333,11 +359,14 @@ const Keybar = (() => {
   }
 
   function getCurrentPosition() {
+    // Use style.top instead of getBoundingClientRect() — hidden elements
+    // (display:none via hidden attribute) return {top:0} from getBoundingClientRect(),
+    // which corrupts the saved position when keybar is hidden via Ctrl+K toggle.
     const el = collapsed ? tabEl : container;
-    const rect = el.getBoundingClientRect();
+    const top = parseFloat(el.style.top);
     return {
       left: 0,
-      top: rect.top,
+      top: Number.isFinite(top) ? top : 0,
       visible: keybarVisible,
       collapsed: collapsed,
       collapse_side: collapseSide,
