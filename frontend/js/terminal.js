@@ -121,19 +121,32 @@ const DenTerminal = (() => {
     const resizeObserver = new ResizeObserver(() => fitAndRefresh());
     resizeObserver.observe(container);
 
-    // キーバー修飾キーが ON のとき、物理キーボード入力を消費してリセットのみ行う
-    // （キーバー修飾キーはキーバーボタンとの組み合わせ専用）
+    // キーバー修飾キーが ON のとき、物理キーと組み合わせて修飾付きシーケンスを送信
+    const PHYSICAL_KEY_MAP = {
+      Enter: '\r', Tab: '\t', Escape: '\x1b', Backspace: '\x7f',
+      Delete: '\x1b[3~', Insert: '\x1b[2~',
+      ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+      Home: '\x1b[H', End: '\x1b[F', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+    };
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       const mods = Keybar.getModifiers();
       if (!mods.ctrl && !mods.alt && !mods.shift) return true;
       // ハードウェア修飾キー自体や単独の Meta は無視
       if (ev.key === 'Control' || ev.key === 'Alt' || ev.key === 'Shift' || ev.key === 'Meta') return true;
-      // OS 側の修飾が既に押されている場合はキーバー状態を使わない
-      if (ev.ctrlKey || ev.altKey || ev.metaKey) return true;
+      // OS 側の修飾が既に押されている場合はキーバー状態をリセットして通過
+      if (ev.ctrlKey || ev.altKey || ev.metaKey) {
+        Keybar.resetModifiers();
+        return true;
+      }
 
-      // キーバー修飾キーをリセットし、物理キー入力は送信しない
-      Keybar.resetModifiers();
+      // キーバー修飾 + 物理キーの組み合わせを送信
+      const send = ev.key.length === 1 ? ev.key : PHYSICAL_KEY_MAP[ev.key];
+      if (send) {
+        Keybar.executeKey({ send });
+      } else {
+        Keybar.resetModifiers();
+      }
       return false;
     });
 

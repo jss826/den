@@ -819,7 +819,7 @@ const Keybar = (() => {
 
   return {
     init, reload, getDefaultKeys, isTouchDevice,
-    getModifiers, resetModifiers,
+    getModifiers, resetModifiers, executeKey: executeNormalKey,
     toggleVisibility, collapse, expand, isVisible,
   };
 })();
