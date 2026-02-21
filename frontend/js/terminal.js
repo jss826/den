@@ -144,10 +144,11 @@ const DenTerminal = (() => {
       const send = ev.key.length === 1 ? ev.key : PHYSICAL_KEY_MAP[ev.key];
       if (send) {
         Keybar.executeKey({ send });
-      } else {
-        Keybar.resetModifiers();
+        return false;
       }
-      return false;
+      // 未マップキー（F1〜F12等）はキーバー修飾をリセットして xterm に委譲
+      Keybar.resetModifiers();
+      return true;
     });
 
     // キー入力 → WebSocket

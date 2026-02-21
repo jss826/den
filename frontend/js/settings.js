@@ -87,15 +87,8 @@ const DenSettings = (() => {
       ] },
   ];
 
-  // エスケープ文字列をリテラルに変換
-  function unescapeSend(str) {
-    return str
-      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-      .replace(/\\t/g, '\t')
-      .replace(/\\n/g, '\n')
-      .replace(/\\r/g, '\r')
-      .replace(/\\\\/g, '\\');
-  }
+  // unescapeSend は keybar.js の executeNormalKey 内で実行時に適用される。
+  // 設定保存時にはエスケープ形式のまま保持する。
 
   async function load() {
     try {
@@ -523,7 +516,6 @@ const DenSettings = (() => {
       const selectedOpt = presetSelect.selectedOptions[0];
       if (selectedOpt && selectedOpt.dataset.btnType === 'stack') {
         const items = JSON.parse(selectedOpt.dataset.stackItems);
-        items.forEach(i => { if (i.send) i.send = unescapeSend(i.send); });
         editingKeybarButtons.push({
           type: 'stack',
           items: items,
@@ -566,10 +558,9 @@ const DenSettings = (() => {
           newSendInput.focus();
           return;
         }
-        const sendValue = unescapeSend(sendRaw);
         editingKeybarButtons.push({
           label,
-          send: sendValue,
+          send: sendRaw,
         });
       }
 
