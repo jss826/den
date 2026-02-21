@@ -1,19 +1,5 @@
 // Den - ターミナルモジュール
 const DenTerminal = (() => {
-  /** Clipboard write with fallback for non-secure contexts (HTTP over LAN) */
-  async function clipboardWrite(text) {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } finally { ta.remove(); }
-  }
-
   let term = null;
   let fitAddon = null;
   let ws = null;
@@ -401,7 +387,7 @@ const DenTerminal = (() => {
       const sel = term.getSelection();
       if (sel) {
         try {
-          await clipboardWrite(sel);
+          await DenClipboard.write(sel);
           if (typeof Toast !== 'undefined') Toast.success('Copied');
         } catch (_) {
           if (typeof Toast !== 'undefined') Toast.error('Copy failed');

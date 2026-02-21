@@ -738,7 +738,7 @@ mod tests {
     fn valid_session_names() {
         assert!(is_valid_session_name("default"));
         assert!(is_valid_session_name("work-session"));
-        assert!(is_valid_session_name("work-abc123")); // was "claude-abc123" before Claude tab removal
+        assert!(is_valid_session_name("work-abc123"));
         assert!(is_valid_session_name("A"));
         assert!(is_valid_session_name("123"));
     }

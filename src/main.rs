@@ -17,7 +17,12 @@ async fn main() {
 
     let bind_address = config.bind_address.clone();
 
-    tracing::info!("Den v0.4 starting on port {} ({})", port, config.env);
+    tracing::info!(
+        "Den v{} starting on port {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        port,
+        config.env
+    );
     if let Some(sp) = ssh_port {
         tracing::info!("SSH port: {}", sp);
     } else {

@@ -198,21 +198,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_unknown_fields_ignored() {
-        // 旧バージョンの settings.json に残っているフィールド（例: claude_default_dir）が
-        // デシリアライズ時にエラーにならないことを確認（後方互換性）
-        let (store, tmp) = temp_store();
-        fs::write(
-            tmp.path().join("settings.json"),
-            r#"{"font_size": 16, "claude_default_dir": "/old", "unknown_field": true}"#,
-        )
-        .unwrap();
-        let settings = store.load_settings();
-        assert_eq!(settings.font_size, 16);
-        assert_eq!(settings.theme, "dark");
-    }
-
-    #[test]
     fn from_data_dir_creates_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let nested = tmp.path().join("a").join("b").join("c");

@@ -20,37 +20,6 @@ const Keybar = (() => {
 
   const SAVE_DEBOUNCE_MS = 2000;
 
-  /**
-   * Clipboard fallback for non-secure contexts (HTTP over LAN).
-   * navigator.clipboard requires Secure Context (HTTPS or localhost).
-   */
-  async function clipboardWrite(text) {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-    // Fallback: temporary textarea + execCommand
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
-    } finally {
-      ta.remove();
-    }
-  }
-
-  async function clipboardRead() {
-    if (navigator.clipboard && window.isSecureContext) {
-      return await navigator.clipboard.readText();
-    }
-    // Fallback: prompt modal
-    const text = await Toast.prompt('Paste text:');
-    return text;
-  }
-
   // スクロールアクション → ターミナルメソッドのディスパッチマップ
   const SCROLL_ACTIONS = {
     'scroll-page-up':   t => t.scrollPages(-1),
@@ -439,7 +408,7 @@ const Keybar = (() => {
   async function executeAction(actionName, btnEl) {
     if (actionName === 'paste') {
       try {
-        const text = await clipboardRead();
+        const text = await DenClipboard.read();
         if (text) {
           const t = DenTerminal.getTerminal();
           if (t) t.paste(text);
@@ -454,7 +423,7 @@ const Keybar = (() => {
         if (t) {
           const sel = t.getSelection();
           if (sel) {
-            await clipboardWrite(sel);
+            await DenClipboard.write(sel);
             t.clearSelection();
             if (typeof Toast !== 'undefined') Toast.success('Copied');
           }
@@ -498,7 +467,7 @@ const Keybar = (() => {
           }
           const text = lines.join('\n').trimEnd();
           if (text) {
-            await clipboardWrite(text);
+            await DenClipboard.write(text);
             if (typeof Toast !== 'undefined') Toast.success('Screen copied');
           } else {
             if (typeof Toast !== 'undefined') Toast.info('Nothing to copy');
