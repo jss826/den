@@ -1467,6 +1467,10 @@ html, body {
   color: var(--accent);
 }
 
+.tree-item.long-press-active {
+  background: var(--accent-tint-2);
+}
+
 .tree-children {
   display: none;
 }

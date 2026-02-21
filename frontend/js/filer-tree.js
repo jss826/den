@@ -109,8 +109,43 @@ const FilerTree = (() => {
         row.setAttribute('data-tooltip', tooltip);
       }
 
+      // ロングプレス（タッチデバイスでコンテキストメニュー表示）
+      let lpTimer = null;
+      let lpFired = false;
+      let lpStartX, lpStartY;
+
+      row.addEventListener('touchstart', (e) => {
+        lpFired = false;
+        const t = e.touches[0];
+        lpStartX = t.clientX;
+        lpStartY = t.clientY;
+        lpTimer = setTimeout(() => {
+          lpFired = true;
+          row.classList.remove('long-press-active');
+          if (onContextMenu) onContextMenu(fullPath, entry.is_dir, t.clientX, t.clientY);
+        }, 500);
+        row.classList.add('long-press-active');
+      }, { passive: true });
+
+      row.addEventListener('touchmove', (e) => {
+        if (!lpTimer) return;
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - lpStartX) > 10 || Math.abs(t.clientY - lpStartY) > 10) {
+          clearTimeout(lpTimer);
+          lpTimer = null;
+          row.classList.remove('long-press-active');
+        }
+      }, { passive: true });
+
+      row.addEventListener('touchend', () => {
+        clearTimeout(lpTimer);
+        lpTimer = null;
+        row.classList.remove('long-press-active');
+      });
+
       // クリック
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
+        if (lpFired) { lpFired = false; e.preventDefault(); return; }
         if (entry.is_dir) {
           toggleDir(fullPath);
         } else {

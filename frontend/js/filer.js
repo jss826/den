@@ -1,4 +1,4 @@
-/* global Auth, FilerTree, FilerEditor, FilerRemote */
+/* global Auth, DenClipboard, FilerTree, FilerEditor, FilerRemote */
 // Den - ファイラ メインモジュール
 // eslint-disable-next-line no-unused-vars
 const DenFiler = (() => {
@@ -443,6 +443,11 @@ const DenFiler = (() => {
       items.push({ separator: true });
     }
 
+    items.push({ label: 'Copy Path', action: async () => {
+      await DenClipboard.write(path);
+      Toast.success('Path copied');
+    }});
+    items.push({ separator: true });
     items.push({ label: 'Rename...', action: () => promptRename(path) });
     items.push({ separator: true });
     items.push({ label: 'Delete', action: () => doDelete(path), danger: true });
