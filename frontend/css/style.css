@@ -953,12 +953,8 @@ html, body {
   }
 }
 
-/* Safe area 対応 (iPhone ノッチ等) */
-@supports (padding-bottom: env(safe-area-inset-bottom)) {
-  #keybar {
-    padding-bottom: calc(4px + env(safe-area-inset-bottom));
-  }
-}
+/* Safe area: キーバーはドラッグ自由配置のため固定 bottom padding 不要。
+   ソフトキーボード表示時はキーボードが safe area を覆うので問題なし。 */
 
 /* === 設定ボタン (タブバー内) === */
 
