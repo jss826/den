@@ -204,7 +204,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // ターミナル初期化
     const container = document.getElementById('terminal-container');
     DenTerminal.init(container);
-    DenTerminal.connect();
+    const initialHash = parseHash();
+    DenTerminal.connect(initialHash.session);
     DenTerminal.initSessionBar();
     DenTerminal.refreshSessionList();
 
@@ -229,6 +230,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // モバイルサイドバートグル
     initSidebarToggles();
 
+    // ハッシュルーティング: 初期タブ適用 + hashchange リスナー
+    if (initialHash.tab !== 'terminal') switchTab(initialHash.tab);
+    window.addEventListener('hashchange', () => applyHash());
+
     // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
     // Safari はキーボード表示時にページ自体をスクロールする（overflow:hidden でも）
     // → scrollTo(0,0) でリセットし、offsetTop を補正する
@@ -248,7 +253,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 他モジュールからタブ切替できるようグローバル公開
-  window.DenApp = { switchTab: (tab) => switchTab(tab) };
+  window.DenApp = {
+    switchTab: (tab) => switchTab(tab),
+    updateSessionHash: (name) => setHash(buildHash('terminal', name)),
+  };
 
   function switchTab(tabName) {
     // タブボタン更新
@@ -274,6 +282,48 @@ document.addEventListener('DOMContentLoaded', () => {
       filerInitialized = true;
       DenFiler.init();
     }
+
+    // ハッシュ更新
+    setHash(buildHash(tabName, tabName === 'terminal' ? DenTerminal.getCurrentSession() : null));
+  }
+
+  // --- Hash routing ---
+  let hashUpdateInProgress = false;
+
+  function parseHash() {
+    const hash = location.hash.replace(/^#/, '');
+    if (!hash) return { tab: 'terminal', session: null };
+    const parts = hash.split('/');
+    const rawTab = parts[0];
+    const tab = rawTab === 'files' ? 'filer' : rawTab === 'terminal' ? 'terminal' : 'terminal';
+    const session = parts[1] ? decodeURIComponent(parts[1]) : null;
+    return { tab, session };
+  }
+
+  function buildHash(tabName, sessionName) {
+    const urlTab = tabName === 'filer' ? 'files' : 'terminal';
+    if (urlTab === 'terminal' && sessionName && sessionName !== 'default') {
+      return '#' + urlTab + '/' + encodeURIComponent(sessionName);
+    }
+    return '#' + urlTab;
+  }
+
+  function setHash(hash) {
+    if (hashUpdateInProgress) return;
+    hashUpdateInProgress = true;
+    location.hash = hash;
+    Promise.resolve().then(() => { hashUpdateInProgress = false; });
+  }
+
+  function applyHash() {
+    if (hashUpdateInProgress) return;
+    hashUpdateInProgress = true;
+    const { tab, session } = parseHash();
+    switchTab(tab);
+    if (tab === 'terminal' && session && session !== DenTerminal.getCurrentSession()) {
+      DenTerminal.switchSession(session);
+    }
+    Promise.resolve().then(() => { hashUpdateInProgress = false; });
   }
 
   function initSidebarToggles() {

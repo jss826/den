@@ -279,6 +279,7 @@ const DenTerminal = (() => {
     currentSession = name;
     term.clear();
     doConnect();
+    window.DenApp?.updateSessionHash(name);
   }
 
   function sendResize() {
@@ -530,6 +531,7 @@ const DenTerminal = (() => {
             currentSession = 'default';
             term.clear();
             doConnect();
+            window.DenApp?.updateSessionHash('default');
           }
           lastSessionsKey = ''; // Force refresh
           await refreshSessionList();
