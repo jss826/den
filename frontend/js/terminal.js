@@ -411,6 +411,12 @@ const DenTerminal = (() => {
 
   // --- Session management ---
 
+  // F022: Cache static DOM elements (set in initSessionBar)
+  let sessionTabsEl = null;
+  let sessionClientsEl = null;
+  // F004: Skip DOM rebuild when sessions unchanged
+  let lastSessionsKey = '';
+
   async function fetchSessions() {
     try {
       const resp = await fetch('/api/terminal/sessions', {
@@ -448,36 +454,51 @@ const DenTerminal = (() => {
   }
 
   async function refreshSessionList() {
-    const select = document.getElementById('session-select');
-    const clientsSpan = document.getElementById('session-clients');
-    if (!select) return;
+    if (!sessionTabsEl) return;
 
     const sessions = await fetchSessions();
 
-    select.innerHTML = '';
-    if (sessions.length === 0) {
-      // No sessions — just show "default" as placeholder
-      const opt = document.createElement('option');
-      opt.value = 'default';
-      opt.textContent = 'default';
-      select.appendChild(opt);
-    } else {
-      for (const s of sessions) {
-        const opt = document.createElement('option');
-        opt.value = s.name;
-        const status = s.alive ? '' : ' (dead)';
-        opt.textContent = `${s.name}${status}`;
-        if (s.name === currentSession) opt.selected = true;
-        select.appendChild(opt);
-      }
+    // F004: Skip DOM rebuild when sessions haven't changed
+    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession;
+    if (sessionsKey === lastSessionsKey) return;
+    lastSessionsKey = sessionsKey;
+
+    sessionTabsEl.innerHTML = '';
+    const list = sessions.length > 0 ? sessions : [{ name: 'default', alive: true, client_count: 0 }];
+    for (const s of list) {
+      const tab = document.createElement('div');
+      tab.className = 'session-tab';
+      tab.dataset.session = s.name;
+      tab.setAttribute('role', 'tab');
+      // F001: Keyboard-accessible tabs (roving tabindex)
+      tab.setAttribute('tabindex', s.name === currentSession ? '0' : '-1');
+      tab.setAttribute('aria-selected', s.name === currentSession ? 'true' : 'false');
+      if (s.name === currentSession) tab.classList.add('active');
+      if (!s.alive) tab.classList.add('dead');
+
+      const label = document.createElement('span');
+      label.textContent = s.name;
+      tab.appendChild(label);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'session-tab-close';
+      closeBtn.type = 'button'; // F023
+      closeBtn.setAttribute('tabindex', '-1');
+      closeBtn.textContent = '\u00d7';
+      closeBtn.setAttribute('aria-label', `Kill session ${s.name}`);
+      tab.appendChild(closeBtn);
+
+      sessionTabsEl.appendChild(tab);
     }
 
-    // Update client count display
-    const current = sessions.find(s => s.name === currentSession);
-    if (current) {
-      clientsSpan.textContent = `${current.client_count} client${current.client_count !== 1 ? 's' : ''}`;
-    } else {
-      clientsSpan.textContent = '';
+    // F015: Null-safe clientsSpan access
+    if (sessionClientsEl) {
+      const current = sessions.find(s => s.name === currentSession);
+      if (current) {
+        sessionClientsEl.textContent = `${current.client_count} client${current.client_count !== 1 ? 's' : ''}`;
+      } else {
+        sessionClientsEl.textContent = '';
+      }
     }
 
     // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
@@ -485,13 +506,65 @@ const DenTerminal = (() => {
   }
 
   function initSessionBar() {
-    const select = document.getElementById('session-select');
+    // F022: Cache static DOM elements
+    sessionTabsEl = document.getElementById('session-tabs');
+    sessionClientsEl = document.getElementById('session-clients');
     const newBtn = document.getElementById('session-new-btn');
-    const killBtn = document.getElementById('session-kill-btn');
 
-    if (select) {
-      select.addEventListener('change', () => {
-        switchSession(select.value);
+    if (sessionTabsEl) {
+      // Event delegation for session tabs
+      sessionTabsEl.addEventListener('click', async (e) => {
+        const closeBtn = e.target.closest('.session-tab-close');
+        if (closeBtn) {
+          const tab = closeBtn.closest('.session-tab');
+          if (!tab) return; // F008: null guard
+          const name = tab.dataset.session;
+          if (!(await Toast.confirm(`Kill session "${name}"?`))) return;
+          // F003: Check destroySession result before changing state
+          const ok = await destroySession(name);
+          if (!ok) {
+            Toast.error('Failed to kill session');
+            return;
+          }
+          if (name === currentSession) {
+            currentSession = 'default';
+            term.clear();
+            doConnect();
+          }
+          lastSessionsKey = ''; // Force refresh
+          await refreshSessionList();
+          return;
+        }
+        const tab = e.target.closest('.session-tab');
+        if (tab) switchSession(tab.dataset.session);
+      });
+
+      // F001: Keyboard navigation (roving tabindex)
+      sessionTabsEl.addEventListener('keydown', (e) => {
+        const tab = e.target.closest('.session-tab');
+        if (!tab) return;
+        const tabs = [...sessionTabsEl.querySelectorAll('.session-tab')];
+        const idx = tabs.indexOf(tab);
+        if (idx === -1) return;
+
+        let target = null;
+        if (e.key === 'ArrowRight') {
+          target = tabs[(idx + 1) % tabs.length];
+        } else if (e.key === 'ArrowLeft') {
+          target = tabs[(idx - 1 + tabs.length) % tabs.length];
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          switchSession(tab.dataset.session);
+          return;
+        } else {
+          return;
+        }
+        e.preventDefault();
+        if (target) {
+          tab.setAttribute('tabindex', '-1');
+          target.setAttribute('tabindex', '0');
+          target.focus();
+        }
       });
     }
 
@@ -510,29 +583,21 @@ const DenTerminal = (() => {
           Toast.error('Failed to create session');
           return;
         }
+        lastSessionsKey = ''; // Force refresh
         await refreshSessionList();
         switchSession(trimmed);
       });
     }
 
-    if (killBtn) {
-      killBtn.addEventListener('click', async () => {
-        if (!(await Toast.confirm(`Kill session "${currentSession}"?`))) return;
-        await destroySession(currentSession);
-        currentSession = 'default';
-        term.clear();
-        doConnect();
-        await refreshSessionList();
-      });
-    }
-
-    // 定期更新（ページ非表示時は停止）
+    // F016: Guard against timer double-start on visibilitychange
     let sessionRefreshTimer = setInterval(refreshSessionList, 5000);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        clearInterval(sessionRefreshTimer);
-        sessionRefreshTimer = null;
-      } else {
+        if (sessionRefreshTimer) {
+          clearInterval(sessionRefreshTimer);
+          sessionRefreshTimer = null;
+        }
+      } else if (!sessionRefreshTimer) {
         refreshSessionList();
         sessionRefreshTimer = setInterval(refreshSessionList, 5000);
       }

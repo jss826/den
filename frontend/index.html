@@ -37,11 +37,9 @@
     <!-- ターミナル -->
     <div id="terminal-pane" class="pane" role="tabpanel" aria-label="Terminal">
       <div id="terminal-session-bar" class="terminal-session-bar">
-        <select id="session-select" class="session-select" aria-label="Terminal session"></select>
+        <div id="session-tabs" class="session-tabs" role="tablist" aria-label="Terminal sessions"></div>
         <button id="session-new-btn" class="session-bar-btn" data-tooltip="New Session" aria-label="New session">+</button>
         <span id="session-clients" class="session-clients" aria-hidden="true"></span>
-        <div class="session-spacer"></div>
-        <button id="session-kill-btn" class="session-bar-btn danger" data-tooltip="Kill Session" aria-label="Kill session">x</button>
       </div>
       <div id="terminal-container"></div>
     </div>

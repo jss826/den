@@ -11,7 +11,10 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.load_settings()).await {
         Ok(settings) => Json(settings).into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => {
+            tracing::error!("load_settings task panicked: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 
@@ -30,6 +33,8 @@ pub async fn put_settings(
         if !pos.top.is_finite() {
             pos.top = 0.0;
         }
+        // F011: Clamp bounds — generous enough for multi-monitor setups (8K×3 ≈ 23040px),
+        // negative allows partially off-screen (keybar drag allows DRAG_VISIBLE_PX=60px visible)
         pos.left = pos.left.clamp(-10000.0, 100000.0);
         pos.top = pos.top.clamp(-10000.0, 100000.0);
     }
@@ -40,6 +45,9 @@ pub async fn put_settings(
             tracing::error!("Failed to save settings: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => {
+            tracing::error!("save_settings task panicked: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }

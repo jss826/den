@@ -118,8 +118,14 @@ const Keybar = (() => {
     window.addEventListener('resize', onWindowResize);
   }
 
+  // F014: Debounce resize with rAF to avoid high-frequency DOM writes
+  let resizeRafId = null;
   function onWindowResize() {
-    clampToViewport();
+    if (resizeRafId) return;
+    resizeRafId = requestAnimationFrame(() => {
+      resizeRafId = null;
+      clampToViewport();
+    });
   }
 
   function reload(customKeys) {
@@ -135,9 +141,11 @@ const Keybar = (() => {
     });
   }
 
+  // F007: Guard against matchMedia unavailability
   const IS_TOUCH_DEVICE = 'ontouchstart' in window
     || navigator.maxTouchPoints > 0
-    || window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    || (typeof window.matchMedia === 'function'
+        && window.matchMedia('(hover: none) and (pointer: coarse)').matches);
 
   function isTouchDevice() {
     return IS_TOUCH_DEVICE;
@@ -312,7 +320,12 @@ const Keybar = (() => {
       positionSaveTimer = null;
       if (typeof DenSettings === 'undefined') return;
       const pos = getCurrentPosition();
-      await DenSettings.save({ keybar_position: pos });
+      // F002: Catch save errors to prevent silent failures
+      try {
+        await DenSettings.save({ keybar_position: pos });
+      } catch (err) {
+        console.warn('[Keybar] Failed to save position:', err);
+      }
     }, SAVE_DEBOUNCE_MS);
   }
 

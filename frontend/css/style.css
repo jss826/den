@@ -511,6 +511,56 @@ html, body {
   height: 32px;
 }
 
+.session-tabs {
+  display: flex;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  scrollbar-width: none;
+}
+.session-tabs::-webkit-scrollbar { display: none; }
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+.session-tab:hover { color: var(--fg); background: var(--bg); }
+.session-tab.active {
+  color: var(--fg);
+  background: var(--bg);
+  border-color: var(--border);
+}
+.session-tab.dead { opacity: 0.5; }
+
+.session-tab-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 0.7rem;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0;
+  border-radius: 2px;
+  line-height: 1;
+}
+.session-tab:hover .session-tab-close { opacity: 0.6; }
+.session-tab-close:hover { opacity: 1; color: var(--error); }
+
+/* F009: Touch devices can't hover — always show close button */
+@media (hover: none) and (pointer: coarse) {
+  .session-tab-close { opacity: 0.5; }
+}
+
 .session-select {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -551,10 +601,6 @@ html, body {
 .session-clients {
   font-size: 0.7rem;
   color: var(--muted);
-}
-
-.session-spacer {
-  flex: 1;
 }
 
 #terminal-container {
