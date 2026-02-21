@@ -56,7 +56,7 @@ const DenIcons = (() => {
   }
 
   function snippet(size) {
-    return svg('<polyline points="4 7 8 12 4 17"/><line x1="12" y1="17" x2="20" y2="17"/>', size);
+    return svg('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>', size);
   }
 
   // --- ファイルツリー アイコン ---

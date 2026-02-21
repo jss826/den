@@ -205,6 +205,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('terminal-container');
     DenTerminal.init(container);
     const initialHash = parseHash();
+    if (initialHash.session && DenTerminal.validateSessionName(initialHash.session)) {
+      initialHash.session = null;
+    }
     DenTerminal.connect(initialHash.session);
     DenTerminal.initSessionBar();
     DenTerminal.refreshSessionList();
@@ -265,6 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
       t.setAttribute('aria-selected', 'false');
     });
     const activeTab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+    if (!activeTab) return;
     activeTab.classList.add('active');
     activeTab.setAttribute('aria-selected', 'true');
 
@@ -290,13 +294,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Hash routing ---
   let hashUpdateInProgress = false;
 
+  const TAB_MAP = { files: 'filer', terminal: 'terminal' };
+
   function parseHash() {
     const hash = location.hash.replace(/^#/, '');
     if (!hash) return { tab: 'terminal', session: null };
     const parts = hash.split('/');
-    const rawTab = parts[0];
-    const tab = rawTab === 'files' ? 'filer' : rawTab === 'terminal' ? 'terminal' : 'terminal';
-    const session = parts[1] ? decodeURIComponent(parts[1]) : null;
+    const tab = TAB_MAP[parts[0]] ?? 'terminal';
+    let session = null;
+    if (parts[1]) {
+      try { session = decodeURIComponent(parts[1]); } catch { /* invalid encoding → null */ }
+    }
     return { tab, session };
   }
 
@@ -320,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hashUpdateInProgress = true;
     const { tab, session } = parseHash();
     switchTab(tab);
-    if (tab === 'terminal' && session && session !== DenTerminal.getCurrentSession()) {
+    if (tab === 'terminal' && session && !DenTerminal.validateSessionName(session) && session !== DenTerminal.getCurrentSession()) {
       DenTerminal.switchSession(session);
     }
     Promise.resolve().then(() => { hashUpdateInProgress = false; });
