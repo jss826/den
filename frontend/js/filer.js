@@ -444,8 +444,12 @@ const DenFiler = (() => {
     }
 
     items.push({ label: 'Copy Path', action: async () => {
-      await DenClipboard.write(path);
-      Toast.success('Path copied');
+      try {
+        await DenClipboard.write(path);
+        Toast.success('Path copied');
+      } catch {
+        Toast.error('Failed to copy path');
+      }
     }});
     items.push({ separator: true });
     items.push({ label: 'Rename...', action: () => promptRename(path) });

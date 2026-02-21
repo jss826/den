@@ -143,6 +143,12 @@ const FilerTree = (() => {
         row.classList.remove('long-press-active');
       });
 
+      row.addEventListener('touchcancel', () => {
+        clearTimeout(lpTimer);
+        lpTimer = null;
+        row.classList.remove('long-press-active');
+      });
+
       // クリック
       row.addEventListener('click', (e) => {
         if (lpFired) { lpFired = false; e.preventDefault(); return; }
