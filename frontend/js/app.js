@@ -90,6 +90,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // Ctrl+K キーバー toggle（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'k' && !anyModalOpen) {
+      e.preventDefault();
+      Keybar.toggleVisibility();
+      return;
+    }
+
     // Ctrl+` フローティングターミナル toggle（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'Backquote' && !anyModalOpen) {
       e.preventDefault();
@@ -248,14 +255,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('terminal-pane').hidden = tabName !== 'terminal';
     document.getElementById('filer-pane').hidden = tabName !== 'filer';
 
-    // キーバーはターミナル時のみ
-    const keybar = document.getElementById('keybar');
     if (tabName === 'terminal') {
-      if (Keybar.isTouchDevice()) keybar.classList.add('visible');
       DenTerminal.fitAndRefresh();
       DenTerminal.focus();
-    } else {
-      keybar.classList.remove('visible');
     }
 
     // Filer 初期化（初回のみ）

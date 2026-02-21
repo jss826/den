@@ -1,10 +1,23 @@
-// Den - タッチキーバーモジュール
+// Den - フローティングキーバーモジュール
 const Keybar = (() => {
   let container = null;
+  let buttonsContainer = null;
+  let dragHandle = null;
+  let collapseBtn = null;
+  let tabEl = null;
   let modifiers = { ctrl: false, alt: false, shift: false };
   let activeKeys = [];
   let currentPopup = null;
   let saveTimer = null;
+
+  // Floating state
+  let collapsed = false;
+  let keybarVisible = true;
+  let dragState = null;
+  let tabDragState = null;
+  let positionSaveTimer = null;
+
+  const DRAG_VISIBLE_PX = 60;
 
   /**
    * Clipboard fallback for non-secure contexts (HTTP over LAN).
@@ -81,12 +94,27 @@ const Keybar = (() => {
 
   function init(el, customKeys) {
     container = el;
+    buttonsContainer = container.querySelector('.keybar-buttons');
+    dragHandle = container.querySelector('.keybar-drag-handle');
+    collapseBtn = container.querySelector('.keybar-collapse-btn');
+    tabEl = document.getElementById('keybar-tab');
+
     activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
     render();
 
-    if (isTouchDevice()) {
-      container.classList.add('visible');
-    }
+    // Drag handle
+    dragHandle.addEventListener('pointerdown', onDragStart);
+
+    // Collapse/expand
+    collapseBtn.addEventListener('click', collapse);
+    tabEl.addEventListener('click', onTabClick);
+    tabEl.addEventListener('pointerdown', onTabDragStart);
+
+    // Restore position from settings
+    restorePosition();
+
+    // Viewport resize → clamp
+    window.addEventListener('resize', () => clampToViewport());
   }
 
   function reload(customKeys) {
@@ -107,6 +135,258 @@ const Keybar = (() => {
       || navigator.maxTouchPoints > 0
       || window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   }
+
+  // --- Visibility ---
+
+  function applyVisibility() {
+    if (keybarVisible) {
+      if (collapsed) {
+        container.hidden = true;
+        tabEl.hidden = false;
+      } else {
+        container.hidden = false;
+        tabEl.hidden = true;
+      }
+    } else {
+      container.hidden = true;
+      tabEl.hidden = true;
+    }
+  }
+
+  function toggleVisibility() {
+    keybarVisible = !keybarVisible;
+    applyVisibility();
+    schedulePositionSave();
+  }
+
+  function isVisible() {
+    return keybarVisible;
+  }
+
+  // --- Collapse / Expand ---
+
+  function collapse() {
+    if (collapsed) return;
+    collapsed = true;
+    const barRect = container.getBoundingClientRect();
+    // Place tab at bar's position
+    tabEl.style.left = barRect.left + 'px';
+    tabEl.style.top = barRect.top + 'px';
+    applyVisibility();
+    schedulePositionSave();
+  }
+
+  function expand() {
+    if (!collapsed) return;
+    collapsed = false;
+    const tabRect = tabEl.getBoundingClientRect();
+    // Place bar at tab's position
+    container.style.left = tabRect.left + 'px';
+    container.style.top = tabRect.top + 'px';
+    applyVisibility();
+    // After showing, clamp to viewport
+    requestAnimationFrame(() => clampToViewport());
+    schedulePositionSave();
+  }
+
+  // --- Drag (keybar) ---
+
+  function onDragStart(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const rect = container.getBoundingClientRect();
+    dragState = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: rect.left,
+      origTop: rect.top,
+    };
+    dragHandle.setPointerCapture(e.pointerId);
+    document.addEventListener('pointermove', onDragMove);
+    document.addEventListener('pointerup', onDragEnd);
+    document.addEventListener('pointercancel', onDragEnd);
+  }
+
+  function onDragMove(e) {
+    if (!dragState) return;
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+    let newLeft = dragState.origLeft + dx;
+    let newTop = dragState.origTop + dy;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const w = container.offsetWidth;
+    newLeft = Math.max(-w + DRAG_VISIBLE_PX, Math.min(newLeft, vw - DRAG_VISIBLE_PX));
+    newTop = Math.max(0, Math.min(newTop, vh - 40));
+
+    container.style.left = newLeft + 'px';
+    container.style.top = newTop + 'px';
+  }
+
+  function onDragEnd() {
+    dragState = null;
+    document.removeEventListener('pointermove', onDragMove);
+    document.removeEventListener('pointerup', onDragEnd);
+    document.removeEventListener('pointercancel', onDragEnd);
+    schedulePositionSave();
+  }
+
+  // --- Drag (tab) ---
+
+  let tabTapDist = 0;
+
+  function onTabDragStart(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const rect = tabEl.getBoundingClientRect();
+    tabDragState = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: rect.left,
+      origTop: rect.top,
+    };
+    tabTapDist = 0;
+    tabEl.setPointerCapture(e.pointerId);
+    document.addEventListener('pointermove', onTabDragMove);
+    document.addEventListener('pointerup', onTabDragEnd);
+    document.addEventListener('pointercancel', onTabDragEnd);
+  }
+
+  function onTabDragMove(e) {
+    if (!tabDragState) return;
+    const dx = e.clientX - tabDragState.startX;
+    const dy = e.clientY - tabDragState.startY;
+    tabTapDist = Math.max(tabTapDist, Math.abs(dx) + Math.abs(dy));
+
+    if (tabTapDist < 3) return; // Not a drag yet
+
+    let newLeft = tabDragState.origLeft + dx;
+    let newTop = tabDragState.origTop + dy;
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    newLeft = Math.max(0, Math.min(newLeft, vw - 44));
+    newTop = Math.max(0, Math.min(newTop, vh - 44));
+
+    tabEl.style.left = newLeft + 'px';
+    tabEl.style.top = newTop + 'px';
+  }
+
+  function onTabDragEnd() {
+    tabDragState = null;
+    document.removeEventListener('pointermove', onTabDragMove);
+    document.removeEventListener('pointerup', onTabDragEnd);
+    document.removeEventListener('pointercancel', onTabDragEnd);
+    if (tabTapDist >= 3) {
+      // Was a drag, save position
+      schedulePositionSave();
+    }
+    // Tap is handled by the click listener
+  }
+
+  function onTabClick() {
+    if (tabTapDist >= 3) return; // Was a drag, not a tap
+    expand();
+  }
+
+  // --- Position persistence ---
+
+  function schedulePositionSave() {
+    if (positionSaveTimer) clearTimeout(positionSaveTimer);
+    positionSaveTimer = setTimeout(() => {
+      positionSaveTimer = null;
+      if (typeof DenSettings === 'undefined') return;
+      const pos = getCurrentPosition();
+      DenSettings.save({ keybar_position: pos });
+    }, 2000);
+  }
+
+  function getCurrentPosition() {
+    const el = collapsed ? tabEl : container;
+    const rect = el.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      visible: keybarVisible,
+      collapsed: collapsed,
+    };
+  }
+
+  function restorePosition() {
+    if (typeof DenSettings === 'undefined') return;
+    const pos = DenSettings.get('keybar_position');
+
+    if (pos) {
+      keybarVisible = pos.visible !== false;
+      collapsed = !!pos.collapsed;
+
+      if (collapsed) {
+        tabEl.style.left = pos.left + 'px';
+        tabEl.style.top = pos.top + 'px';
+        // Also set container position so expand works
+        container.style.left = pos.left + 'px';
+        container.style.top = pos.top + 'px';
+      } else {
+        container.style.left = pos.left + 'px';
+        container.style.top = pos.top + 'px';
+        // Also set tab position so collapse works
+        tabEl.style.left = pos.left + 'px';
+        tabEl.style.top = pos.top + 'px';
+      }
+    } else {
+      // Default: bottom center
+      setDefaultPosition();
+    }
+
+    applyVisibility();
+    requestAnimationFrame(() => clampToViewport());
+  }
+
+  function setDefaultPosition() {
+    // Position at bottom center after DOM layout
+    requestAnimationFrame(() => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const barW = container.offsetWidth || 400;
+      const left = Math.max(12, (vw - barW) / 2);
+      const top = vh - 60;
+      container.style.left = left + 'px';
+      container.style.top = top + 'px';
+      tabEl.style.left = left + 'px';
+      tabEl.style.top = top + 'px';
+    });
+  }
+
+  function clampToViewport() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Clamp bar
+    if (!container.hidden) {
+      const rect = container.getBoundingClientRect();
+      let left = rect.left;
+      let top = rect.top;
+      const w = rect.width;
+      left = Math.max(-w + DRAG_VISIBLE_PX, Math.min(left, vw - DRAG_VISIBLE_PX));
+      top = Math.max(0, Math.min(top, vh - 40));
+      container.style.left = left + 'px';
+      container.style.top = top + 'px';
+    }
+
+    // Clamp tab
+    if (!tabEl.hidden) {
+      const rect = tabEl.getBoundingClientRect();
+      let left = rect.left;
+      let top = rect.top;
+      left = Math.max(0, Math.min(left, vw - 44));
+      top = Math.max(0, Math.min(top, vh - 44));
+      tabEl.style.left = left + 'px';
+      tabEl.style.top = top + 'px';
+    }
+  }
+
+  // --- Actions ---
 
   /** アクション実行（paste/copy/select/scroll/copy-screen） */
   async function executeAction(actionName, btnEl) {
@@ -272,10 +552,22 @@ const Keybar = (() => {
       popup.appendChild(opt);
     });
 
-    // ポップアップ配置
+    // ポップアップ配置 — バーが上半分にあれば下に、下半分にあれば上に
     document.body.appendChild(popup);
     const anchorRect = anchorBtn.getBoundingClientRect();
-    popup.style.bottom = (window.innerHeight - anchorRect.top + 4) + 'px';
+    const barRect = container.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - barRect.bottom;
+    const spaceAbove = barRect.top;
+
+    if (spaceBelow > spaceAbove || spaceAbove < 100) {
+      // Show below
+      popup.style.top = (anchorRect.bottom + 4) + 'px';
+      popup.style.bottom = '';
+    } else {
+      // Show above
+      popup.style.bottom = (window.innerHeight - anchorRect.top + 4) + 'px';
+      popup.style.top = '';
+    }
     popup.style.left = anchorRect.left + 'px';
 
     // 画面端補正
@@ -312,7 +604,8 @@ const Keybar = (() => {
       }
       currentPopup.remove();
       // aria-expanded をリセット
-      container.querySelectorAll('[aria-expanded="true"]').forEach(el => {
+      const target = buttonsContainer || container;
+      target.querySelectorAll('[aria-expanded="true"]').forEach(el => {
         el.setAttribute('aria-expanded', 'false');
       });
       currentPopup = null;
@@ -345,7 +638,8 @@ const Keybar = (() => {
   }
 
   function render() {
-    container.innerHTML = '';
+    const target = buttonsContainer || container;
+    target.innerHTML = '';
     closeStackPopup();
     modifiers = { ctrl: false, alt: false, shift: false };
 
@@ -409,7 +703,7 @@ const Keybar = (() => {
           e.preventDefault();
         });
 
-        container.appendChild(btn);
+        target.appendChild(btn);
         return;
       }
 
@@ -444,7 +738,7 @@ const Keybar = (() => {
         });
       }
 
-      container.appendChild(btn);
+      target.appendChild(btn);
     });
   }
 
@@ -465,7 +759,8 @@ const Keybar = (() => {
     modifiers.ctrl = false;
     modifiers.alt = false;
     modifiers.shift = false;
-    container.querySelectorAll('.modifier').forEach((btn) => {
+    const target = buttonsContainer || container;
+    target.querySelectorAll('.modifier').forEach((btn) => {
       btn.classList.remove('active');
     });
   }
@@ -475,5 +770,9 @@ const Keybar = (() => {
     return modifiers;
   }
 
-  return { init, reload, getDefaultKeys, isTouchDevice, getModifiers, resetModifiers };
+  return {
+    init, reload, getDefaultKeys, isTouchDevice,
+    getModifiers, resetModifiers,
+    toggleVisibility, collapse, expand, isVisible,
+  };
 })();

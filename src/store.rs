@@ -35,6 +35,22 @@ pub struct KeybarButton {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeybarPosition {
+    #[serde(default)]
+    pub left: f64,
+    #[serde(default)]
+    pub top: f64,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_size")]
     pub font_size: u8,
@@ -47,6 +63,8 @@ pub struct Settings {
     pub keybar_buttons: Option<Vec<KeybarButton>>,
     #[serde(default)]
     pub ssh_agent_forwarding: bool,
+    #[serde(default)]
+    pub keybar_position: Option<KeybarPosition>,
 }
 
 fn default_font_size() -> u8 {
@@ -67,6 +85,7 @@ impl Default for Settings {
             terminal_scrollback: default_scrollback(),
             keybar_buttons: None,
             ssh_agent_forwarding: false,
+            keybar_position: None,
         }
     }
 }

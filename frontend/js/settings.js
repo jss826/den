@@ -6,6 +6,7 @@ const DenSettings = (() => {
     terminal_scrollback: 1000,
     keybar_buttons: null,
     ssh_agent_forwarding: false,
+    keybar_position: null,
   };
 
   // キーバー設定で使用する一時配列
