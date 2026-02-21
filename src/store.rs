@@ -326,6 +326,22 @@ mod tests {
     }
 
     #[test]
+    fn settings_snippet_auto_run_defaults_to_false() {
+        let (store, tmp) = temp_store();
+        // auto_run omitted from JSON — should default to false
+        fs::write(
+            tmp.path().join("settings.json"),
+            r#"{"snippets":[{"label":"foo","command":"bar"}]}"#,
+        )
+        .unwrap();
+        let settings = store.load_settings();
+        let snippets = settings.snippets.unwrap();
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0].label, "foo");
+        assert!(!snippets[0].auto_run);
+    }
+
+    #[test]
     fn settings_empty_json_uses_all_defaults() {
         let (store, tmp) = temp_store();
         fs::write(tmp.path().join("settings.json"), "{}").unwrap();

@@ -41,6 +41,29 @@ pub async fn put_settings(
             pos.collapse_side = "right".to_string();
         }
     }
+    // Validate snippets: limit count, label/command length, reject empty
+    if let Some(ref snips) = settings.snippets {
+        if snips.len() > 100 {
+            return (StatusCode::UNPROCESSABLE_ENTITY, "too many snippets").into_response();
+        }
+        for s in snips {
+            if s.label.trim().is_empty() || s.command.trim().is_empty() {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "snippet label/command required",
+                )
+                    .into_response();
+            }
+            if s.label.chars().count() > 50 {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "snippet label too long")
+                    .into_response();
+            }
+            if s.command.len() > 10_000 {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "snippet command too long")
+                    .into_response();
+            }
+        }
+    }
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
         Ok(Ok(())) => StatusCode::OK.into_response(),

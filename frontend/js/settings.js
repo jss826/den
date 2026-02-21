@@ -358,6 +358,8 @@ const DenSettings = (() => {
 
   // --- Snippet 設定 UI ---
 
+  let snippetListDelegated = false;
+
   function renderSnippetList() {
     const list = document.getElementById('snippet-list');
     if (!list) return;
@@ -392,36 +394,97 @@ const DenSettings = (() => {
       removeBtn.textContent = '\u00d7';
       removeBtn.type = 'button';
       removeBtn.setAttribute('data-tooltip', 'Remove');
-      removeBtn.addEventListener('click', (e) => {
+      removeBtn.setAttribute('aria-label', 'Remove snippet');
+      item.appendChild(removeBtn);
+
+      list.appendChild(item);
+    });
+
+    // Event delegation: attach once on the list element
+    if (!snippetListDelegated) {
+      snippetListDelegated = true;
+      let currentDragOverEl = null;
+      let touchStartIdx = null;
+      let touchClone = null;
+      let touchCurrentOverIdx = null;
+      let touchTimer = null;
+      let touchDragItem = null;
+
+      function getItemIndex(el) {
+        const item = el.closest('.snippet-item');
+        if (!item || item.dataset.index === undefined) return -1;
+        return parseInt(item.dataset.index, 10);
+      }
+
+      function clearDragOver() {
+        if (currentDragOverEl) {
+          currentDragOverEl.classList.remove('drag-over');
+          currentDragOverEl = null;
+        }
+      }
+
+      function cleanupTouch() {
+        clearTimeout(touchTimer);
+        touchTimer = null;
+        if (touchDragItem) {
+          touchDragItem.classList.remove('dragging');
+          touchDragItem = null;
+        }
+        clearDragOver();
+        if (touchClone) { touchClone.remove(); touchClone = null; }
+        touchStartIdx = null;
+        touchCurrentOverIdx = null;
+      }
+
+      // Click delegation (remove button)
+      list.addEventListener('click', (e) => {
+        const removeBtn = e.target.closest('.snippet-item-remove');
+        if (!removeBtn) return;
         e.stopPropagation();
+        const idx = getItemIndex(removeBtn);
+        if (idx < 0) return;
         editingSnippets.splice(idx, 1);
         renderSnippetList();
       });
-      item.appendChild(removeBtn);
 
-      // Drag & drop
-      item.addEventListener('dragstart', (e) => {
+      // Desktop drag & drop delegation
+      list.addEventListener('dragstart', (e) => {
+        const idx = getItemIndex(e.target);
+        if (idx < 0) return;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', String(idx));
-        item.classList.add('dragging');
+        e.target.closest('.snippet-item').classList.add('dragging');
       });
-      item.addEventListener('dragend', () => {
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      list.addEventListener('dragend', (e) => {
+        const item = e.target.closest('.snippet-item');
+        if (item) item.classList.remove('dragging');
+        clearDragOver();
       });
-      item.addEventListener('dragover', (e) => {
+      list.addEventListener('dragover', (e) => {
+        const item = e.target.closest('.snippet-item');
+        if (!item) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        item.classList.add('drag-over');
+        if (currentDragOverEl !== item) {
+          clearDragOver();
+          item.classList.add('drag-over');
+          currentDragOverEl = item;
+        }
       });
-      item.addEventListener('dragleave', () => {
-        item.classList.remove('drag-over');
+      list.addEventListener('dragleave', (e) => {
+        const item = e.target.closest('.snippet-item');
+        if (item && currentDragOverEl === item) {
+          clearDragOver();
+        }
       });
-      item.addEventListener('drop', (e) => {
+      list.addEventListener('drop', (e) => {
         e.preventDefault();
-        item.classList.remove('drag-over');
+        clearDragOver();
+        const toItem = e.target.closest('.snippet-item');
+        if (!toItem) return;
         const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        const toIdx = idx;
+        if (isNaN(fromIdx) || fromIdx < 0 || fromIdx >= editingSnippets.length) return;
+        const toIdx = parseInt(toItem.dataset.index, 10);
         if (fromIdx !== toIdx) {
           const moved = editingSnippets.splice(fromIdx, 1)[0];
           editingSnippets.splice(toIdx, 0, moved);
@@ -429,30 +492,32 @@ const DenSettings = (() => {
         }
       });
 
-      // Touch drag & drop
-      let touchStartIdx = null;
-      let touchClone = null;
-      let touchCurrentOverIdx = null;
-
-      item.addEventListener('touchstart', (e) => {
-        if (e.target.classList.contains('snippet-item-remove')) return;
+      // Touch drag & drop delegation
+      list.addEventListener('touchstart', (e) => {
+        if (e.target.closest('.snippet-item-remove')) return;
+        const item = e.target.closest('.snippet-item');
+        if (!item) return;
+        const idx = parseInt(item.dataset.index, 10);
         touchStartIdx = idx;
         const touch = e.touches[0];
-        item._touchTimer = setTimeout(() => {
+        touchTimer = setTimeout(() => {
+          touchTimer = null;
+          touchDragItem = item;
           item.classList.add('dragging');
           touchClone = item.cloneNode(true);
+          const rect = item.getBoundingClientRect();
           touchClone.style.position = 'fixed';
           touchClone.style.zIndex = '999';
           touchClone.style.pointerEvents = 'none';
           touchClone.style.opacity = '0.8';
+          touchClone.style.width = rect.width + 'px';
           touchClone.style.left = (touch.clientX - 20) + 'px';
           touchClone.style.top = (touch.clientY - 20) + 'px';
           document.body.appendChild(touchClone);
         }, 200);
       }, { passive: true });
 
-      item.addEventListener('touchmove', (e) => {
-        if (!touchClone && !item._touchTimer) return;
+      list.addEventListener('touchmove', (e) => {
         if (!touchClone) return;
         e.preventDefault();
         const touch = e.touches[0];
@@ -460,43 +525,35 @@ const DenSettings = (() => {
         touchClone.style.top = (touch.clientY - 20) + 'px';
         const overEl = document.elementFromPoint(touch.clientX, touch.clientY);
         const overItem = overEl ? overEl.closest('.snippet-item') : null;
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
         if (overItem && overItem.dataset.index !== undefined) {
-          overItem.classList.add('drag-over');
+          if (currentDragOverEl !== overItem) {
+            clearDragOver();
+            overItem.classList.add('drag-over');
+            currentDragOverEl = overItem;
+          }
           touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
         } else {
+          clearDragOver();
           touchCurrentOverIdx = null;
         }
       }, { passive: false });
 
-      item.addEventListener('touchend', () => {
-        clearTimeout(item._touchTimer);
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (touchClone) {
-          touchClone.remove();
-          touchClone = null;
-          if (touchCurrentOverIdx !== null && touchStartIdx !== touchCurrentOverIdx) {
-            const moved = editingSnippets.splice(touchStartIdx, 1)[0];
-            editingSnippets.splice(touchCurrentOverIdx, 0, moved);
-            renderSnippetList();
-          }
+      list.addEventListener('touchend', () => {
+        const startIdx = touchStartIdx;
+        const overIdx = touchCurrentOverIdx;
+        const hadClone = !!touchClone;
+        cleanupTouch();
+        if (hadClone && overIdx !== null && startIdx !== overIdx) {
+          const moved = editingSnippets.splice(startIdx, 1)[0];
+          editingSnippets.splice(overIdx, 0, moved);
+          renderSnippetList();
         }
-        touchStartIdx = null;
-        touchCurrentOverIdx = null;
       });
 
-      item.addEventListener('touchcancel', () => {
-        clearTimeout(item._touchTimer);
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (touchClone) { touchClone.remove(); touchClone = null; }
-        touchStartIdx = null;
-        touchCurrentOverIdx = null;
+      list.addEventListener('touchcancel', () => {
+        cleanupTouch();
       });
-
-      list.appendChild(item);
-    });
+    }
   }
 
   function openModal() {
@@ -752,7 +809,7 @@ const DenSettings = (() => {
       const label = snippetNewLabel.value.trim();
       const command = snippetNewCommand.value;
       if (!label) { snippetNewLabel.focus(); return; }
-      if (!command) { snippetNewCommand.focus(); return; }
+      if (!command.trim()) { snippetNewCommand.focus(); return; }
 
       editingSnippets.push({
         label: label,

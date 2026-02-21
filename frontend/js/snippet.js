@@ -4,6 +4,7 @@
 const DenSnippet = (() => {
   let btn = null;
   let popup = null;
+  let rafId = null;
 
   function init(button) {
     btn = button;
@@ -66,9 +67,14 @@ const DenSnippet = (() => {
     document.body.appendChild(popup);
     positionPopup();
 
+    // Reposition on resize
+    window.addEventListener('resize', positionPopup);
+
     // Close on outside click (delayed to avoid catching the opening click)
-    requestAnimationFrame(() => {
+    rafId = requestAnimationFrame(() => {
+      if (!popup) return; // guard against close() called before RAF fires
       document.addEventListener('pointerdown', onOutsideClick, true);
+      rafId = null;
     });
   }
 
@@ -81,10 +87,15 @@ const DenSnippet = (() => {
   }
 
   function close() {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
     if (popup) {
       popup.remove();
       popup = null;
     }
+    window.removeEventListener('resize', positionPopup);
     document.removeEventListener('pointerdown', onOutsideClick, true);
   }
 
@@ -108,5 +119,9 @@ const DenSnippet = (() => {
     }
   }
 
-  return { init, open, close, reload };
+  function isOpen() {
+    return popup !== null;
+  }
+
+  return { init, open, close, reload, isOpen };
 })();

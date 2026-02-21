@@ -64,9 +64,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return m && !m.hidden;
     });
 
-    if (e.key === 'Escape') {
-      // Close snippet popup first if open
+    if (e.key === 'Escape' && DenSnippet.isOpen()) {
       DenSnippet.close();
+      return;
     }
 
     if (e.key === 'Escape' && anyModalOpen) {

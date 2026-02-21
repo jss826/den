@@ -1160,9 +1160,9 @@ html, body {
 
 .snippet-popup-auto {
   flex-shrink: 0;
-  color: var(--accent);
+  color: var(--warn);
   font-size: 0.9rem;
-  opacity: 0.7;
+  font-weight: 600;
 }
 
 /* === スニペット設定エディタ === */
