@@ -627,6 +627,64 @@ html, body {
   color: var(--bg);
 }
 
+.key-btn.stack {
+  position: relative;
+  padding-right: 18px;
+}
+
+.stack-label {
+  pointer-events: none;
+}
+
+.stack-indicator {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  font-size: 0.5em;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.stack-popup {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 200;
+  min-width: 120px;
+  padding: 4px 0;
+}
+
+.stack-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-family: monospace;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stack-popup-item:active {
+  background: var(--keybar-key-active);
+}
+
+.stack-popup-item.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.stack-popup-check {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 /* Select mode overlay */
 .select-mode-overlay {
   position: absolute;
@@ -855,6 +913,10 @@ html, body {
 .keybar-btn-item.modifier {
   background: var(--accent);
   color: var(--bg);
+}
+
+.keybar-btn-item.stack {
+  border: 1px dashed var(--accent);
 }
 
 .keybar-btn-item.dragging {

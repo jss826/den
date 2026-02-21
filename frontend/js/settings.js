@@ -66,6 +66,24 @@ const DenSettings = (() => {
     { label: 'Sc\u2193', send: '', display: 'Scroll page down', type: 'action', action: 'scroll-page-down' },
     { label: 'Top', send: '', display: 'Scroll to top', type: 'action', action: 'scroll-top' },
     { label: 'Bot', send: '', display: 'Scroll to bottom', type: 'action', action: 'scroll-bottom' },
+    // スタックプリセット
+    { display: 'C-c/C-z (Interrupt/Suspend)', type: 'stack', items: [
+        { label: 'C-c', send: '\\x03', display: 'Ctrl+C' },
+        { label: 'C-z', send: '\\x1a', display: 'Ctrl+Z' },
+      ] },
+    { display: 'C-d/C-l (EOF/Clear)', type: 'stack', items: [
+        { label: 'C-d', send: '\\x04', display: 'Ctrl+D' },
+        { label: 'C-l', send: '\\x0c', display: 'Ctrl+L' },
+      ] },
+    { display: 'Top/Bot (Scroll Top/Bottom)', type: 'stack', items: [
+        { label: 'Top', send: '', type: 'action', action: 'scroll-top', display: 'Scroll to top' },
+        { label: 'Bot', send: '', type: 'action', action: 'scroll-bottom', display: 'Scroll to bottom' },
+      ] },
+    { display: 'Enter/A-Ent/C-j (Enter / Alt+Enter / Newline)', type: 'stack', items: [
+        { label: 'Enter', send: '\\r' },
+        { label: 'A-Ent', send: '\\x1b\\r', display: 'Alt+Enter' },
+        { label: 'C-j', send: '\\x0a', display: 'Ctrl+J (Newline)' },
+      ] },
   ];
 
   // エスケープ文字列をリテラルに変換
@@ -169,7 +187,10 @@ const DenSettings = (() => {
     editingKeybarButtons.forEach((key, idx) => {
       const item = document.createElement('div');
       item.className = 'keybar-btn-item';
-      if (key.type === 'modifier' || key.btn_type === 'modifier') {
+      const isStack = key.type === 'stack' || key.btn_type === 'stack';
+      if (isStack) {
+        item.classList.add('stack');
+      } else if (key.type === 'modifier' || key.btn_type === 'modifier') {
         item.classList.add('modifier');
       }
       if (key.type === 'action' || key.btn_type === 'action') {
@@ -179,7 +200,11 @@ const DenSettings = (() => {
       item.dataset.index = idx;
 
       const labelSpan = document.createElement('span');
-      labelSpan.textContent = key.label;
+      if (isStack && key.items && key.items.length > 0) {
+        labelSpan.textContent = key.items.map(i => i.label).join('/');
+      } else {
+        labelSpan.textContent = key.label;
+      }
       item.appendChild(labelSpan);
 
       const removeBtn = document.createElement('button');
@@ -298,8 +323,12 @@ const DenSettings = (() => {
   }
 
   function getEditingButtons() {
-    // 保存用: send 内のリテラル文字はそのまま保持
-    return editingKeybarButtons.map(k => ({ ...k }));
+    // 保存用: items を deep clone（スタック対応）
+    return editingKeybarButtons.map(k => {
+      const copy = { ...k };
+      if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
+      return copy;
+    });
   }
 
   function openModal() {
@@ -312,9 +341,13 @@ const DenSettings = (() => {
     const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
     if (agentFwdCheck) agentFwdCheck.checked = !!current.ssh_agent_forwarding;
 
-    // キーバー設定の初期化
+    // キーバー設定の初期化（items を deep clone）
     if (current.keybar_buttons && current.keybar_buttons.length > 0) {
-      editingKeybarButtons = current.keybar_buttons.map(k => ({ ...k }));
+      editingKeybarButtons = current.keybar_buttons.map(k => {
+        const copy = { ...k };
+        if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
+        return copy;
+      });
     } else {
       editingKeybarButtons = Keybar.getDefaultKeys();
     }
@@ -335,11 +368,19 @@ const DenSettings = (() => {
     if (presetSelect.options.length <= 1) {
       KEY_PRESETS.forEach(p => {
         const opt = document.createElement('option');
-        opt.value = p.type === 'action' ? '__action:' + p.action : p.send;
+        if (p.type === 'stack') {
+          opt.value = '__stack:' + p.display;
+          opt.dataset.btnType = 'stack';
+          opt.dataset.stackItems = JSON.stringify(p.items);
+        } else if (p.type === 'action') {
+          opt.value = '__action:' + p.action;
+          opt.dataset.btnType = p.type;
+          opt.dataset.btnAction = p.action;
+        } else {
+          opt.value = p.send;
+        }
         opt.textContent = p.display;
-        opt.dataset.label = p.label;
-        if (p.type) opt.dataset.btnType = p.type;
-        if (p.action) opt.dataset.btnAction = p.action;
+        if (p.label) opt.dataset.label = p.label;
         presetSelect.appendChild(opt);
       });
     }
@@ -432,8 +473,14 @@ const DenSettings = (() => {
       const val = presetSelect.value;
       if (val) {
         const opt = presetSelect.selectedOptions[0];
-        newLabelInput.value = opt.dataset.label || '';
-        newSendInput.value = val;
+        if (opt.dataset.btnType === 'stack') {
+          // スタック: label/send は不要
+          newLabelInput.value = '';
+          newSendInput.value = '';
+        } else {
+          newLabelInput.value = opt.dataset.label || '';
+          newSendInput.value = val;
+        }
       } else {
         newSendInput.value = '';
       }
@@ -444,6 +491,20 @@ const DenSettings = (() => {
     });
 
     if (addConfirm) addConfirm.addEventListener('click', () => {
+      // スタックプリセット（label 不要）
+      const selectedOpt = presetSelect.selectedOptions[0];
+      if (selectedOpt && selectedOpt.dataset.btnType === 'stack') {
+        const items = JSON.parse(selectedOpt.dataset.stackItems);
+        editingKeybarButtons.push({
+          type: 'stack',
+          items: items,
+          selected: 0,
+        });
+        renderKeybarList();
+        addForm.hidden = true;
+        return;
+      }
+
       const label = newLabelInput.value.trim();
       if (!label) {
         newLabelInput.focus();
@@ -451,7 +512,6 @@ const DenSettings = (() => {
       }
 
       // アクションプリセット（Copy/Paste）
-      const selectedOpt = presetSelect.selectedOptions[0];
       if (selectedOpt && selectedOpt.dataset.btnType === 'action') {
         editingKeybarButtons.push({
           label,

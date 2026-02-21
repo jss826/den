@@ -28,6 +28,10 @@ pub struct KeybarButton {
     pub action: Option<String>,
     #[serde(default)]
     pub display: Option<String>,
+    #[serde(default)]
+    pub items: Option<Vec<KeybarButton>>,
+    #[serde(default)]
+    pub selected: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +205,8 @@ mod tests {
                 mod_key: None,
                 action: None,
                 display: None,
+                items: None,
+                selected: None,
             }]),
             ..Settings::default()
         };
@@ -210,6 +216,58 @@ mod tests {
         assert_eq!(buttons.len(), 1);
         assert_eq!(buttons[0].label, "Tab");
         assert_eq!(buttons[0].send, "\t");
+    }
+
+    #[test]
+    fn settings_stack_button_roundtrip() {
+        let (store, _tmp) = temp_store();
+        let settings = Settings {
+            keybar_buttons: Some(vec![KeybarButton {
+                label: String::new(),
+                send: String::new(),
+                btn_type: Some("stack".to_string()),
+                mod_key: None,
+                action: None,
+                display: None,
+                items: Some(vec![
+                    KeybarButton {
+                        label: "Sc↑".to_string(),
+                        send: String::new(),
+                        btn_type: Some("action".to_string()),
+                        mod_key: None,
+                        action: Some("scroll-page-up".to_string()),
+                        display: Some("Scroll page up".to_string()),
+                        items: None,
+                        selected: None,
+                    },
+                    KeybarButton {
+                        label: "Sc↓".to_string(),
+                        send: String::new(),
+                        btn_type: Some("action".to_string()),
+                        mod_key: None,
+                        action: Some("scroll-page-down".to_string()),
+                        display: Some("Scroll page down".to_string()),
+                        items: None,
+                        selected: None,
+                    },
+                ]),
+                selected: Some(1),
+            }]),
+            ..Settings::default()
+        };
+        store.save_settings(&settings).unwrap();
+        // Clear cache to force disk read
+        *store.settings_cache.lock().unwrap() = None;
+        let loaded = store.load_settings();
+        let buttons = loaded.keybar_buttons.unwrap();
+        assert_eq!(buttons.len(), 1);
+        assert_eq!(buttons[0].btn_type.as_deref(), Some("stack"));
+        assert_eq!(buttons[0].selected, Some(1));
+        let items = buttons[0].items.as_ref().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "Sc↑");
+        assert_eq!(items[0].action.as_deref(), Some("scroll-page-up"));
+        assert_eq!(items[1].label, "Sc↓");
     }
 
     #[test]
