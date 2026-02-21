@@ -55,6 +55,10 @@ const DenIcons = (() => {
     return svg('<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="15" y1="3" x2="15" y2="21"/>', size);
   }
 
+  function snippet(size) {
+    return svg('<polyline points="4 7 8 12 4 17"/><line x1="12" y1="17" x2="20" y2="17"/>', size);
+  }
+
   // --- ファイルツリー アイコン ---
 
   function folder(size) {
@@ -105,6 +109,7 @@ const DenIcons = (() => {
     filePlus, folderPlus, upload, refresh, gear, terminal,
     chevronLeft, chevronRight, download,
     panelLeft, panelRight,
+    snippet,
     folder, file, fileColor,
   };
 })();

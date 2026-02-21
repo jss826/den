@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons */
+/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -63,6 +63,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const m = document.getElementById(id);
       return m && !m.hidden;
     });
+
+    if (e.key === 'Escape') {
+      // Close snippet popup first if open
+      DenSnippet.close();
+    }
 
     if (e.key === 'Escape' && anyModalOpen) {
       for (const id of escModals) {
@@ -166,6 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'filer-new-folder': DenIcons.folderPlus,
       'filer-upload': DenIcons.upload,
       'filer-refresh': DenIcons.refresh,
+      'snippet-btn': DenIcons.snippet,
       'float-terminal-btn': DenIcons.terminal,
       'settings-btn': DenIcons.gear,
     };
@@ -208,6 +214,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // SFTP 接続状態チェック（ページリロード時の復元）
     FilerRemote.checkStatus();
+
+    // スニペット初期化
+    DenSnippet.init(document.getElementById('snippet-btn'));
 
     // キーバー初期化（カスタムキー設定があればそれを使用）
     Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'));

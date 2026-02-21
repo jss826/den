@@ -14,6 +14,14 @@ pub struct Store {
 // --- データモデル ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snippet {
+    pub label: String,
+    pub command: String,
+    #[serde(default)]
+    pub auto_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeybarButton {
     #[serde(default)]
     pub label: String,
@@ -71,6 +79,8 @@ pub struct Settings {
     pub ssh_agent_forwarding: bool,
     #[serde(default)]
     pub keybar_position: Option<KeybarPosition>,
+    #[serde(default)]
+    pub snippets: Option<Vec<Snippet>>,
 }
 
 fn default_font_size() -> u8 {
@@ -92,6 +102,7 @@ impl Default for Settings {
             keybar_buttons: None,
             ssh_agent_forwarding: false,
             keybar_position: None,
+            snippets: None,
         }
     }
 }
@@ -282,6 +293,36 @@ mod tests {
         assert_eq!(items[0].label, "Sc↑");
         assert_eq!(items[0].action.as_deref(), Some("scroll-page-up"));
         assert_eq!(items[1].label, "Sc↓");
+    }
+
+    #[test]
+    fn settings_snippet_roundtrip() {
+        let (store, _tmp) = temp_store();
+        let settings = Settings {
+            snippets: Some(vec![
+                Snippet {
+                    label: "workspace".to_string(),
+                    command: "cd d:\\workspace".to_string(),
+                    auto_run: true,
+                },
+                Snippet {
+                    label: "status".to_string(),
+                    command: "git status".to_string(),
+                    auto_run: false,
+                },
+            ]),
+            ..Settings::default()
+        };
+        store.save_settings(&settings).unwrap();
+        *store.settings_cache.lock().unwrap() = None;
+        let loaded = store.load_settings();
+        let snippets = loaded.snippets.unwrap();
+        assert_eq!(snippets.len(), 2);
+        assert_eq!(snippets[0].label, "workspace");
+        assert_eq!(snippets[0].command, "cd d:\\workspace");
+        assert!(snippets[0].auto_run);
+        assert_eq!(snippets[1].label, "status");
+        assert!(!snippets[1].auto_run);
     }
 
     #[test]

@@ -7,10 +7,14 @@ const DenSettings = (() => {
     keybar_buttons: null,
     ssh_agent_forwarding: false,
     keybar_position: null,
+    snippets: null,
   };
 
   // キーバー設定で使用する一時配列
   let editingKeybarButtons = null;
+
+  // スニペット設定で使用する一時配列
+  let editingSnippets = [];
 
   // プリセットキー一覧 (label → send のマッピング)
   const KEY_PRESETS = [
@@ -352,6 +356,149 @@ const DenSettings = (() => {
     });
   }
 
+  // --- Snippet 設定 UI ---
+
+  function renderSnippetList() {
+    const list = document.getElementById('snippet-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    editingSnippets.forEach((s, idx) => {
+      const item = document.createElement('div');
+      item.className = 'snippet-item';
+      item.setAttribute('draggable', 'true');
+      item.dataset.index = idx;
+
+      const label = document.createElement('span');
+      label.className = 'snippet-item-label';
+      label.textContent = s.label;
+      item.appendChild(label);
+
+      const cmd = document.createElement('span');
+      cmd.className = 'snippet-item-cmd';
+      cmd.textContent = s.command;
+      item.appendChild(cmd);
+
+      if (s.auto_run) {
+        const auto = document.createElement('span');
+        auto.className = 'snippet-item-auto';
+        auto.textContent = '\u23CE';
+        auto.title = 'Auto-run';
+        item.appendChild(auto);
+      }
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'snippet-item-remove';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.type = 'button';
+      removeBtn.setAttribute('data-tooltip', 'Remove');
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editingSnippets.splice(idx, 1);
+        renderSnippetList();
+      });
+      item.appendChild(removeBtn);
+
+      // Drag & drop
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(idx));
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      });
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        item.classList.add('drag-over');
+      });
+      item.addEventListener('dragleave', () => {
+        item.classList.remove('drag-over');
+      });
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        item.classList.remove('drag-over');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        const toIdx = idx;
+        if (fromIdx !== toIdx) {
+          const moved = editingSnippets.splice(fromIdx, 1)[0];
+          editingSnippets.splice(toIdx, 0, moved);
+          renderSnippetList();
+        }
+      });
+
+      // Touch drag & drop
+      let touchStartIdx = null;
+      let touchClone = null;
+      let touchCurrentOverIdx = null;
+
+      item.addEventListener('touchstart', (e) => {
+        if (e.target.classList.contains('snippet-item-remove')) return;
+        touchStartIdx = idx;
+        const touch = e.touches[0];
+        item._touchTimer = setTimeout(() => {
+          item.classList.add('dragging');
+          touchClone = item.cloneNode(true);
+          touchClone.style.position = 'fixed';
+          touchClone.style.zIndex = '999';
+          touchClone.style.pointerEvents = 'none';
+          touchClone.style.opacity = '0.8';
+          touchClone.style.left = (touch.clientX - 20) + 'px';
+          touchClone.style.top = (touch.clientY - 20) + 'px';
+          document.body.appendChild(touchClone);
+        }, 200);
+      }, { passive: true });
+
+      item.addEventListener('touchmove', (e) => {
+        if (!touchClone && !item._touchTimer) return;
+        if (!touchClone) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        touchClone.style.left = (touch.clientX - 20) + 'px';
+        touchClone.style.top = (touch.clientY - 20) + 'px';
+        const overEl = document.elementFromPoint(touch.clientX, touch.clientY);
+        const overItem = overEl ? overEl.closest('.snippet-item') : null;
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (overItem && overItem.dataset.index !== undefined) {
+          overItem.classList.add('drag-over');
+          touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
+        } else {
+          touchCurrentOverIdx = null;
+        }
+      }, { passive: false });
+
+      item.addEventListener('touchend', () => {
+        clearTimeout(item._touchTimer);
+        item.classList.remove('dragging');
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (touchClone) {
+          touchClone.remove();
+          touchClone = null;
+          if (touchCurrentOverIdx !== null && touchStartIdx !== touchCurrentOverIdx) {
+            const moved = editingSnippets.splice(touchStartIdx, 1)[0];
+            editingSnippets.splice(touchCurrentOverIdx, 0, moved);
+            renderSnippetList();
+          }
+        }
+        touchStartIdx = null;
+        touchCurrentOverIdx = null;
+      });
+
+      item.addEventListener('touchcancel', () => {
+        clearTimeout(item._touchTimer);
+        item.classList.remove('dragging');
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (touchClone) { touchClone.remove(); touchClone = null; }
+        touchStartIdx = null;
+        touchCurrentOverIdx = null;
+      });
+
+      list.appendChild(item);
+    });
+  }
+
   function openModal() {
     const modal = document.getElementById('settings-modal');
     document.getElementById('setting-font-size').value = current.font_size;
@@ -378,6 +525,12 @@ const DenSettings = (() => {
     // Add form を閉じた状態にリセット
     const addForm = document.getElementById('keybar-add-form');
     if (addForm) addForm.hidden = true;
+
+    // スニペット設定の初期化
+    editingSnippets = current.snippets ? current.snippets.map(s => ({ ...s })) : [];
+    renderSnippetList();
+    const snippetAddForm = document.getElementById('snippet-add-form');
+    if (snippetAddForm) snippetAddForm.hidden = true;
 
     modal.hidden = false;
   }
@@ -431,12 +584,15 @@ const DenSettings = (() => {
       const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
       const sshAgentFwd = agentFwdCheck ? agentFwdCheck.checked : false;
 
+      const snippets = editingSnippets.length > 0 ? editingSnippets.map(s => ({ ...s })) : null;
+
       const ok = await save({
         font_size: Math.max(8, Math.min(32, fontSize)),
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
         theme: theme,
         keybar_buttons: keybarButtons,
         ssh_agent_forwarding: sshAgentFwd,
+        snippets: snippets,
       });
       if (!ok) return;
       apply();
@@ -454,6 +610,9 @@ const DenSettings = (() => {
 
       // キーバーを即時反映
       Keybar.reload(keybarButtons);
+
+      // スニペットを即時反映
+      if (typeof DenSnippet !== 'undefined') DenSnippet.reload();
 
       closeModal();
     });
@@ -570,6 +729,42 @@ const DenSettings = (() => {
 
     if (addCancel) addCancel.addEventListener('click', () => {
       addForm.hidden = true;
+    });
+
+    // --- Snippet editor ---
+    const snippetAddBtn = document.getElementById('snippet-add-btn');
+    const snippetAddForm = document.getElementById('snippet-add-form');
+    const snippetAddConfirm = document.getElementById('snippet-add-confirm');
+    const snippetAddCancel = document.getElementById('snippet-add-cancel');
+    const snippetNewLabel = document.getElementById('snippet-new-label');
+    const snippetNewCommand = document.getElementById('snippet-new-command');
+    const snippetNewAutorun = document.getElementById('snippet-new-autorun');
+
+    if (snippetAddBtn) snippetAddBtn.addEventListener('click', () => {
+      snippetAddForm.hidden = false;
+      snippetNewLabel.value = '';
+      snippetNewCommand.value = '';
+      snippetNewAutorun.checked = false;
+      snippetNewLabel.focus();
+    });
+
+    if (snippetAddConfirm) snippetAddConfirm.addEventListener('click', () => {
+      const label = snippetNewLabel.value.trim();
+      const command = snippetNewCommand.value;
+      if (!label) { snippetNewLabel.focus(); return; }
+      if (!command) { snippetNewCommand.focus(); return; }
+
+      editingSnippets.push({
+        label: label,
+        command: command,
+        auto_run: snippetNewAutorun.checked,
+      });
+      renderSnippetList();
+      snippetAddForm.hidden = true;
+    });
+
+    if (snippetAddCancel) snippetAddCancel.addEventListener('click', () => {
+      snippetAddForm.hidden = true;
     });
   }
 
