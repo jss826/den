@@ -51,29 +51,14 @@ const DenTerminal = (() => {
 
   const FONT_FAMILY = '"Cascadia Code", "Fira Code", "Source Code Pro", "Menlo", "Symbols Nerd Font Mono", monospace';
 
-  /** レンダラー選択: デスクトップ → WebGL、iOS/Safari → Canvas、フォールバック → DOM */
+  /** レンダラー選択: WebGL → DOM フォールバック（CanvasAddon は 6.0 で廃止） */
   function selectRenderer(t) {
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    const isSafari = !isIOS && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-    if (!isIOS && !isSafari) {
-      try {
-        const webglAddon = new WebglAddon.WebglAddon();
-        webglAddon.onContextLost(() => webglAddon.dispose());
-        t.loadAddon(webglAddon);
-      } catch (_e) {
-        console.warn('WebGL not available, falling back to canvas renderer');
-        try {
-          t.loadAddon(new CanvasAddon.CanvasAddon());
-        } catch (_e2) { /* DOM fallback */ }
-      }
-    } else {
-      // iOS/Safari: Canvas レンダラーを明示的にロード
-      try {
-        t.loadAddon(new CanvasAddon.CanvasAddon());
-      } catch (_e) {
-        console.warn('Canvas addon not available, using DOM renderer');
-      }
+    try {
+      const webglAddon = new WebglAddon.WebglAddon();
+      webglAddon.onContextLost(() => webglAddon.dispose());
+      t.loadAddon(webglAddon);
+    } catch (_e) {
+      console.warn('WebGL not available, using DOM renderer');
     }
   }
 
