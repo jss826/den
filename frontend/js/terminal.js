@@ -121,36 +121,20 @@ const DenTerminal = (() => {
     const resizeObserver = new ResizeObserver(() => fitAndRefresh());
     resizeObserver.observe(container);
 
-    // キーバー修飾キー + OS キーボード連携
+    // キーバー修飾キーが ON のとき、物理キーボード入力を消費してリセットのみ行う
+    // （キーバー修飾キーはキーバーボタンとの組み合わせ専用）
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       const mods = Keybar.getModifiers();
-      if (!mods.ctrl && !mods.alt) return true;
-      // ハードウェア修飾キー自体や単独の Shift/Meta は無視
+      if (!mods.ctrl && !mods.alt && !mods.shift) return true;
+      // ハードウェア修飾キー自体や単独の Meta は無視
       if (ev.key === 'Control' || ev.key === 'Alt' || ev.key === 'Shift' || ev.key === 'Meta') return true;
       // OS 側の修飾が既に押されている場合はキーバー状態を使わない
       if (ev.ctrlKey || ev.altKey || ev.metaKey) return true;
 
-      // 非印字キー（Enter, Tab, 矢印等）: 修飾リセットだけ行い xterm に通常処理させる
-      if (ev.key.length !== 1) {
-        Keybar.resetModifiers();
-        return true;
-      }
-
-      let data = ev.key;
-      if (mods.ctrl) {
-        const code = data.toUpperCase().charCodeAt(0);
-        if (code >= 0x40 && code <= 0x5f) {
-          data = String.fromCharCode(code - 0x40);
-        }
-      }
-      if (mods.alt) {
-        data = '\x1b' + data;
-      }
-
-      sendInput(data);
+      // キーバー修飾キーをリセットし、物理キー入力は送信しない
       Keybar.resetModifiers();
-      return false; // xterm のデフォルト処理を抑止
+      return false;
     });
 
     // キー入力 → WebSocket
