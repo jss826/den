@@ -65,6 +65,7 @@ const Keybar = (() => {
     { label: 'Alt', send: '', type: 'modifier', mod_key: 'alt' },
     { label: 'Shift', send: '', type: 'modifier', mod_key: 'shift' },
     { label: 'Tab', send: '\t' },
+    { label: 'Enter', send: '\r' },
     { label: 'Esc', send: '\x1b' },
     { label: '\u2191', send: '\x1b[A', display: 'Up arrow' },
     { label: '\u2193', send: '\x1b[B', display: 'Down arrow' },
