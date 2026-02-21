@@ -44,10 +44,16 @@ pub struct KeybarPosition {
     pub visible: bool,
     #[serde(default)]
     pub collapsed: bool,
+    #[serde(default = "default_collapse_side")]
+    pub collapse_side: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_collapse_side() -> String {
+    "right".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

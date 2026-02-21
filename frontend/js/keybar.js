@@ -13,11 +13,11 @@ const Keybar = (() => {
   // Floating state
   let collapsed = false;
   let keybarVisible = true;
+  let collapseSide = 'right'; // "right" | "left"
   let dragState = null;
   let tabDragState = null;
   let positionSaveTimer = null;
 
-  const DRAG_VISIBLE_PX = 60;
   const SAVE_DEBOUNCE_MS = 2000;
 
   /**
@@ -190,8 +190,10 @@ const Keybar = (() => {
     if (collapsed) return;
     collapsed = true;
     const barRect = container.getBoundingClientRect();
-    // Place tab at bar's position
-    tabEl.style.left = barRect.left + 'px';
+    // Place tab at bar's Y position, snapped to collapseSide edge
+    tabEl.dataset.side = collapseSide;
+    tabEl.style.removeProperty('left');
+    tabEl.style.removeProperty('right');
     tabEl.style.top = barRect.top + 'px';
     applyVisibility();
     schedulePositionSave();
@@ -201,8 +203,7 @@ const Keybar = (() => {
     if (!collapsed) return;
     collapsed = false;
     const tabRect = tabEl.getBoundingClientRect();
-    // Place bar at tab's position
-    container.style.left = tabRect.left + 'px';
+    // Place bar at tab's Y position (X is always full-width)
     container.style.top = tabRect.top + 'px';
     applyVisibility();
     // After showing, clamp to viewport
@@ -217,11 +218,9 @@ const Keybar = (() => {
     e.preventDefault();
     const rect = container.getBoundingClientRect();
     dragState = {
-      startX: e.clientX,
       startY: e.clientY,
-      origLeft: rect.left,
       origTop: rect.top,
-      width: rect.width,
+      vh: window.innerHeight,
     };
     dragHandle.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onDragMove);
@@ -231,18 +230,11 @@ const Keybar = (() => {
 
   function onDragMove(e) {
     if (!dragState) return;
-    const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
-    let newLeft = dragState.origLeft + dx;
     let newTop = dragState.origTop + dy;
 
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const w = dragState.width;
-    newLeft = Math.max(-w + DRAG_VISIBLE_PX, Math.min(newLeft, vw - DRAG_VISIBLE_PX));
-    newTop = Math.max(0, Math.min(newTop, vh - 40));
+    newTop = Math.max(0, Math.min(newTop, dragState.vh - 40));
 
-    container.style.left = newLeft + 'px';
     container.style.top = newTop + 'px';
   }
 
@@ -256,6 +248,9 @@ const Keybar = (() => {
 
   // --- Drag (tab) ---
 
+  const TAB_DRAG_THRESHOLD = 3;
+  let lastTabWasDrag = false;
+
   function onTabDragStart(e) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -263,9 +258,11 @@ const Keybar = (() => {
     tabDragState = {
       startX: e.clientX,
       startY: e.clientY,
-      origLeft: rect.left,
       origTop: rect.top,
       dist: 0,
+      lastPointerX: e.clientX,
+      vh: window.innerHeight,
+      vw: window.innerWidth,
     };
     tabEl.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onTabDragMove);
@@ -278,38 +275,43 @@ const Keybar = (() => {
     const dx = e.clientX - tabDragState.startX;
     const dy = e.clientY - tabDragState.startY;
     tabDragState.dist = Math.max(tabDragState.dist, Math.abs(dx) + Math.abs(dy));
+    tabDragState.lastPointerX = e.clientX;
 
-    if (tabDragState.dist < 3) return; // Not a drag yet
+    if (tabDragState.dist < TAB_DRAG_THRESHOLD) return; // Not a drag yet
 
-    let newLeft = tabDragState.origLeft + dx;
+    // Y-axis movement only
     let newTop = tabDragState.origTop + dy;
-
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    newLeft = Math.max(0, Math.min(newLeft, vw - 44));
-    newTop = Math.max(0, Math.min(newTop, vh - 44));
-
-    tabEl.style.left = newLeft + 'px';
+    newTop = Math.max(0, Math.min(newTop, tabDragState.vh - 44));
     tabEl.style.top = newTop + 'px';
+
+    // Live preview: snap side based on pointer X position
+    const newSide = e.clientX < tabDragState.vw / 2 ? 'left' : 'right';
+    if (tabEl.dataset.side !== newSide) {
+      tabEl.dataset.side = newSide;
+      tabEl.style.removeProperty('left');
+      tabEl.style.removeProperty('right');
+    }
   }
 
-  let lastTabDist = 0;
-
   function onTabDragEnd() {
-    lastTabDist = tabDragState ? tabDragState.dist : 0;
+    const wasDrag = tabDragState && tabDragState.dist >= TAB_DRAG_THRESHOLD;
+    if (wasDrag) {
+      // Snap collapseSide based on final pointer X position
+      collapseSide = tabDragState.lastPointerX < tabDragState.vw / 2 ? 'left' : 'right';
+      tabEl.dataset.side = collapseSide;
+      tabEl.style.removeProperty('left');
+      tabEl.style.removeProperty('right');
+    }
+    lastTabWasDrag = wasDrag;
     tabDragState = null;
     document.removeEventListener('pointermove', onTabDragMove);
     document.removeEventListener('pointerup', onTabDragEnd);
     document.removeEventListener('pointercancel', onTabDragEnd);
-    if (lastTabDist >= 3) {
-      // Was a drag, save position
-      schedulePositionSave();
-    }
-    // Tap is handled by the click listener
+    if (wasDrag) schedulePositionSave();
   }
 
   function onTabClick() {
-    if (lastTabDist >= 3) return; // Was a drag, not a tap
+    if (lastTabWasDrag) return; // Was a drag, not a tap
     expand();
   }
 
@@ -334,10 +336,11 @@ const Keybar = (() => {
     const el = collapsed ? tabEl : container;
     const rect = el.getBoundingClientRect();
     return {
-      left: rect.left,
+      left: 0,
       top: rect.top,
       visible: keybarVisible,
       collapsed: collapsed,
+      collapse_side: collapseSide,
     };
   }
 
@@ -345,23 +348,19 @@ const Keybar = (() => {
     if (typeof DenSettings === 'undefined') return;
     const pos = DenSettings.get('keybar_position');
 
-    if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
+    if (pos && Number.isFinite(pos.top)) {
       keybarVisible = pos.visible !== false;
       collapsed = !!pos.collapsed;
+      collapseSide = (pos.collapse_side === 'left' || pos.collapse_side === 'right')
+        ? pos.collapse_side : 'right';
 
-      if (collapsed) {
-        tabEl.style.left = pos.left + 'px';
-        tabEl.style.top = pos.top + 'px';
-        container.style.left = pos.left + 'px';
-        container.style.top = pos.top + 'px';
-      } else {
-        container.style.left = pos.left + 'px';
-        container.style.top = pos.top + 'px';
-        tabEl.style.left = pos.left + 'px';
-        tabEl.style.top = pos.top + 'px';
-      }
+      container.style.top = pos.top + 'px';
+      tabEl.style.top = pos.top + 'px';
+      tabEl.dataset.side = collapseSide;
+      tabEl.style.removeProperty('left');
+      tabEl.style.removeProperty('right');
     } else {
-      // Default: bottom center
+      // Default: bottom
       setDefaultPosition();
     }
 
@@ -370,23 +369,20 @@ const Keybar = (() => {
   }
 
   function setDefaultPosition() {
-    // Position at bottom center after DOM layout
+    // Position at bottom after DOM layout
     requestAnimationFrame(() => {
-      const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const barW = container.offsetWidth || 400;
-      const left = Math.max(12, (vw - barW) / 2);
       const top = vh - 60;
-      container.style.left = left + 'px';
       container.style.top = top + 'px';
-      tabEl.style.left = left + 'px';
       tabEl.style.top = top + 'px';
+      tabEl.dataset.side = collapseSide;
+      tabEl.style.removeProperty('left');
+      tabEl.style.removeProperty('right');
     });
   }
 
   function clampToViewport() {
     if (!keybarVisible) return;
-    const vw = window.innerWidth;
     const vh = window.innerHeight;
 
     // Read phase
@@ -395,20 +391,15 @@ const Keybar = (() => {
     const barRect = barVisible ? container.getBoundingClientRect() : null;
     const tabRect = tabVisible ? tabEl.getBoundingClientRect() : null;
 
-    // Write phase — bar
+    // Write phase — bar (Y-axis only, full-width)
     if (barRect) {
-      const w = barRect.width;
-      const left = Math.max(-w + DRAG_VISIBLE_PX, Math.min(barRect.left, vw - DRAG_VISIBLE_PX));
       const top = Math.max(0, Math.min(barRect.top, vh - 40));
-      container.style.left = left + 'px';
       container.style.top = top + 'px';
     }
 
-    // Write phase — tab
+    // Write phase — tab (Y-axis only, side handled by CSS)
     if (tabRect) {
-      const left = Math.max(0, Math.min(tabRect.left, vw - 44));
       const top = Math.max(0, Math.min(tabRect.top, vh - 44));
-      tabEl.style.left = left + 'px';
       tabEl.style.top = top + 'px';
     }
   }

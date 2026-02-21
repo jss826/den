@@ -33,10 +33,13 @@ pub async fn put_settings(
         if !pos.top.is_finite() {
             pos.top = 0.0;
         }
-        // F011: Clamp bounds — generous enough for multi-monitor setups (8K×3 ≈ 23040px),
-        // negative allows partially off-screen (keybar drag allows DRAG_VISIBLE_PX=60px visible)
+        // F011: Clamp bounds — generous enough for multi-monitor setups (8K×3 ≈ 23040px)
         pos.left = pos.left.clamp(-10000.0, 100000.0);
         pos.top = pos.top.clamp(-10000.0, 100000.0);
+        // Validate collapse_side: only "left" or "right" allowed
+        if pos.collapse_side != "left" && pos.collapse_side != "right" {
+            pos.collapse_side = "right".to_string();
+        }
     }
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
