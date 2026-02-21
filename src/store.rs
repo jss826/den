@@ -126,7 +126,11 @@ impl Store {
                 tracing::warn!("Corrupt settings.json, using defaults: {e}");
                 Settings::default()
             }),
-            Err(_) => Settings::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+            Err(e) => {
+                tracing::warn!("Failed to read settings.json, using defaults: {e}");
+                Settings::default()
+            }
         }
     }
 

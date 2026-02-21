@@ -18,6 +18,7 @@ const Keybar = (() => {
   let positionSaveTimer = null;
 
   const DRAG_VISIBLE_PX = 60;
+  const SAVE_DEBOUNCE_MS = 2000;
 
   /**
    * Clipboard fallback for non-secure contexts (HTTP over LAN).
@@ -113,8 +114,12 @@ const Keybar = (() => {
     // Restore position from settings
     restorePosition();
 
-    // Viewport resize → clamp
-    window.addEventListener('resize', () => clampToViewport());
+    // Viewport resize → clamp (named function for potential removeEventListener)
+    window.addEventListener('resize', onWindowResize);
+  }
+
+  function onWindowResize() {
+    clampToViewport();
   }
 
   function reload(customKeys) {
@@ -130,10 +135,12 @@ const Keybar = (() => {
     });
   }
 
+  const IS_TOUCH_DEVICE = 'ontouchstart' in window
+    || navigator.maxTouchPoints > 0
+    || window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+
   function isTouchDevice() {
-    return 'ontouchstart' in window
-      || navigator.maxTouchPoints > 0
-      || window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    return IS_TOUCH_DEVICE;
   }
 
   // --- Visibility ---
@@ -154,8 +161,13 @@ const Keybar = (() => {
   }
 
   function toggleVisibility() {
+    if (!container) return;
+    const wasHidden = !keybarVisible;
     keybarVisible = !keybarVisible;
     applyVisibility();
+    if (wasHidden && keybarVisible) {
+      requestAnimationFrame(() => clampToViewport());
+    }
     schedulePositionSave();
   }
 
@@ -200,6 +212,7 @@ const Keybar = (() => {
       startY: e.clientY,
       origLeft: rect.left,
       origTop: rect.top,
+      width: rect.width,
     };
     dragHandle.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onDragMove);
@@ -216,7 +229,7 @@ const Keybar = (() => {
 
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const w = container.offsetWidth;
+    const w = dragState.width;
     newLeft = Math.max(-w + DRAG_VISIBLE_PX, Math.min(newLeft, vw - DRAG_VISIBLE_PX));
     newTop = Math.max(0, Math.min(newTop, vh - 40));
 
@@ -234,8 +247,6 @@ const Keybar = (() => {
 
   // --- Drag (tab) ---
 
-  let tabTapDist = 0;
-
   function onTabDragStart(e) {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -245,8 +256,8 @@ const Keybar = (() => {
       startY: e.clientY,
       origLeft: rect.left,
       origTop: rect.top,
+      dist: 0,
     };
-    tabTapDist = 0;
     tabEl.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onTabDragMove);
     document.addEventListener('pointerup', onTabDragEnd);
@@ -257,9 +268,9 @@ const Keybar = (() => {
     if (!tabDragState) return;
     const dx = e.clientX - tabDragState.startX;
     const dy = e.clientY - tabDragState.startY;
-    tabTapDist = Math.max(tabTapDist, Math.abs(dx) + Math.abs(dy));
+    tabDragState.dist = Math.max(tabDragState.dist, Math.abs(dx) + Math.abs(dy));
 
-    if (tabTapDist < 3) return; // Not a drag yet
+    if (tabDragState.dist < 3) return; // Not a drag yet
 
     let newLeft = tabDragState.origLeft + dx;
     let newTop = tabDragState.origTop + dy;
@@ -273,12 +284,15 @@ const Keybar = (() => {
     tabEl.style.top = newTop + 'px';
   }
 
+  let lastTabDist = 0;
+
   function onTabDragEnd() {
+    lastTabDist = tabDragState ? tabDragState.dist : 0;
     tabDragState = null;
     document.removeEventListener('pointermove', onTabDragMove);
     document.removeEventListener('pointerup', onTabDragEnd);
     document.removeEventListener('pointercancel', onTabDragEnd);
-    if (tabTapDist >= 3) {
+    if (lastTabDist >= 3) {
       // Was a drag, save position
       schedulePositionSave();
     }
@@ -286,7 +300,7 @@ const Keybar = (() => {
   }
 
   function onTabClick() {
-    if (tabTapDist >= 3) return; // Was a drag, not a tap
+    if (lastTabDist >= 3) return; // Was a drag, not a tap
     expand();
   }
 
@@ -294,12 +308,12 @@ const Keybar = (() => {
 
   function schedulePositionSave() {
     if (positionSaveTimer) clearTimeout(positionSaveTimer);
-    positionSaveTimer = setTimeout(() => {
+    positionSaveTimer = setTimeout(async () => {
       positionSaveTimer = null;
       if (typeof DenSettings === 'undefined') return;
       const pos = getCurrentPosition();
-      DenSettings.save({ keybar_position: pos });
-    }, 2000);
+      await DenSettings.save({ keybar_position: pos });
+    }, SAVE_DEBOUNCE_MS);
   }
 
   function getCurrentPosition() {
@@ -317,20 +331,18 @@ const Keybar = (() => {
     if (typeof DenSettings === 'undefined') return;
     const pos = DenSettings.get('keybar_position');
 
-    if (pos) {
+    if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
       keybarVisible = pos.visible !== false;
       collapsed = !!pos.collapsed;
 
       if (collapsed) {
         tabEl.style.left = pos.left + 'px';
         tabEl.style.top = pos.top + 'px';
-        // Also set container position so expand works
         container.style.left = pos.left + 'px';
         container.style.top = pos.top + 'px';
       } else {
         container.style.left = pos.left + 'px';
         container.style.top = pos.top + 'px';
-        // Also set tab position so collapse works
         tabEl.style.left = pos.left + 'px';
         tabEl.style.top = pos.top + 'px';
       }
@@ -359,28 +371,29 @@ const Keybar = (() => {
   }
 
   function clampToViewport() {
+    if (!keybarVisible) return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
 
-    // Clamp bar
-    if (!container.hidden) {
-      const rect = container.getBoundingClientRect();
-      let left = rect.left;
-      let top = rect.top;
-      const w = rect.width;
-      left = Math.max(-w + DRAG_VISIBLE_PX, Math.min(left, vw - DRAG_VISIBLE_PX));
-      top = Math.max(0, Math.min(top, vh - 40));
+    // Read phase
+    const barVisible = !container.hidden;
+    const tabVisible = !tabEl.hidden;
+    const barRect = barVisible ? container.getBoundingClientRect() : null;
+    const tabRect = tabVisible ? tabEl.getBoundingClientRect() : null;
+
+    // Write phase — bar
+    if (barRect) {
+      const w = barRect.width;
+      const left = Math.max(-w + DRAG_VISIBLE_PX, Math.min(barRect.left, vw - DRAG_VISIBLE_PX));
+      const top = Math.max(0, Math.min(barRect.top, vh - 40));
       container.style.left = left + 'px';
       container.style.top = top + 'px';
     }
 
-    // Clamp tab
-    if (!tabEl.hidden) {
-      const rect = tabEl.getBoundingClientRect();
-      let left = rect.left;
-      let top = rect.top;
-      left = Math.max(0, Math.min(left, vw - 44));
-      top = Math.max(0, Math.min(top, vh - 44));
+    // Write phase — tab
+    if (tabRect) {
+      const left = Math.max(0, Math.min(tabRect.left, vw - 44));
+      const top = Math.max(0, Math.min(tabRect.top, vh - 44));
       tabEl.style.left = left + 'px';
       tabEl.style.top = top + 'px';
     }
@@ -634,7 +647,7 @@ const Keybar = (() => {
       if (typeof DenSettings !== 'undefined') {
         DenSettings.save({ keybar_buttons: activeKeys });
       }
-    }, 2000);
+    }, SAVE_DEBOUNCE_MS);
   }
 
   function render() {

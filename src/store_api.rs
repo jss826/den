@@ -22,6 +22,17 @@ pub async fn put_settings(
 ) -> impl IntoResponse {
     // Server-side validation: clamp to match frontend constraints (100–50000)
     settings.terminal_scrollback = settings.terminal_scrollback.clamp(100, 50000);
+    // Validate keybar_position: reject NaN/Infinity to prevent persistent layout breakage
+    if let Some(ref mut pos) = settings.keybar_position {
+        if !pos.left.is_finite() {
+            pos.left = 0.0;
+        }
+        if !pos.top.is_finite() {
+            pos.top = 0.0;
+        }
+        pos.left = pos.left.clamp(-10000.0, 100000.0);
+        pos.top = pos.top.clamp(-10000.0, 100000.0);
+    }
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
         Ok(Ok(())) => StatusCode::OK.into_response(),
