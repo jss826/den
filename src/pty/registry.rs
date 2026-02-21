@@ -61,6 +61,28 @@ const TASK_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5)
 /// クライアント ID 生成用グローバルカウンター
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Windows スリープ抑止: アクティブセッション数に応じてスリープ許可/抑止を切り替え
+#[cfg(windows)]
+fn update_sleep_prevention(session_count: usize) {
+    use windows_sys::Win32::System::Power::{
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+    };
+    if session_count > 0 {
+        // セッションがある間はシステムスリープを抑止（ディスプレイ消灯は許可）
+        unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+        tracing::debug!("Sleep prevention: ON ({session_count} active sessions)");
+    } else {
+        // 全セッション終了: スリープ許可に戻す
+        unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+        tracing::debug!("Sleep prevention: OFF (no active sessions)");
+    }
+}
+
+#[cfg(not(windows))]
+fn update_sleep_prevention(_session_count: usize) {
+    // Windows 以外では no-op
+}
+
 /// グローバルセッション管理
 pub struct SessionRegistry {
     sessions: RwLock<HashMap<String, Arc<SharedSession>>>,
@@ -345,6 +367,7 @@ impl SessionRegistry {
                 return Err(err);
             }
             sessions.insert(name.to_string(), Arc::clone(&session));
+            update_sleep_prevention(sessions.len());
         }
 
         tracing::info!("Session created: {name}");
@@ -530,7 +553,11 @@ impl SessionRegistry {
     pub async fn destroy(&self, name: &str) {
         let session = {
             let mut sessions = self.sessions.write().await;
-            sessions.remove(name)
+            let session = sessions.remove(name);
+            if session.is_some() {
+                update_sleep_prevention(sessions.len());
+            }
+            session
         };
 
         let Some(session) = session else {
