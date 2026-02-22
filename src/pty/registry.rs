@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::manager::PtyManager;
 use super::ring_buffer::RingBuffer;
+use crate::store::SleepPreventionMode;
 
 /// SessionRegistry の操作エラー
 #[derive(Debug)]
@@ -63,38 +64,41 @@ static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// スリープ抑止設定
 struct SleepConfig {
-    mode: String,
+    mode: SleepPreventionMode,
     timeout_minutes: u16,
-    last_activity: std::time::Instant,
     currently_preventing: bool,
 }
 
 /// 定期タスクのポーリング間隔
 const SLEEP_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// スリープ抑止の状態を OS に反映（変更時のみ syscall）
+/// スリープ抑止の状態を OS に反映
+///
+/// ステートレス方式: ES_CONTINUOUS を使わず ES_SYSTEM_REQUIRED のみを呼び出す。
+/// Tokio のスレッドプールでは毎回同じスレッドが使われる保証がないため、
+/// ES_CONTINUOUS によるスレッド単位の永続的状態設定は不適切。
+/// ES_SYSTEM_REQUIRED は呼び出しごとにアイドルタイマーをリセットするだけなので
+/// スレッドアフィニティの問題が発生しない。
 #[cfg(windows)]
+fn apply_sleep_state(prevent: bool, currently_preventing: &mut bool) {
+    use windows_sys::Win32::System::Power::{ES_SYSTEM_REQUIRED, SetThreadExecutionState};
+    if prevent {
+        unsafe { SetThreadExecutionState(ES_SYSTEM_REQUIRED) };
+        if !*currently_preventing {
+            tracing::debug!("Sleep prevention: ON");
+        }
+    } else if *currently_preventing {
+        tracing::debug!("Sleep prevention: OFF");
+    }
+    *currently_preventing = prevent;
+}
+
+#[cfg(not(windows))]
 fn apply_sleep_state(prevent: bool, currently_preventing: &mut bool) {
     if prevent == *currently_preventing {
         return;
     }
     *currently_preventing = prevent;
-    use windows_sys::Win32::System::Power::{
-        ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
-    };
-    if prevent {
-        unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
-        tracing::debug!("Sleep prevention: ON");
-    } else {
-        unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
-        tracing::debug!("Sleep prevention: OFF");
-    }
-}
-
-#[cfg(not(windows))]
-fn apply_sleep_state(prevent: bool, currently_preventing: &mut bool) {
-    *currently_preventing = prevent;
-    let _ = prevent; // suppress unused warning
 }
 
 /// グローバルセッション管理
@@ -102,6 +106,8 @@ pub struct SessionRegistry {
     sessions: RwLock<HashMap<String, Arc<SharedSession>>>,
     shell: String,
     sleep_config: Arc<std::sync::Mutex<SleepConfig>>,
+    /// ユーザー操作タイムスタンプ（Unix epoch 秒、Relaxed atomic で更新）
+    last_activity: Arc<AtomicU64>,
 }
 
 /// 1 つの名前付き PTY セッション
@@ -116,8 +122,8 @@ pub struct SharedSession {
     output_tx: std::sync::Mutex<Option<broadcast::Sender<Vec<u8>>>>,
     /// PTY 内部状態（pty_writer, clients, child 等）
     pub inner: Mutex<SessionInner>,
-    /// スリープ抑止設定（Registry と共有、last_activity 更新用）
-    sleep_config: Arc<std::sync::Mutex<SleepConfig>>,
+    /// ユーザー操作タイムスタンプ（Registry と共有、AtomicU64 で lock-free 更新）
+    last_activity: Arc<AtomicU64>,
 }
 
 pub struct SessionInner {
@@ -173,12 +179,20 @@ fn is_valid_session_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// 現在時刻を Unix epoch 秒で返す
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 impl SessionRegistry {
-    pub fn new(shell: String, sleep_mode: &str, sleep_timeout: u16) -> Arc<Self> {
+    pub fn new(shell: String, sleep_mode: SleepPreventionMode, sleep_timeout: u16) -> Arc<Self> {
+        let last_activity = Arc::new(AtomicU64::new(now_epoch_secs()));
         let sleep_config = Arc::new(std::sync::Mutex::new(SleepConfig {
-            mode: sleep_mode.to_string(),
+            mode: sleep_mode,
             timeout_minutes: sleep_timeout,
-            last_activity: std::time::Instant::now(),
             currently_preventing: false,
         }));
 
@@ -186,6 +200,7 @@ impl SessionRegistry {
             sessions: RwLock::new(HashMap::new()),
             shell,
             sleep_config,
+            last_activity,
         });
 
         // always モードなら即座に ON
@@ -217,7 +232,7 @@ impl SessionRegistry {
         master: Box<dyn portable_pty::MasterPty + Send>,
         child: Box<dyn portable_pty::Child + Send + Sync>,
         #[cfg(windows)] job: Option<super::job::PtyJobObject>,
-        sleep_config: Arc<std::sync::Mutex<SleepConfig>>,
+        last_activity: Arc<AtomicU64>,
     ) -> (
         Arc<SharedSession>,
         broadcast::Receiver<Vec<u8>>,
@@ -247,7 +262,7 @@ impl SessionRegistry {
             alive: AtomicBool::new(true),
             replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
             output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
-            sleep_config,
+            last_activity,
             inner: Mutex::new(SessionInner {
                 pty_writer,
                 resize_tx: Some(resize_tx),
@@ -373,12 +388,12 @@ impl SessionRegistry {
             pty.child,
             #[cfg(windows)]
             pty.job,
-            Arc::clone(&self.sleep_config),
+            Arc::clone(&self.last_activity),
         );
         session.inner.lock().await.monitor_handle = Some(monitor_handle);
 
         // 権威的な挿入: write lock で再チェック（TOCTOU 防止）
-        {
+        let session_count = {
             let mut sessions = self.sessions.write().await;
             let race_err = if sessions.contains_key(name) {
                 Some(RegistryError::AlreadyExists(name.to_string()))
@@ -412,9 +427,10 @@ impl SessionRegistry {
                 return Err(err);
             }
             sessions.insert(name.to_string(), Arc::clone(&session));
-            self.evaluate_sleep_prevention(sessions.len());
-        }
+            sessions.len()
+        };
 
+        self.evaluate_sleep_prevention(session_count);
         tracing::info!("Session created: {name}");
         Ok((session, first_rx))
     }
@@ -596,18 +612,18 @@ impl SessionRegistry {
 
     /// セッション破棄
     pub async fn destroy(&self, name: &str) {
-        let session = {
+        let (session, session_count) = {
             let mut sessions = self.sessions.write().await;
             let session = sessions.remove(name);
-            if session.is_some() {
-                self.evaluate_sleep_prevention(sessions.len());
-            }
-            session
+            let len = sessions.len();
+            (session, len)
         };
 
         let Some(session) = session else {
             return;
         };
+
+        self.evaluate_sleep_prevention(session_count);
 
         session.alive.store(false, Ordering::Release);
 
@@ -707,26 +723,25 @@ impl SessionRegistry {
 
     /// スリープ抑止の要否を判定し、OS に反映
     fn evaluate_sleep_prevention(&self, session_count: usize) {
-        let mut config = self.sleep_config.lock().unwrap();
-        let should_prevent = match config.mode.as_str() {
-            "always" => true,
-            "off" => false,
-            _ => {
-                // "user-activity" (default)
-                session_count > 0
-                    && config.last_activity.elapsed()
-                        < std::time::Duration::from_secs(config.timeout_minutes as u64 * 60)
+        let mut config = self.sleep_config.lock().unwrap_or_else(|e| e.into_inner());
+        let should_prevent = match config.mode {
+            SleepPreventionMode::Always => true,
+            SleepPreventionMode::Off => false,
+            SleepPreventionMode::UserActivity => {
+                let last = self.last_activity.load(Ordering::Relaxed);
+                let elapsed_secs = now_epoch_secs().saturating_sub(last);
+                session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60
             }
         };
         apply_sleep_state(should_prevent, &mut config.currently_preventing);
     }
 
     /// 設定変更時に呼び出す: SleepConfig を更新して即座に再評価
-    pub async fn update_sleep_config(&self, mode: &str, timeout: u16) {
+    pub async fn update_sleep_config(&self, mode: SleepPreventionMode, timeout: u16) {
         let session_count = self.sessions.read().await.len();
         {
-            let mut config = self.sleep_config.lock().unwrap();
-            config.mode = mode.to_string();
+            let mut config = self.sleep_config.lock().unwrap_or_else(|e| e.into_inner());
+            config.mode = mode;
             config.timeout_minutes = timeout;
         }
         self.evaluate_sleep_prevention(session_count);
@@ -756,10 +771,9 @@ impl SharedSession {
         if !self.is_alive() {
             return Err("Session is dead".to_string());
         }
-        // スリープ抑止: ユーザー操作タイムスタンプ更新（ロック時間は Instant 代入のみ）
-        if let Ok(mut sc) = self.sleep_config.lock() {
-            sc.last_activity = std::time::Instant::now();
-        }
+        // スリープ抑止: ユーザー操作タイムスタンプ更新（lock-free）
+        self.last_activity
+            .store(now_epoch_secs(), Ordering::Relaxed);
         let mut inner = self.inner.lock().await;
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.last_active = std::time::Instant::now();
@@ -776,10 +790,9 @@ impl SharedSession {
 
     /// クライアントのリサイズ通知
     pub async fn resize(&self, client_id: u64, cols: u16, rows: u16) {
-        // スリープ抑止: ユーザー操作タイムスタンプ更新
-        if let Ok(mut sc) = self.sleep_config.lock() {
-            sc.last_activity = std::time::Instant::now();
-        }
+        // スリープ抑止: ユーザー操作タイムスタンプ更新（lock-free）
+        self.last_activity
+            .store(now_epoch_secs(), Ordering::Relaxed);
         let mut inner = self.inner.lock().await;
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.cols = cols;

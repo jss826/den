@@ -4,9 +4,10 @@ use serial_test::serial;
 use tokio::sync::broadcast;
 
 use den::pty::registry::{ClientKind, RegistryError, SessionRegistry, SharedSession};
+use den::store::SleepPreventionMode;
 
 fn new_registry() -> Arc<SessionRegistry> {
-    SessionRegistry::new("powershell.exe".to_string(), "off", 30)
+    SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30)
 }
 
 fn session_name(test: &str) -> String {

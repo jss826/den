@@ -37,7 +37,7 @@ async fn main() {
     let settings = store.load_settings();
     let registry = SessionRegistry::new(
         config.shell.clone(),
-        &settings.sleep_prevention_mode,
+        settings.sleep_prevention_mode,
         settings.sleep_prevention_timeout,
     );
 
