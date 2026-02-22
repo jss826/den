@@ -602,18 +602,22 @@ const DenSettings = (() => {
     modal.hidden = false;
   }
 
+  // スタックビルダーの一時アイテム配列
+  let editingStackItems = [];
+
   function setupAddForm() {
     const presetSelect = document.getElementById('keybar-preset-select');
+    const stackPreset = document.getElementById('keybar-stack-preset');
     if (!presetSelect) return;
     // プリセット option を生成（初回のみ）
     if (presetSelect.options.length <= 1) {
-      KEY_PRESETS.forEach(p => {
+      // Non-stack presets for single-key and stack-item selection
+      const nonStackPresets = KEY_PRESETS.filter(p => p.type !== 'stack');
+      const stackPresets = KEY_PRESETS.filter(p => p.type === 'stack');
+
+      nonStackPresets.forEach(p => {
         const opt = document.createElement('option');
-        if (p.type === 'stack') {
-          opt.value = '__stack:' + p.display;
-          opt.dataset.btnType = 'stack';
-          opt.dataset.stackItems = JSON.stringify(p.items);
-        } else if (p.type === 'action') {
+        if (p.type === 'action') {
           opt.value = '__action:' + p.action;
           opt.dataset.btnType = p.type;
           opt.dataset.btnAction = p.action;
@@ -624,7 +628,55 @@ const DenSettings = (() => {
         if (p.label) opt.dataset.label = p.label;
         presetSelect.appendChild(opt);
       });
+
+      // Stack presets in single-key dropdown
+      stackPresets.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = '__stack:' + p.display;
+        opt.dataset.btnType = 'stack';
+        opt.dataset.stackItems = JSON.stringify(p.items);
+        opt.textContent = p.display;
+        presetSelect.appendChild(opt);
+      });
+
+      // Populate stack-item preset dropdown (non-stack only)
+      if (stackPreset) {
+        nonStackPresets.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.send;
+          opt.textContent = p.display;
+          if (p.label) opt.dataset.label = p.label;
+          if (p.type === 'action') {
+            opt.dataset.btnType = 'action';
+            opt.dataset.btnAction = p.action;
+          }
+          stackPreset.appendChild(opt);
+        });
+      }
     }
+  }
+
+  function renderStackItems() {
+    const container = document.getElementById('keybar-stack-items');
+    if (!container) return;
+    container.innerHTML = '';
+    editingStackItems.forEach((item, idx) => {
+      const div = document.createElement('div');
+      div.className = 'keybar-stack-item';
+      const label = document.createElement('span');
+      label.textContent = item.display || item.label;
+      div.appendChild(label);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'keybar-stack-item-remove';
+      removeBtn.type = 'button';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.addEventListener('click', () => {
+        editingStackItems.splice(idx, 1);
+        renderStackItems();
+      });
+      div.appendChild(removeBtn);
+      container.appendChild(div);
+    });
   }
 
   function closeModal() {
@@ -714,14 +766,68 @@ const DenSettings = (() => {
     const newSendInput = document.getElementById('keybar-new-send');
     const newModifierCheck = document.getElementById('keybar-new-modifier');
     const newModKeySelect = document.getElementById('keybar-new-modkey');
+    const newTypeSelect = document.getElementById('keybar-new-type');
+    const singleFields = document.getElementById('keybar-single-fields');
+    const stackFields = document.getElementById('keybar-stack-fields');
+    const stackPreset = document.getElementById('keybar-stack-preset');
+    const stackItemLabel = document.getElementById('keybar-stack-item-label');
+    const stackItemSend = document.getElementById('keybar-stack-item-send');
+    const stackAddItemBtn = document.getElementById('keybar-stack-add-item');
+
+    // Type toggle: Single / Stack
+    if (newTypeSelect) newTypeSelect.addEventListener('change', () => {
+      const isStack = newTypeSelect.value === 'stack';
+      if (singleFields) singleFields.hidden = isStack;
+      if (stackFields) stackFields.hidden = !isStack;
+    });
+
+    // Stack item preset selection
+    if (stackPreset) stackPreset.addEventListener('change', () => {
+      const val = stackPreset.value;
+      if (val) {
+        const opt = stackPreset.selectedOptions[0];
+        stackItemLabel.value = opt.dataset.label || '';
+        stackItemSend.value = val;
+      } else {
+        stackItemSend.value = '';
+      }
+    });
+
+    // Add item to stack
+    if (stackAddItemBtn) stackAddItemBtn.addEventListener('click', () => {
+      const label = stackItemLabel.value.trim();
+      const send = stackItemSend.value;
+      if (!label) { stackItemLabel.focus(); return; }
+      const selectedOpt = stackPreset?.selectedOptions[0];
+      if (selectedOpt && selectedOpt.dataset.btnType === 'action') {
+        editingStackItems.push({
+          label, send: '', type: 'action',
+          action: selectedOpt.dataset.btnAction,
+          display: selectedOpt.textContent,
+        });
+      } else {
+        if (!send) { stackItemSend.focus(); return; }
+        editingStackItems.push({ label, send, display: label });
+      }
+      stackItemLabel.value = '';
+      stackItemSend.value = '';
+      if (stackPreset) stackPreset.value = '';
+      renderStackItems();
+      stackItemLabel.focus();
+    });
 
     if (addBtn) addBtn.addEventListener('click', () => {
       addForm.hidden = false;
+      if (newTypeSelect) newTypeSelect.value = 'single';
+      if (singleFields) singleFields.hidden = false;
+      if (stackFields) stackFields.hidden = true;
       newLabelInput.value = '';
       newSendInput.value = '';
       presetSelect.value = '';
       newModifierCheck.checked = false;
       newModKeySelect.hidden = true;
+      editingStackItems = [];
+      renderStackItems();
       newLabelInput.focus();
     });
 
@@ -752,6 +858,24 @@ const DenSettings = (() => {
     });
 
     if (addConfirm) addConfirm.addEventListener('click', () => {
+      const isStack = newTypeSelect && newTypeSelect.value === 'stack';
+
+      if (isStack) {
+        // Custom stack
+        if (editingStackItems.length < 2) {
+          if (typeof Toast !== 'undefined') Toast.error('Stack needs at least 2 items');
+          return;
+        }
+        editingKeybarButtons.push({
+          type: 'stack',
+          items: editingStackItems.map(i => ({ ...i })),
+          selected: 0,
+        });
+        renderKeybarList();
+        addForm.hidden = true;
+        return;
+      }
+
       // スタックプリセット（label 不要）
       const selectedOpt = presetSelect.selectedOptions[0];
       if (selectedOpt && selectedOpt.dataset.btnType === 'stack') {

@@ -102,6 +102,11 @@ const DenTerminal = (() => {
       ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
       Home: '\x1b[H', End: '\x1b[F', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
     };
+    // iPad soft keyboard workaround: after keybar modifier combo,
+    // the character may leak through input event despite preventDefault.
+    let _suppressLeakedChar = null;
+    let _suppressTimer = null;
+
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       const mods = Keybar.getModifiers();
@@ -117,7 +122,14 @@ const DenTerminal = (() => {
       // キーバー修飾 + 物理キーの組み合わせを送信
       const send = ev.key.length === 1 ? ev.key : PHYSICAL_KEY_MAP[ev.key];
       if (send) {
+        ev.preventDefault(); // Prevent character insertion into xterm's textarea
         Keybar.executeKey({ send });
+        // iPad fallback: soft keyboard may still insert the character via input event
+        if (ev.key.length === 1) {
+          _suppressLeakedChar = ev.key;
+          if (_suppressTimer) clearTimeout(_suppressTimer);
+          _suppressTimer = setTimeout(() => { _suppressLeakedChar = null; }, 100);
+        }
         return false;
       }
       // 未マップキー（F1〜F12等）はキーバー修飾をリセットして xterm に委譲
@@ -127,6 +139,12 @@ const DenTerminal = (() => {
 
     // キー入力 → WebSocket
     term.onData((data) => {
+      // Suppress leaked character from keybar modifier combo (iPad soft keyboard workaround)
+      if (_suppressLeakedChar !== null && data === _suppressLeakedChar) {
+        _suppressLeakedChar = null;
+        if (_suppressTimer) { clearTimeout(_suppressTimer); _suppressTimer = null; }
+        return;
+      }
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(textEncoder.encode(data));
       }
@@ -289,7 +307,7 @@ const DenTerminal = (() => {
   // --- Select Mode ---
   let selectModeActive = false;
   let selectModeOverlay = null;
-  let selectModeStartRow = null;
+  let selectModeStart = null; // { col, row } (buffer coordinates)
   let selectModeOnExit = null;
   let selectModeScreen = null; // F016: cached .xterm-screen element
 
@@ -298,7 +316,7 @@ const DenTerminal = (() => {
     const container = document.getElementById('terminal-container');
     if (!container) return;
     selectModeActive = true;
-    selectModeStartRow = null;
+    selectModeStart = null;
     selectModeOnExit = onExit || null;
     selectModeScreen = term?.element?.querySelector('.xterm-screen') ?? null; // F016
 
@@ -316,7 +334,7 @@ const DenTerminal = (() => {
   function exitSelectMode() {
     if (!selectModeActive) return;
     selectModeActive = false;
-    selectModeStartRow = null;
+    selectModeStart = null;
     selectModeScreen = null; // F016
 
     document.removeEventListener('keydown', onSelectModeKeydown); // F011
@@ -352,27 +370,56 @@ const DenTerminal = (() => {
     if (document.hidden && selectModeActive) exitSelectMode();
   }
 
-  async function onSelectModeTap(e) { // F009: async/await consistency
+  /** Convert tap coordinates to buffer (col, row) */
+  function tapToBufferPos(e) {
+    const screen = selectModeScreen || term.element?.querySelector('.xterm-screen');
+    if (!screen) return null;
+    const rect = screen.getBoundingClientRect();
+    if (rect.height === 0 || rect.width === 0 || term.rows === 0 || term.cols === 0) return null;
+    const cellHeight = rect.height / term.rows;
+    const cellWidth = rect.width / term.cols;
+    const viewportRow = Math.max(0, Math.min(term.rows - 1, Math.floor((e.clientY - rect.top) / cellHeight)));
+    const col = Math.max(0, Math.min(term.cols - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
+    const bufferRow = viewportRow + term.buffer.active.viewportY;
+    return { col, row: bufferRow };
+  }
+
+  async function onSelectModeTap(e) {
     if (!term) return;
 
-    const screen = selectModeScreen || term.element?.querySelector('.xterm-screen'); // F016
-    if (!screen) return;
-    const rect = screen.getBoundingClientRect();
-    if (rect.height === 0 || term.rows === 0) return; // F004: zero guard
-    const cellHeight = rect.height / term.rows;
-    const viewportRow = Math.max(0, Math.min(term.rows - 1, Math.floor((e.clientY - rect.top) / cellHeight))); // F004: clamp
-    const bufferRow = viewportRow + term.buffer.active.viewportY;
+    const pos = tapToBufferPos(e);
+    if (!pos) return;
 
-    if (selectModeStartRow === null) {
-      // First tap — highlight single line
-      // selectLines() is stable in xterm.js v6 (no allowProposedApi needed)
-      selectModeStartRow = bufferRow;
-      term.selectLines(bufferRow, bufferRow);
+    if (selectModeStart === null) {
+      // First tap — mark start position and show a single-character selection as feedback
+      selectModeStart = pos;
+      term.select(pos.col, pos.row, 1);
     } else {
-      // Second tap — select range and copy
-      const startRow = Math.min(selectModeStartRow, bufferRow);
-      const endRow = Math.max(selectModeStartRow, bufferRow);
-      term.selectLines(startRow, endRow);
+      // Second tap — select range from start to end position and copy
+      const start = selectModeStart;
+      const end = pos;
+
+      // Normalize: ensure start is before end
+      let sCol, sRow, eCol, eRow;
+      if (start.row < end.row || (start.row === end.row && start.col <= end.col)) {
+        sCol = start.col; sRow = start.row;
+        eCol = end.col; eRow = end.row;
+      } else {
+        sCol = end.col; sRow = end.row;
+        eCol = start.col; eRow = start.row;
+      }
+
+      // Calculate selection length in characters
+      let length;
+      if (sRow === eRow) {
+        length = eCol - sCol + 1;
+      } else {
+        length = (term.cols - sCol) // rest of first line
+               + (eRow - sRow - 1) * term.cols // middle lines
+               + (eCol + 1); // beginning of last line
+      }
+
+      term.select(sCol, sRow, length);
       const sel = term.getSelection();
       if (sel) {
         try {

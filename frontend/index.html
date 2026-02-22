@@ -219,25 +219,49 @@
             </div>
             <div id="keybar-add-form" class="keybar-add-form" hidden>
               <div class="keybar-form-row">
-                <label>Label</label>
-                <input type="text" id="keybar-new-label" class="settings-input" placeholder="e.g. Tab" maxlength="8">
-              </div>
-              <div class="keybar-form-row">
-                <label>Send</label>
-                <select id="keybar-preset-select" class="settings-input">
-                  <option value="">-- Custom --</option>
+                <label>Type</label>
+                <select id="keybar-new-type" class="settings-input">
+                  <option value="single">Single Key</option>
+                  <option value="stack">Stack (long-press to switch)</option>
                 </select>
-                <input type="text" id="keybar-new-send" class="settings-input" placeholder="e.g. \t or literal text">
               </div>
-              <div class="keybar-form-row">
-                <label>
-                  <input type="checkbox" id="keybar-new-modifier"> Modifier key (Ctrl/Alt/Shift)
-                </label>
-                <select id="keybar-new-modkey" class="settings-input" hidden>
-                  <option value="ctrl">Ctrl</option>
-                  <option value="alt">Alt</option>
-                  <option value="shift">Shift</option>
-                </select>
+              <!-- Single key fields -->
+              <div id="keybar-single-fields">
+                <div class="keybar-form-row">
+                  <label>Label</label>
+                  <input type="text" id="keybar-new-label" class="settings-input" placeholder="e.g. Tab" maxlength="8">
+                </div>
+                <div class="keybar-form-row">
+                  <label>Send</label>
+                  <select id="keybar-preset-select" class="settings-input">
+                    <option value="">-- Custom --</option>
+                  </select>
+                  <input type="text" id="keybar-new-send" class="settings-input" placeholder="e.g. \t or literal text">
+                </div>
+                <div class="keybar-form-row">
+                  <label>
+                    <input type="checkbox" id="keybar-new-modifier"> Modifier key (Ctrl/Alt/Shift)
+                  </label>
+                  <select id="keybar-new-modkey" class="settings-input" hidden>
+                    <option value="ctrl">Ctrl</option>
+                    <option value="alt">Alt</option>
+                    <option value="shift">Shift</option>
+                  </select>
+                </div>
+              </div>
+              <!-- Stack fields -->
+              <div id="keybar-stack-fields" hidden>
+                <div id="keybar-stack-items" class="keybar-stack-items"></div>
+                <div class="keybar-form-row">
+                  <select id="keybar-stack-preset" class="settings-input">
+                    <option value="">-- Select or custom --</option>
+                  </select>
+                </div>
+                <div class="keybar-form-row">
+                  <input type="text" id="keybar-stack-item-label" class="settings-input" placeholder="Label" maxlength="8">
+                  <input type="text" id="keybar-stack-item-send" class="settings-input" placeholder="Send (e.g. \x03)">
+                  <button id="keybar-stack-add-item" class="modal-btn" type="button">+</button>
+                </div>
               </div>
               <div class="keybar-form-actions">
                 <button id="keybar-add-confirm" class="modal-btn primary" type="button">Add</button>

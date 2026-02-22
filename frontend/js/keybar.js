@@ -73,8 +73,8 @@ const Keybar = (() => {
     activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
     render();
 
-    // Drag handle
-    dragHandle.addEventListener('pointerdown', onDragStart);
+    // Drag — entire keybar (except buttons and collapse) is draggable
+    container.addEventListener('pointerdown', onContainerDragStart);
 
     // Collapse/expand
     collapseBtn.addEventListener('click', collapse);
@@ -187,8 +187,10 @@ const Keybar = (() => {
 
   // --- Drag (keybar) ---
 
-  function onDragStart(e) {
+  function onContainerDragStart(e) {
     if (e.button !== 0) return;
+    // Don't drag when clicking on buttons or collapse
+    if (e.target.closest('.key-btn, .keybar-collapse-btn')) return;
     e.preventDefault();
     const rect = container.getBoundingClientRect();
     dragState = {
@@ -196,7 +198,7 @@ const Keybar = (() => {
       origTop: rect.top,
       vh: window.innerHeight,
     };
-    dragHandle.setPointerCapture(e.pointerId);
+    container.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onDragMove);
     document.addEventListener('pointerup', onDragEnd);
     document.addEventListener('pointercancel', onDragEnd);

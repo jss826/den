@@ -631,6 +631,10 @@ html, body {
   gap: 4px;
   box-shadow: 0 2px 8px var(--shadow);
   touch-action: none;
+  cursor: ns-resize;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 #keybar:not([hidden]) {
@@ -1105,6 +1109,41 @@ html, body {
 .keybar-form-actions .modal-btn {
   font-size: 0.75rem;
   padding: 4px 10px;
+}
+
+.keybar-stack-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.keybar-stack-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.keybar-stack-item span {
+  flex: 1;
+}
+
+.keybar-stack-item-remove {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 4px;
+}
+
+.keybar-stack-item-remove:hover {
+  color: var(--error);
 }
 
 /* === スニペットポップアップ === */
