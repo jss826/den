@@ -91,7 +91,7 @@ const DenTerminal = (() => {
       if (b64 === '?') return true; // query — ignore
       try {
         const text = atob(b64);
-        DenClipboard.write(text, { source: 'osc52' });
+        DenClipboard.write(text, { source: 'osc52' }).catch(() => {});
       } catch (_) { /* invalid base64 — ignore */ }
       return true;
     });

@@ -89,27 +89,16 @@ pub fn start(store: Store) {
             }
             last_text = text.clone();
 
-            // Store の最新エントリと同じならスキップ（フロントエンド経由の重複防止）
+            // add_clipboard_entry internally deduplicates via retain, so no pre-check needed
             let store2 = store.clone();
-            let text2 = text.clone();
-            let should_skip = tokio::task::spawn_blocking(move || {
-                let entries = store2.load_clipboard_history();
-                entries.first().is_some_and(|e| e.text == text2)
-            })
-            .await
-            .unwrap_or(false);
-
-            if should_skip {
-                continue;
-            }
-
-            let store3 = store.clone();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                store3.add_clipboard_entry(text, "system".to_string())
+            match tokio::task::spawn_blocking(move || {
+                store2.add_clipboard_entry(text, "system".to_string())
             })
             .await
             {
-                tracing::warn!("Clipboard monitor: failed to add entry: {e}");
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!("Clipboard monitor: failed to add entry: {e}"),
+                Err(e) => tracing::warn!("Clipboard monitor: task panicked: {e}"),
             }
         }
     });

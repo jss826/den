@@ -205,11 +205,12 @@ impl Store {
     // --- Clipboard History ---
 
     pub fn load_clipboard_history(&self) -> Vec<ClipboardEntry> {
-        if let Some(cached) = self.clipboard_cache.lock().unwrap().as_ref() {
+        let mut cache = self.clipboard_cache.lock().unwrap();
+        if let Some(cached) = cache.as_ref() {
             return cached.clone();
         }
         let entries = self.load_clipboard_from_disk();
-        *self.clipboard_cache.lock().unwrap() = Some(entries.clone());
+        *cache = Some(entries.clone());
         entries
     }
 
@@ -233,17 +234,21 @@ impl Store {
         text: String,
         source: String,
     ) -> std::io::Result<Vec<ClipboardEntry>> {
-        let mut entries = self.load_clipboard_history();
-
-        // Remove duplicate (same text) if exists
-        entries.retain(|e| e.text != text);
-
-        // Truncate text to max size
+        // Truncate FIRST (F005: before dedup, F001: UTF-8 safe)
         let text = if text.len() > CLIPBOARD_MAX_TEXT_BYTES {
-            text[..CLIPBOARD_MAX_TEXT_BYTES].to_string()
+            text[..text.floor_char_boundary(CLIPBOARD_MAX_TEXT_BYTES)].to_string()
         } else {
             text
         };
+
+        // Hold lock across entire read-modify-write (F002)
+        let mut cache = self.clipboard_cache.lock().unwrap();
+        let mut entries = cache
+            .take()
+            .unwrap_or_else(|| self.load_clipboard_from_disk());
+
+        // Remove duplicate (same text) if exists
+        entries.retain(|e| e.text != text);
 
         // Prepend new entry
         let now = std::time::SystemTime::now()
@@ -262,20 +267,22 @@ impl Store {
         // Enforce max entries
         entries.truncate(CLIPBOARD_MAX_ENTRIES);
 
-        self.save_clipboard_history(&entries)?;
+        // Write to disk (without re-locking cache)
+        let path = self.root.join("clipboard-history.json");
+        let json = serde_json::to_string(&entries).map_err(std::io::Error::other)?;
+        fs::write(path, json)?;
+
+        *cache = Some(entries.clone());
         Ok(entries)
     }
 
     pub fn clear_clipboard_history(&self) -> std::io::Result<()> {
-        let entries = Vec::new();
-        self.save_clipboard_history(&entries)
-    }
-
-    fn save_clipboard_history(&self, entries: &[ClipboardEntry]) -> std::io::Result<()> {
+        let mut cache = self.clipboard_cache.lock().unwrap();
         let path = self.root.join("clipboard-history.json");
-        let json = serde_json::to_string(entries).map_err(std::io::Error::other)?;
+        let json =
+            serde_json::to_string(&Vec::<ClipboardEntry>::new()).map_err(std::io::Error::other)?;
         fs::write(path, json)?;
-        *self.clipboard_cache.lock().unwrap() = Some(entries.to_vec());
+        *cache = Some(Vec::new());
         Ok(())
     }
 }
@@ -558,5 +565,18 @@ mod tests {
         let entries = store.load_clipboard_history();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "hello");
+    }
+
+    #[test]
+    fn clipboard_truncate_multibyte_utf8() {
+        let (store, _tmp) = temp_store();
+        // "あ" is 3 bytes; create text exceeding CLIPBOARD_MAX_TEXT_BYTES
+        let text = "あ".repeat(5000); // 15000 bytes > 10240
+        let entries = store.add_clipboard_entry(text, "copy".to_string()).unwrap();
+        assert_eq!(entries.len(), 1);
+        // Should be truncated to at most CLIPBOARD_MAX_TEXT_BYTES
+        assert!(entries[0].text.len() <= CLIPBOARD_MAX_TEXT_BYTES);
+        // Must be valid UTF-8 (no panic, no partial char)
+        assert!(entries[0].text.is_char_boundary(entries[0].text.len()));
     }
 }
