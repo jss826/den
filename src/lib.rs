@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod auth;
+pub mod clipboard_api;
 pub mod config;
 pub mod filer;
 pub mod pty;
@@ -67,6 +68,13 @@ pub fn create_app_with_secret(
     let protected_routes = Router::new()
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
+        // Clipboard history API
+        .route(
+            "/api/clipboard-history",
+            get(clipboard_api::get_clipboard_history)
+                .post(clipboard_api::add_clipboard_entry)
+                .delete(clipboard_api::clear_clipboard_history),
+        )
         // WebSocket: Cookie 認証（ブラウザが自動で Cookie を送信）
         .route("/api/ws", get(ws::ws_handler))
         // Terminal session management API

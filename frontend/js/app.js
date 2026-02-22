@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet */
+/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet, ClipboardHistory */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -63,6 +63,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const m = document.getElementById(id);
       return m && !m.hidden;
     });
+
+    if (e.key === 'Escape' && ClipboardHistory.isOpen()) {
+      ClipboardHistory.close();
+      return;
+    }
 
     if (e.key === 'Escape' && DenSnippet.isOpen()) {
       DenSnippet.close();
@@ -171,6 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'filer-new-folder': DenIcons.folderPlus,
       'filer-upload': DenIcons.upload,
       'filer-refresh': DenIcons.refresh,
+      'clipboard-history-btn': DenIcons.clipboard,
       'snippet-btn': DenIcons.snippet,
       'float-terminal-btn': DenIcons.terminal,
       'settings-btn': DenIcons.gear,
@@ -221,6 +227,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // スニペット初期化
     DenSnippet.init(document.getElementById('snippet-btn'));
+
+    // クリップボード履歴初期化
+    ClipboardHistory.init(document.getElementById('clipboard-history-btn'));
 
     // キーバー初期化（カスタムキー設定があればそれを使用）
     Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'), DenSettings.get('keybar_secondary_buttons'));

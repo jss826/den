@@ -82,6 +82,20 @@ const DenTerminal = (() => {
     selectRenderer(term);
 
     term.open(container);
+
+    // OSC 52: clipboard write from terminal programs
+    term.parser.registerOscHandler(52, (data) => {
+      // Format: "c;base64data" or just "base64data"
+      const parts = data.split(';');
+      const b64 = parts.length > 1 ? parts[parts.length - 1] : parts[0];
+      if (b64 === '?') return true; // query — ignore
+      try {
+        const text = atob(b64);
+        DenClipboard.write(text, { source: 'osc52' });
+      } catch (_) { /* invalid base64 — ignore */ }
+      return true;
+    });
+
     fitAndRefresh();
     requestAnimationFrame(() => fitAndRefresh());
     setTimeout(() => fitAndRefresh(), 300);

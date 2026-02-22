@@ -861,3 +861,205 @@ async fn sftp_write_null_byte_path() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+// --- Clipboard History API ---
+
+#[tokio::test]
+async fn clipboard_history_get_empty() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/clipboard-history")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn clipboard_history_post_and_get() {
+    let config = test_config();
+    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+
+    // POST
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/clipboard-history")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"text":"hello world","source":"copy"}"#))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["text"], "hello world");
+    assert_eq!(arr[0]["source"], "copy");
+
+    // GET
+    let req = Request::builder()
+        .uri("/api/clipboard-history")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn clipboard_history_dedup() {
+    let config = test_config();
+    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+
+    // Add two entries
+    for text in ["first", "second"] {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/clipboard-history")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, auth_header())
+            .body(Body::from(format!(
+                r#"{{"text":"{text}","source":"copy"}}"#
+            )))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap();
+    }
+
+    // Add "first" again — should deduplicate
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/clipboard-history")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"text":"first","source":"osc52"}"#))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["text"], "first");
+    assert_eq!(arr[0]["source"], "osc52");
+    assert_eq!(arr[1]["text"], "second");
+}
+
+#[tokio::test]
+async fn clipboard_history_delete() {
+    let config = test_config();
+    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+
+    // Add an entry
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/clipboard-history")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"text":"hello","source":"copy"}"#))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap();
+
+    // DELETE
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/clipboard-history")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // GET should be empty
+    let req = Request::builder()
+        .uri("/api/clipboard-history")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn clipboard_history_requires_auth() {
+    let app = test_app();
+
+    // GET
+    let req = Request::builder()
+        .uri("/api/clipboard-history")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // POST
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/clipboard-history")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"text":"test","source":"copy"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // DELETE
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/clipboard-history")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn clipboard_history_post_empty_text_rejected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/clipboard-history")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"text":"","source":"copy"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn clipboard_history_post_invalid_source_rejected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/clipboard-history")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"text":"test","source":"invalid"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

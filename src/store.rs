@@ -19,9 +19,23 @@ pub struct Store {
     root: PathBuf,
     /// Write-through cache for settings (updated on save, avoids file I/O on read)
     settings_cache: Arc<Mutex<Option<Settings>>>,
+    /// Write-through cache for clipboard history
+    clipboard_cache: Arc<Mutex<Option<Vec<ClipboardEntry>>>>,
 }
 
 // --- データモデル ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardEntry {
+    pub text: String,
+    /// Unix timestamp in milliseconds
+    pub timestamp: u64,
+    /// "copy" or "osc52"
+    pub source: String,
+}
+
+const CLIPBOARD_MAX_ENTRIES: usize = 100;
+const CLIPBOARD_MAX_TEXT_BYTES: usize = 10_240; // 10KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snippet {
@@ -149,6 +163,7 @@ impl Store {
         Ok(Self {
             root,
             settings_cache: Arc::new(Mutex::new(None)),
+            clipboard_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -184,6 +199,83 @@ impl Store {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         fs::write(path, json)?;
         *self.settings_cache.lock().unwrap() = Some(settings.clone());
+        Ok(())
+    }
+
+    // --- Clipboard History ---
+
+    pub fn load_clipboard_history(&self) -> Vec<ClipboardEntry> {
+        if let Some(cached) = self.clipboard_cache.lock().unwrap().as_ref() {
+            return cached.clone();
+        }
+        let entries = self.load_clipboard_from_disk();
+        *self.clipboard_cache.lock().unwrap() = Some(entries.clone());
+        entries
+    }
+
+    fn load_clipboard_from_disk(&self) -> Vec<ClipboardEntry> {
+        let path = self.root.join("clipboard-history.json");
+        match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Corrupt clipboard-history.json, using empty: {e}");
+                Vec::new()
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                tracing::warn!("Failed to read clipboard-history.json: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn add_clipboard_entry(
+        &self,
+        text: String,
+        source: String,
+    ) -> std::io::Result<Vec<ClipboardEntry>> {
+        let mut entries = self.load_clipboard_history();
+
+        // Remove duplicate (same text) if exists
+        entries.retain(|e| e.text != text);
+
+        // Truncate text to max size
+        let text = if text.len() > CLIPBOARD_MAX_TEXT_BYTES {
+            text[..CLIPBOARD_MAX_TEXT_BYTES].to_string()
+        } else {
+            text
+        };
+
+        // Prepend new entry
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        entries.insert(
+            0,
+            ClipboardEntry {
+                text,
+                timestamp: now,
+                source,
+            },
+        );
+
+        // Enforce max entries
+        entries.truncate(CLIPBOARD_MAX_ENTRIES);
+
+        self.save_clipboard_history(&entries)?;
+        Ok(entries)
+    }
+
+    pub fn clear_clipboard_history(&self) -> std::io::Result<()> {
+        let entries = Vec::new();
+        self.save_clipboard_history(&entries)
+    }
+
+    fn save_clipboard_history(&self, entries: &[ClipboardEntry]) -> std::io::Result<()> {
+        let path = self.root.join("clipboard-history.json");
+        let json = serde_json::to_string(entries).map_err(std::io::Error::other)?;
+        fs::write(path, json)?;
+        *self.clipboard_cache.lock().unwrap() = Some(entries.to_vec());
         Ok(())
     }
 }
@@ -378,5 +470,93 @@ mod tests {
         assert_eq!(settings.terminal_scrollback, 1000);
         assert!(settings.keybar_buttons.is_none());
         assert!(!settings.ssh_agent_forwarding);
+    }
+
+    // --- Clipboard History tests ---
+
+    #[test]
+    fn clipboard_empty_when_missing() {
+        let (store, _tmp) = temp_store();
+        let entries = store.load_clipboard_history();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn clipboard_add_and_load() {
+        let (store, _tmp) = temp_store();
+        let entries = store
+            .add_clipboard_entry("hello".to_string(), "copy".to_string())
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "hello");
+        assert_eq!(entries[0].source, "copy");
+
+        // Load from cache
+        let loaded = store.load_clipboard_history();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].text, "hello");
+    }
+
+    #[test]
+    fn clipboard_dedup_moves_to_front() {
+        let (store, _tmp) = temp_store();
+        store
+            .add_clipboard_entry("first".to_string(), "copy".to_string())
+            .unwrap();
+        store
+            .add_clipboard_entry("second".to_string(), "copy".to_string())
+            .unwrap();
+        let entries = store
+            .add_clipboard_entry("first".to_string(), "osc52".to_string())
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].text, "first");
+        assert_eq!(entries[0].source, "osc52");
+        assert_eq!(entries[1].text, "second");
+    }
+
+    #[test]
+    fn clipboard_max_entries() {
+        let (store, _tmp) = temp_store();
+        for i in 0..110 {
+            store
+                .add_clipboard_entry(format!("entry-{i}"), "copy".to_string())
+                .unwrap();
+        }
+        let entries = store.load_clipboard_history();
+        assert_eq!(entries.len(), CLIPBOARD_MAX_ENTRIES);
+        assert_eq!(entries[0].text, "entry-109");
+    }
+
+    #[test]
+    fn clipboard_clear() {
+        let (store, _tmp) = temp_store();
+        store
+            .add_clipboard_entry("hello".to_string(), "copy".to_string())
+            .unwrap();
+        store.clear_clipboard_history().unwrap();
+        let entries = store.load_clipboard_history();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn clipboard_corrupt_json_returns_empty() {
+        let (store, tmp) = temp_store();
+        fs::write(tmp.path().join("clipboard-history.json"), "NOT JSON!!!").unwrap();
+        let entries = store.load_clipboard_history();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn clipboard_reload_from_disk() {
+        let (store, _tmp) = temp_store();
+        store
+            .add_clipboard_entry("hello".to_string(), "copy".to_string())
+            .unwrap();
+        // Clear cache to force disk read
+        *store.clipboard_cache.lock().unwrap() = None;
+        let entries = store.load_clipboard_history();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "hello");
     }
 }
