@@ -5,6 +5,7 @@ const DenSettings = (() => {
     theme: 'dark',
     terminal_scrollback: 1000,
     keybar_buttons: null,
+    keybar_secondary_buttons: null,
     ssh_agent_forwarding: false,
     keybar_position: null,
     snippets: null,
@@ -14,6 +15,10 @@ const DenSettings = (() => {
 
   // キーバー設定で使用する一時配列
   let editingKeybarButtons = null;
+  let editingKeybarSecondaryButtons = null;
+
+  // Add form のターゲット（'primary' | 'secondary'）
+  let addTarget = 'primary';
 
   // スニペット設定で使用する一時配列
   let editingSnippets = [];
@@ -358,6 +363,154 @@ const DenSettings = (() => {
     });
   }
 
+  function getEditingSecondaryButtons() {
+    return editingKeybarSecondaryButtons.map(k => {
+      const copy = { ...k };
+      if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
+      return copy;
+    });
+  }
+
+  function renderKeybarSecondaryList() {
+    const list = document.getElementById('keybar-secondary-btn-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    editingKeybarSecondaryButtons.forEach((key, idx) => {
+      const item = document.createElement('div');
+      item.className = 'keybar-btn-item';
+      const isStack = key.type === 'stack' || key.btn_type === 'stack';
+      if (isStack) {
+        item.classList.add('stack');
+      } else if (key.type === 'modifier' || key.btn_type === 'modifier') {
+        item.classList.add('modifier');
+      }
+      if (key.type === 'action' || key.btn_type === 'action') {
+        item.classList.add('action');
+      }
+      item.setAttribute('draggable', 'true');
+      item.dataset.index = idx;
+
+      const labelSpan = document.createElement('span');
+      if (isStack && key.items && key.items.length > 0) {
+        labelSpan.textContent = key.items.map(i => i.label).join('/');
+      } else {
+        labelSpan.textContent = key.label;
+      }
+      item.appendChild(labelSpan);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'keybar-btn-remove';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.type = 'button';
+      removeBtn.setAttribute('data-tooltip', 'Remove');
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editingKeybarSecondaryButtons.splice(idx, 1);
+        renderKeybarSecondaryList();
+      });
+      item.appendChild(removeBtn);
+
+      // Desktop drag & drop
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(idx));
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      });
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        item.classList.add('drag-over');
+      });
+      item.addEventListener('dragleave', () => {
+        item.classList.remove('drag-over');
+      });
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        item.classList.remove('drag-over');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        const toIdx = idx;
+        if (fromIdx !== toIdx) {
+          const moved = editingKeybarSecondaryButtons.splice(fromIdx, 1)[0];
+          editingKeybarSecondaryButtons.splice(toIdx, 0, moved);
+          renderKeybarSecondaryList();
+        }
+      });
+
+      // Touch drag & drop
+      let touchStartIdx = null;
+      let touchClone = null;
+      let touchCurrentOverIdx = null;
+
+      item.addEventListener('touchstart', (e) => {
+        if (e.target.classList.contains('keybar-btn-remove')) return;
+        touchStartIdx = idx;
+        const touch = e.touches[0];
+        item._touchTimer = setTimeout(() => {
+          item.classList.add('dragging');
+          touchClone = item.cloneNode(true);
+          touchClone.style.position = 'fixed';
+          touchClone.style.zIndex = '999';
+          touchClone.style.pointerEvents = 'none';
+          touchClone.style.opacity = '0.8';
+          touchClone.style.left = (touch.clientX - 20) + 'px';
+          touchClone.style.top = (touch.clientY - 20) + 'px';
+          document.body.appendChild(touchClone);
+        }, 200);
+      }, { passive: true });
+
+      item.addEventListener('touchmove', (e) => {
+        if (!touchClone && !item._touchTimer) return;
+        if (!touchClone) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        touchClone.style.left = (touch.clientX - 20) + 'px';
+        touchClone.style.top = (touch.clientY - 20) + 'px';
+        const overEl = document.elementFromPoint(touch.clientX, touch.clientY);
+        const overItem = overEl ? overEl.closest('.keybar-btn-item') : null;
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (overItem && overItem.dataset.index !== undefined) {
+          overItem.classList.add('drag-over');
+          touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
+        } else {
+          touchCurrentOverIdx = null;
+        }
+      }, { passive: false });
+
+      item.addEventListener('touchend', () => {
+        clearTimeout(item._touchTimer);
+        item.classList.remove('dragging');
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (touchClone) {
+          touchClone.remove();
+          touchClone = null;
+          if (touchCurrentOverIdx !== null && touchStartIdx !== touchCurrentOverIdx) {
+            const moved = editingKeybarSecondaryButtons.splice(touchStartIdx, 1)[0];
+            editingKeybarSecondaryButtons.splice(touchCurrentOverIdx, 0, moved);
+            renderKeybarSecondaryList();
+          }
+        }
+        touchStartIdx = null;
+        touchCurrentOverIdx = null;
+      });
+
+      item.addEventListener('touchcancel', () => {
+        clearTimeout(item._touchTimer);
+        item.classList.remove('dragging');
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (touchClone) { touchClone.remove(); touchClone = null; }
+        touchStartIdx = null;
+        touchCurrentOverIdx = null;
+      });
+
+      list.appendChild(item);
+    });
+  }
+
   // --- Snippet 設定 UI ---
 
   let snippetListDelegated = false;
@@ -587,9 +740,23 @@ const DenSettings = (() => {
       editingKeybarButtons = Keybar.getDefaultKeys();
     }
     renderKeybarList();
+
+    // サブ行キーバー設定の初期化
+    if (current.keybar_secondary_buttons && current.keybar_secondary_buttons.length > 0) {
+      editingKeybarSecondaryButtons = current.keybar_secondary_buttons.map(k => {
+        const copy = { ...k };
+        if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
+        return copy;
+      });
+    } else {
+      editingKeybarSecondaryButtons = Keybar.getDefaultSecondaryKeys();
+    }
+    renderKeybarSecondaryList();
+
     setupAddForm();
 
     // Add form を閉じた状態にリセット
+    addTarget = 'primary';
     const addForm = document.getElementById('keybar-add-form');
     if (addForm) addForm.hidden = true;
 
@@ -697,8 +864,9 @@ const DenSettings = (() => {
       const themeSelect = document.getElementById('setting-theme');
       const theme = themeSelect ? themeSelect.value : 'dark';
 
-      // キーバーボタン: 保存用に send をリテラルに変換
+      // キーバーボタン: 保存用に items を deep clone
       const keybarButtons = getEditingButtons();
+      const keybarSecondaryButtons = getEditingSecondaryButtons();
 
       const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
       const sshAgentFwd = agentFwdCheck ? agentFwdCheck.checked : false;
@@ -715,6 +883,7 @@ const DenSettings = (() => {
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
         theme: theme,
         keybar_buttons: keybarButtons,
+        keybar_secondary_buttons: keybarSecondaryButtons,
         ssh_agent_forwarding: sshAgentFwd,
         snippets: snippets,
         sleep_prevention_mode: sleepMode,
@@ -735,7 +904,7 @@ const DenSettings = (() => {
       if (typeof FloatTerminal !== 'undefined') FloatTerminal.applySettings();
 
       // キーバーを即時反映
-      Keybar.reload(keybarButtons);
+      Keybar.reload(keybarButtons, keybarSecondaryButtons);
 
       // スニペットを即時反映
       if (typeof DenSnippet !== 'undefined') DenSnippet.reload();
@@ -816,7 +985,8 @@ const DenSettings = (() => {
       stackItemLabel.focus();
     });
 
-    if (addBtn) addBtn.addEventListener('click', () => {
+    function showAddForm(target) {
+      addTarget = target;
       addForm.hidden = false;
       if (newTypeSelect) newTypeSelect.value = 'single';
       if (singleFields) singleFields.hidden = false;
@@ -829,11 +999,24 @@ const DenSettings = (() => {
       editingStackItems = [];
       renderStackItems();
       newLabelInput.focus();
-    });
+    }
+
+    if (addBtn) addBtn.addEventListener('click', () => showAddForm('primary'));
 
     if (resetBtn) resetBtn.addEventListener('click', () => {
       editingKeybarButtons = Keybar.getDefaultKeys();
       renderKeybarList();
+    });
+
+    // --- Secondary keybar editor ---
+    const secondaryAddBtn = document.getElementById('keybar-secondary-add-btn');
+    const secondaryResetBtn = document.getElementById('keybar-secondary-reset-btn');
+
+    if (secondaryAddBtn) secondaryAddBtn.addEventListener('click', () => showAddForm('secondary'));
+
+    if (secondaryResetBtn) secondaryResetBtn.addEventListener('click', () => {
+      editingKeybarSecondaryButtons = Keybar.getDefaultSecondaryKeys();
+      renderKeybarSecondaryList();
     });
 
     if (presetSelect) presetSelect.addEventListener('change', () => {
@@ -858,34 +1041,36 @@ const DenSettings = (() => {
     });
 
     if (addConfirm) addConfirm.addEventListener('click', () => {
+      const targetArray = addTarget === 'secondary'
+        ? editingKeybarSecondaryButtons : editingKeybarButtons;
+      const renderFn = addTarget === 'secondary'
+        ? renderKeybarSecondaryList : renderKeybarList;
       const isStack = newTypeSelect && newTypeSelect.value === 'stack';
 
       if (isStack) {
-        // Custom stack
         if (editingStackItems.length < 2) {
           if (typeof Toast !== 'undefined') Toast.error('Stack needs at least 2 items');
           return;
         }
-        editingKeybarButtons.push({
+        targetArray.push({
           type: 'stack',
           items: editingStackItems.map(i => ({ ...i })),
           selected: 0,
         });
-        renderKeybarList();
+        renderFn();
         addForm.hidden = true;
         return;
       }
 
-      // スタックプリセット（label 不要）
       const selectedOpt = presetSelect.selectedOptions[0];
       if (selectedOpt && selectedOpt.dataset.btnType === 'stack') {
         const items = JSON.parse(selectedOpt.dataset.stackItems);
-        editingKeybarButtons.push({
+        targetArray.push({
           type: 'stack',
           items: items,
           selected: 0,
         });
-        renderKeybarList();
+        renderFn();
         addForm.hidden = true;
         return;
       }
@@ -896,21 +1081,20 @@ const DenSettings = (() => {
         return;
       }
 
-      // アクションプリセット（Copy/Paste）
       if (selectedOpt && selectedOpt.dataset.btnType === 'action') {
-        editingKeybarButtons.push({
+        targetArray.push({
           label,
           send: '',
           type: 'action',
           action: selectedOpt.dataset.btnAction,
         });
-        renderKeybarList();
+        renderFn();
         addForm.hidden = true;
         return;
       }
 
       if (newModifierCheck.checked) {
-        editingKeybarButtons.push({
+        targetArray.push({
           label,
           send: '',
           type: 'modifier',
@@ -922,13 +1106,13 @@ const DenSettings = (() => {
           newSendInput.focus();
           return;
         }
-        editingKeybarButtons.push({
+        targetArray.push({
           label,
           send: sendRaw,
         });
       }
 
-      renderKeybarList();
+      renderFn();
       addForm.hidden = true;
     });
 

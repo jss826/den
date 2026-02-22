@@ -64,6 +64,8 @@ pub struct KeybarPosition {
     pub collapsed: bool,
     #[serde(default = "default_collapse_side")]
     pub collapse_side: String,
+    #[serde(default)]
+    pub secondary_visible: bool,
 }
 
 fn default_true() -> bool {
@@ -85,6 +87,8 @@ pub struct Settings {
     pub terminal_scrollback: u32,
     #[serde(default)]
     pub keybar_buttons: Option<Vec<KeybarButton>>,
+    #[serde(default)]
+    pub keybar_secondary_buttons: Option<Vec<KeybarButton>>,
     #[serde(default)]
     pub ssh_agent_forwarding: bool,
     #[serde(default)]
@@ -117,6 +121,7 @@ impl Default for Settings {
             theme: default_theme(),
             terminal_scrollback: default_scrollback(),
             keybar_buttons: None,
+            keybar_secondary_buttons: None,
             ssh_agent_forwarding: false,
             keybar_position: None,
             snippets: None,

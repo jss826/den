@@ -620,15 +620,13 @@ html, body {
   left: 0;
   right: 0;
   z-index: 160;
-  align-items: center;
+  flex-direction: column;
   background: var(--keybar-bg);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   border-left: none;
   border-right: none;
   border-radius: 0;
-  padding: 4px;
-  gap: 4px;
   box-shadow: 0 2px 8px var(--shadow);
   touch-action: none;
   cursor: ns-resize;
@@ -639,6 +637,55 @@ html, body {
 
 #keybar:not([hidden]) {
   display: flex;
+}
+
+.keybar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px;
+}
+
+.keybar-secondary {
+  padding: 0 4px 4px;
+}
+
+.keybar-secondary[hidden] {
+  display: none;
+}
+
+.keybar-buttons-secondary {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.keybar-secondary-toggle {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.keybar-secondary-toggle[hidden] {
+  display: none;
+}
+
+.keybar-secondary-toggle:hover {
+  color: var(--fg);
+  background: var(--hover);
 }
 
 .keybar-drag-handle {

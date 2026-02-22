@@ -2,11 +2,16 @@
 const Keybar = (() => {
   let container = null;
   let buttonsContainer = null;
+  let secondaryContainer = null;
+  let secondaryButtonsContainer = null;
+  let secondaryToggleBtn = null;
   let dragHandle = null;
   let collapseBtn = null;
   let tabEl = null;
   let modifiers = { ctrl: false, alt: false, shift: false };
   let activeKeys = [];
+  let activeSecondaryKeys = [];
+  let secondaryVisible = false;
   let currentPopup = null;
   let saveTimer = null;
 
@@ -63,15 +68,50 @@ const Keybar = (() => {
     { label: 'Screen', send: '', type: 'action', action: 'copy-screen', display: 'Copy screen' },
   ];
 
-  function init(el, customKeys) {
+  // デフォルトのサブ行キー配列
+  const DEFAULT_SECONDARY_KEYS = [
+    { label: 'Home', send: '\x1b[H', display: 'Home' },
+    { label: 'End', send: '\x1b[F', display: 'End' },
+    { label: 'PgUp', send: '\x1b[5~', display: 'Page Up' },
+    { label: 'PgDn', send: '\x1b[6~', display: 'Page Down' },
+    { label: 'Del', send: '\x1b[3~', display: 'Delete' },
+    { label: 'Ins', send: '\x1b[2~', display: 'Insert' },
+    { label: 'F1', send: '\x1bOP', display: 'F1' },
+    { label: 'F2', send: '\x1bOQ', display: 'F2' },
+    { label: 'F3', send: '\x1bOR', display: 'F3' },
+    { label: 'F4', send: '\x1bOS', display: 'F4' },
+    { label: 'F5', send: '\x1b[15~', display: 'F5' },
+    { label: 'F6', send: '\x1b[17~', display: 'F6' },
+    { label: 'F7', send: '\x1b[18~', display: 'F7' },
+    { label: 'F8', send: '\x1b[19~', display: 'F8' },
+    { label: 'F9', send: '\x1b[20~', display: 'F9' },
+    { label: 'F10', send: '\x1b[21~', display: 'F10' },
+    { label: 'F11', send: '\x1b[23~', display: 'F11' },
+    { label: 'F12', send: '\x1b[24~', display: 'F12' },
+  ];
+
+  function init(el, customKeys, customSecondaryKeys) {
     container = el;
     buttonsContainer = container.querySelector('.keybar-buttons');
+    secondaryContainer = container.querySelector('.keybar-secondary');
+    secondaryButtonsContainer = container.querySelector('.keybar-buttons-secondary');
+    secondaryToggleBtn = container.querySelector('.keybar-secondary-toggle');
     dragHandle = container.querySelector('.keybar-drag-handle');
     collapseBtn = container.querySelector('.keybar-collapse-btn');
     tabEl = document.getElementById('keybar-tab');
 
     activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
+    activeSecondaryKeys = customSecondaryKeys && customSecondaryKeys.length > 0
+      ? customSecondaryKeys : DEFAULT_SECONDARY_KEYS;
     render();
+
+    // Secondary toggle
+    if (secondaryToggleBtn) {
+      secondaryToggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleSecondary();
+      });
+    }
 
     // Drag — entire keybar (except buttons and collapse) is draggable
     container.addEventListener('pointerdown', onContainerDragStart);
@@ -103,13 +143,25 @@ const Keybar = (() => {
     });
   }
 
-  function reload(customKeys) {
+  function reload(customKeys, customSecondaryKeys) {
     activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
+    if (customSecondaryKeys !== undefined) {
+      activeSecondaryKeys = customSecondaryKeys && customSecondaryKeys.length > 0
+        ? customSecondaryKeys : DEFAULT_SECONDARY_KEYS;
+    }
     render();
   }
 
   function getDefaultKeys() {
     return DEFAULT_KEYS.map(k => {
+      const copy = { ...k };
+      if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
+      return copy;
+    });
+  }
+
+  function getDefaultSecondaryKeys() {
+    return DEFAULT_SECONDARY_KEYS.map(k => {
       const copy = { ...k };
       if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
       return copy;
@@ -158,6 +210,30 @@ const Keybar = (() => {
     return keybarVisible;
   }
 
+  // --- Secondary row toggle ---
+
+  function toggleSecondary() {
+    secondaryVisible = !secondaryVisible;
+    if (secondaryContainer) {
+      secondaryContainer.hidden = !secondaryVisible;
+    }
+    if (secondaryToggleBtn) {
+      secondaryToggleBtn.textContent = secondaryVisible ? '\u25B2' : '\u25BC';
+    }
+    schedulePositionSave();
+  }
+
+  function applySecondaryVisibility() {
+    if (secondaryContainer) {
+      secondaryContainer.hidden = !secondaryVisible;
+    }
+    if (secondaryToggleBtn) {
+      secondaryToggleBtn.textContent = secondaryVisible ? '\u25B2' : '\u25BC';
+      // Show toggle only if there are secondary keys
+      secondaryToggleBtn.hidden = activeSecondaryKeys.length === 0;
+    }
+  }
+
   // --- Collapse / Expand ---
 
   function collapse() {
@@ -189,8 +265,8 @@ const Keybar = (() => {
 
   function onContainerDragStart(e) {
     if (e.button !== 0) return;
-    // Don't drag when clicking on buttons or collapse
-    if (e.target.closest('.key-btn, .keybar-collapse-btn')) return;
+    // Don't drag when clicking on buttons, collapse, or secondary toggle
+    if (e.target.closest('.key-btn, .keybar-collapse-btn, .keybar-secondary-toggle')) return;
     e.preventDefault();
     const rect = container.getBoundingClientRect();
     dragState = {
@@ -308,6 +384,7 @@ const Keybar = (() => {
       saveTimer = null;
       updates = updates || {};
       updates.keybar_buttons = activeKeys;
+      updates.keybar_secondary_buttons = activeSecondaryKeys;
     }
     if (updates) {
       DenSettings.save(updates, { keepalive: true }).catch(() => {});
@@ -341,6 +418,7 @@ const Keybar = (() => {
       visible: keybarVisible,
       collapsed: collapsed,
       collapse_side: collapseSide,
+      secondary_visible: secondaryVisible,
     };
   }
 
@@ -351,6 +429,7 @@ const Keybar = (() => {
     if (pos && Number.isFinite(pos.top)) {
       keybarVisible = pos.visible !== false;
       collapsed = !!pos.collapsed;
+      secondaryVisible = !!pos.secondary_visible;
       collapseSide = (pos.collapse_side === 'left' || pos.collapse_side === 'right')
         ? pos.collapse_side : 'right';
 
@@ -634,9 +713,10 @@ const Keybar = (() => {
       }
       currentPopup.remove();
       // aria-expanded をリセット
-      const target = buttonsContainer || container;
-      target.querySelectorAll('[aria-expanded="true"]').forEach(el => {
-        el.setAttribute('aria-expanded', 'false');
+      [buttonsContainer, secondaryButtonsContainer].forEach(t => {
+        if (t) t.querySelectorAll('[aria-expanded="true"]').forEach(el => {
+          el.setAttribute('aria-expanded', 'false');
+        });
       });
       currentPopup = null;
     }
@@ -662,27 +742,28 @@ const Keybar = (() => {
     saveTimer = setTimeout(() => {
       saveTimer = null;
       if (typeof DenSettings !== 'undefined') {
-        DenSettings.save({ keybar_buttons: activeKeys });
+        DenSettings.save({
+          keybar_buttons: activeKeys,
+          keybar_secondary_buttons: activeSecondaryKeys,
+        });
       }
     }, SAVE_DEBOUNCE_MS);
   }
 
-  function render() {
-    const target = buttonsContainer || container;
+  /** キー配列をターゲット要素にボタンとしてレンダリングする共通関数 */
+  function renderButtonsTo(target, keys, keysArray) {
     target.innerHTML = '';
-    closeStackPopup();
-    modifiers = { ctrl: false, alt: false, shift: false };
 
-    activeKeys.forEach((key, keyIndex) => {
+    keys.forEach((key, keyIndex) => {
       const isStack = key.type === 'stack' || key.btn_type === 'stack';
       const isModifier = key.type === 'modifier' || key.btn_type === 'modifier';
       const isAction = key.type === 'action' || key.btn_type === 'action';
 
       if (isStack) {
         const items = key.items;
-        if (!items || items.length === 0) return; // 空スタックはスキップ
+        if (!items || items.length === 0) return;
         const sel = Math.min(key.selected || 0, items.length - 1);
-        key.selected = sel; // 正規化
+        key.selected = sel;
         const active = items[sel];
 
         const btn = document.createElement('button');
@@ -704,7 +785,6 @@ const Keybar = (() => {
         indicator.setAttribute('aria-hidden', 'true');
         btn.appendChild(indicator);
 
-        // 長押し検出用
         let pressTimer = null;
         let isLongPress = false;
 
@@ -772,6 +852,20 @@ const Keybar = (() => {
     });
   }
 
+  function render() {
+    closeStackPopup();
+    modifiers = { ctrl: false, alt: false, shift: false };
+
+    const primaryTarget = buttonsContainer || container;
+    renderButtonsTo(primaryTarget, activeKeys, activeKeys);
+
+    if (secondaryButtonsContainer) {
+      renderButtonsTo(secondaryButtonsContainer, activeSecondaryKeys, activeSecondaryKeys);
+    }
+
+    applySecondaryVisibility();
+  }
+
   /** CSI シーケンスに修飾パラメータを付加
    *  制約: 既にセミコロン付きパラメータを含む CSI（例: ESC[1;5A）には未対応。
    *  DEFAULT_KEYS の CSI は単一パラメータまたはパラメータなしのため現状問題なし。 */
@@ -789,9 +883,8 @@ const Keybar = (() => {
     modifiers.ctrl = false;
     modifiers.alt = false;
     modifiers.shift = false;
-    const target = buttonsContainer || container;
-    target.querySelectorAll('.modifier').forEach((btn) => {
-      btn.classList.remove('active');
+    [buttonsContainer, secondaryButtonsContainer].forEach(t => {
+      if (t) t.querySelectorAll('.modifier').forEach(btn => btn.classList.remove('active'));
     });
   }
 
@@ -801,7 +894,7 @@ const Keybar = (() => {
   }
 
   return {
-    init, reload, getDefaultKeys, isTouchDevice,
+    init, reload, getDefaultKeys, getDefaultSecondaryKeys, isTouchDevice,
     getModifiers, resetModifiers, executeKey: executeNormalKey,
     toggleVisibility, collapse, expand, isVisible,
   };

@@ -223,7 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
     DenSnippet.init(document.getElementById('snippet-btn'));
 
     // キーバー初期化（カスタムキー設定があればそれを使用）
-    Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'));
+    Keybar.init(document.getElementById('keybar'), DenSettings.get('keybar_buttons'), DenSettings.get('keybar_secondary_buttons'));
 
     // タブ切り替え
     document.querySelectorAll('.tab').forEach((tab) => {

@@ -210,7 +210,7 @@
           </div>
         </div>
         <div class="modal-section">
-          <label>Keybar Buttons</label>
+          <label>Keybar Buttons - Primary Row</label>
           <div id="keybar-editor" class="keybar-editor">
             <div id="keybar-btn-list" class="keybar-btn-list"></div>
             <div class="keybar-editor-actions">
@@ -267,6 +267,16 @@
                 <button id="keybar-add-confirm" class="modal-btn primary" type="button">Add</button>
                 <button id="keybar-add-cancel" class="modal-btn" type="button">Cancel</button>
               </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-section">
+          <label>Keybar Buttons - Secondary Row</label>
+          <div id="keybar-secondary-editor" class="keybar-editor">
+            <div id="keybar-secondary-btn-list" class="keybar-btn-list"></div>
+            <div class="keybar-editor-actions">
+              <button id="keybar-secondary-add-btn" class="modal-btn" type="button">Add Button</button>
+              <button id="keybar-secondary-reset-btn" class="modal-btn" type="button">Reset to Default</button>
             </div>
           </div>
         </div>
@@ -330,9 +340,15 @@
 
     <!-- キーバー (フローティング) -->
     <div id="keybar" hidden role="toolbar" aria-label="Keyboard bar">
-      <div class="keybar-drag-handle" aria-hidden="true">&#x2807;</div>
-      <div class="keybar-buttons"></div>
-      <button type="button" class="keybar-collapse-btn" aria-label="Collapse">&minus;</button>
+      <div class="keybar-row keybar-primary">
+        <div class="keybar-drag-handle" aria-hidden="true">&#x2807;</div>
+        <div class="keybar-buttons"></div>
+        <button type="button" class="keybar-secondary-toggle" aria-label="Toggle secondary row" hidden>&#x25BC;</button>
+        <button type="button" class="keybar-collapse-btn" aria-label="Collapse">&minus;</button>
+      </div>
+      <div class="keybar-row keybar-secondary" hidden>
+        <div class="keybar-buttons-secondary"></div>
+      </div>
     </div>
     <button type="button" id="keybar-tab" class="keybar-tab" data-side="right" hidden aria-label="Show keyboard bar">&#x2328;</button>
   </div>
