@@ -222,6 +222,7 @@ const DenSettings = (() => {
     list.innerHTML = '';
 
     editingArray.forEach((key, idx) => {
+      if (!key) return;
       const item = document.createElement('div');
       item.className = 'keybar-btn-item';
       const isStack = key.type === 'stack' || key.btn_type === 'stack';

@@ -620,7 +620,6 @@ html, body {
   left: 0;
   right: 0;
   z-index: 160;
-  flex-direction: column;
   background: var(--keybar-bg);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -637,6 +636,15 @@ html, body {
 
 #keybar:not([hidden]) {
   display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.keybar-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .keybar-row {
@@ -644,11 +652,11 @@ html, body {
   align-items: center;
   gap: 4px;
   width: 100%;
-  padding: 4px;
+  padding: 4px 4px 4px 0;
 }
 
 .keybar-secondary {
-  padding: 0 4px 4px;
+  padding: 0 4px 4px 0;
 }
 
 .keybar-secondary[hidden] {

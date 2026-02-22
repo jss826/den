@@ -24,6 +24,8 @@ const Keybar = (() => {
   let positionSaveTimer = null;
 
   const SAVE_DEBOUNCE_MS = 2000;
+  const DOUBLE_TAP_THRESHOLD = 300; // ms
+  const DOUBLE_TAP_MOVE_THRESHOLD = 3; // px
 
   // スクロールアクション → ターミナルメソッドのディスパッチマップ
   const SCROLL_ACTIONS = {
@@ -261,7 +263,9 @@ const Keybar = (() => {
     schedulePositionSave();
   }
 
-  // --- Drag (keybar) ---
+  // --- Drag (keybar) + double-tap detection ---
+
+  let lastTapTime = 0;
 
   function onContainerDragStart(e) {
     if (e.button !== 0) return;
@@ -270,9 +274,11 @@ const Keybar = (() => {
     e.preventDefault();
     const rect = container.getBoundingClientRect();
     dragState = {
+      startX: e.clientX,
       startY: e.clientY,
       origTop: rect.top,
       vh: window.innerHeight,
+      dist: 0,
     };
     container.setPointerCapture(e.pointerId);
     document.addEventListener('pointermove', onDragMove);
@@ -282,7 +288,9 @@ const Keybar = (() => {
 
   function onDragMove(e) {
     if (!dragState) return;
+    const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
+    dragState.dist = Math.max(dragState.dist, Math.abs(dx) + Math.abs(dy));
     let newTop = dragState.origTop + dy;
 
     newTop = Math.max(0, Math.min(newTop, dragState.vh - 40));
@@ -291,10 +299,22 @@ const Keybar = (() => {
   }
 
   function onDragEnd() {
+    const wasTap = dragState && dragState.dist < DOUBLE_TAP_MOVE_THRESHOLD;
     dragState = null;
     document.removeEventListener('pointermove', onDragMove);
     document.removeEventListener('pointerup', onDragEnd);
     document.removeEventListener('pointercancel', onDragEnd);
+
+    if (wasTap) {
+      const now = Date.now();
+      if (now - lastTapTime < DOUBLE_TAP_THRESHOLD) {
+        lastTapTime = 0;
+        toggleSecondary();
+        return;
+      }
+      lastTapTime = now;
+    }
+
     schedulePositionSave();
   }
 

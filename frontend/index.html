@@ -340,14 +340,16 @@
 
     <!-- キーバー (フローティング) -->
     <div id="keybar" hidden role="toolbar" aria-label="Keyboard bar">
-      <div class="keybar-row keybar-primary">
-        <div class="keybar-drag-handle" aria-hidden="true">&#x2807;</div>
-        <div class="keybar-buttons"></div>
-        <button type="button" class="keybar-secondary-toggle" aria-label="Toggle secondary row" hidden>&#x25BC;</button>
-        <button type="button" class="keybar-collapse-btn" aria-label="Collapse">&minus;</button>
-      </div>
-      <div class="keybar-row keybar-secondary" hidden>
-        <div class="keybar-buttons-secondary"></div>
+      <div class="keybar-drag-handle" aria-hidden="true">&#x2807;</div>
+      <div class="keybar-content">
+        <div class="keybar-row keybar-primary">
+          <div class="keybar-buttons"></div>
+          <button type="button" class="keybar-secondary-toggle" aria-label="Toggle secondary row" hidden>&#x25BC;</button>
+          <button type="button" class="keybar-collapse-btn" aria-label="Collapse">&minus;</button>
+        </div>
+        <div class="keybar-row keybar-secondary" hidden>
+          <div class="keybar-buttons-secondary"></div>
+        </div>
       </div>
     </div>
     <button type="button" id="keybar-tab" class="keybar-tab" data-side="right" hidden aria-label="Show keyboard bar">&#x2328;</button>
