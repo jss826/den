@@ -1,6 +1,7 @@
 pub mod assets;
 pub mod auth;
 pub mod clipboard_api;
+pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
 pub mod pty;
@@ -29,11 +30,11 @@ pub struct AppState {
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
-pub fn create_app(config: Config, registry: Arc<SessionRegistry>) -> Router {
+pub fn create_app(config: Config, registry: Arc<SessionRegistry>, store: Store) -> Router {
     // 起動ごとにランダムな HMAC シークレットを生成
     // 再起動で全トークンが無効化される（セキュリティ上望ましい）
     let hmac_secret: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
-    create_app_with_secret(config, registry, hmac_secret)
+    create_app_with_secret(config, registry, hmac_secret, store)
 }
 
 /// テスト用: 固定シークレットで Router を構築
@@ -41,9 +42,8 @@ pub fn create_app_with_secret(
     config: Config,
     registry: Arc<SessionRegistry>,
     hmac_secret: Vec<u8>,
+    store: Store,
 ) -> Router {
-    let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
-
     // NOTE: 永続化状態を追加する場合は、ここでスタートアップ時の整合性チェックを実装すること。
     // 例: 前回の異常終了で中断状態のままのリソースをリセットする（orphaned state cleanup）。
     // 以前はセッション永続化に対して store.cleanup_stale_running_sessions() を呼んでいた。

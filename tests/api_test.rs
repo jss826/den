@@ -29,8 +29,10 @@ fn test_config() -> Config {
 }
 
 fn test_app() -> axum::Router {
+    let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
-    den::create_app_with_secret(test_config(), registry, TEST_HMAC_SECRET.to_vec())
+    den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store)
 }
 
 fn auth_header() -> String {
@@ -299,8 +301,9 @@ async fn settings_get_default() {
 #[tokio::test]
 async fn settings_put_and_get() {
     let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT
     let req = Request::builder()
@@ -367,8 +370,9 @@ async fn settings_put_invalid_json() {
 #[tokio::test]
 async fn settings_put_partial_json() {
     let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT with only some fields — serde should use defaults for missing fields
     let req = Request::builder()
@@ -884,8 +888,9 @@ async fn clipboard_history_get_empty() {
 #[tokio::test]
 async fn clipboard_history_post_and_get() {
     let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // POST
     let req = Request::builder()
@@ -924,8 +929,9 @@ async fn clipboard_history_post_and_get() {
 #[tokio::test]
 async fn clipboard_history_dedup() {
     let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // Add two entries
     for text in ["first", "second"] {
@@ -965,8 +971,9 @@ async fn clipboard_history_dedup() {
 #[tokio::test]
 async fn clipboard_history_delete() {
     let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // Add an entry
     let req = Request::builder()

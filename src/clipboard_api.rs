@@ -31,11 +31,11 @@ pub async fn add_clipboard_entry(
     if req.text.is_empty() {
         return (StatusCode::UNPROCESSABLE_ENTITY, "text is required").into_response();
     }
-    // Validate: source must be "copy" or "osc52"
-    if req.source != "copy" && req.source != "osc52" {
+    // Validate: source must be "copy", "osc52", or "system"
+    if req.source != "copy" && req.source != "osc52" && req.source != "system" {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
-            "source must be copy or osc52",
+            "source must be copy, osc52, or system",
         )
             .into_response();
     }

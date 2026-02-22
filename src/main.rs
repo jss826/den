@@ -41,6 +41,9 @@ async fn main() {
         settings.sleep_prevention_timeout,
     );
 
+    // クリップボード監視（Windows: システムクリップボード変更を検知）
+    den::clipboard_monitor::start(store.clone());
+
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
     if let Some(ssh_port) = ssh_port {
         let ssh_registry = std::sync::Arc::clone(&registry);
@@ -58,7 +61,7 @@ async fn main() {
     }
 
     // HTTP サーバー（メイン）
-    let app = den::create_app(config, registry);
+    let app = den::create_app(config, registry, store);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_address, port))
         .await

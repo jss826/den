@@ -88,10 +88,10 @@ const ClipboardHistory = (() => {
         time.textContent = formatTime(entry.timestamp);
         meta.appendChild(time);
 
-        if (entry.source === 'osc52') {
+        if (entry.source !== 'copy') {
           const badge = document.createElement('span');
           badge.className = 'clipboard-history-badge';
-          badge.textContent = 'OSC52';
+          badge.textContent = entry.source === 'osc52' ? 'OSC52' : 'System';
           meta.appendChild(badge);
         }
 
