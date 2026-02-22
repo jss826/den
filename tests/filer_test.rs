@@ -28,7 +28,7 @@ fn test_config() -> Config {
 }
 
 fn test_app() -> axum::Router {
-    let registry = SessionRegistry::new("powershell.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string(), "off", 30);
     den::create_app_with_secret(test_config(), registry, TEST_HMAC_SECRET.to_vec())
 }
 
@@ -39,7 +39,7 @@ fn auth_header() -> String {
 /// Helper: create a shared app with a tempdir for filer operations
 fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string(), "off", 30);
     let app = den::create_app_with_secret(test_config(), registry, TEST_HMAC_SECRET.to_vec());
     (app, dir)
 }

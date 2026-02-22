@@ -1,5 +1,6 @@
 use den::config::Config;
 use den::pty::registry::SessionRegistry;
+use den::store::Store;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -31,8 +32,14 @@ async fn main() {
     tracing::info!("Shell: {}", config.shell);
     tracing::info!("Password: (custom)");
 
-    // SessionRegistry 生成
-    let registry = SessionRegistry::new(config.shell.clone());
+    // Settings から初期設定を読み込み、SessionRegistry を生成
+    let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
+    let settings = store.load_settings();
+    let registry = SessionRegistry::new(
+        config.shell.clone(),
+        &settings.sleep_prevention_mode,
+        settings.sleep_prevention_timeout,
+    );
 
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
     if let Some(ssh_port) = ssh_port {

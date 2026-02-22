@@ -81,6 +81,10 @@ pub struct Settings {
     pub keybar_position: Option<KeybarPosition>,
     #[serde(default)]
     pub snippets: Option<Vec<Snippet>>,
+    #[serde(default = "default_sleep_prevention_mode")]
+    pub sleep_prevention_mode: String,
+    #[serde(default = "default_sleep_prevention_timeout")]
+    pub sleep_prevention_timeout: u16,
 }
 
 fn default_font_size() -> u8 {
@@ -91,6 +95,12 @@ fn default_theme() -> String {
 }
 fn default_scrollback() -> u32 {
     1000
+}
+fn default_sleep_prevention_mode() -> String {
+    "user-activity".to_string()
+}
+fn default_sleep_prevention_timeout() -> u16 {
+    30
 }
 
 impl Default for Settings {
@@ -103,6 +113,8 @@ impl Default for Settings {
             ssh_agent_forwarding: false,
             keybar_position: None,
             snippets: None,
+            sleep_prevention_mode: default_sleep_prevention_mode(),
+            sleep_prevention_timeout: default_sleep_prevention_timeout(),
         }
     }
 }

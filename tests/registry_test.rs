@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use den::pty::registry::{ClientKind, RegistryError, SessionRegistry, SharedSession};
 
 fn new_registry() -> Arc<SessionRegistry> {
-    SessionRegistry::new("powershell.exe".to_string())
+    SessionRegistry::new("powershell.exe".to_string(), "off", 30)
 }
 
 fn session_name(test: &str) -> String {

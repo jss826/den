@@ -28,7 +28,7 @@ fn test_config() -> Config {
 }
 
 fn test_app() -> axum::Router {
-    let registry = SessionRegistry::new("powershell.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string(), "off", 30);
     den::create_app_with_secret(test_config(), registry, TEST_HMAC_SECRET.to_vec())
 }
 
@@ -298,7 +298,7 @@ async fn settings_get_default() {
 #[tokio::test]
 async fn settings_put_and_get() {
     let config = test_config();
-    let registry = SessionRegistry::new("powershell.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string(), "off", 30);
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
 
     // PUT
@@ -366,7 +366,7 @@ async fn settings_put_invalid_json() {
 #[tokio::test]
 async fn settings_put_partial_json() {
     let config = test_config();
-    let registry = SessionRegistry::new("powershell.exe".to_string());
+    let registry = SessionRegistry::new("powershell.exe".to_string(), "off", 30);
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec());
 
     // PUT with only some fields — serde should use defaults for missing fields

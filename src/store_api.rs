@@ -64,9 +64,26 @@ pub async fn put_settings(
             }
         }
     }
+    // Validate sleep prevention mode
+    if !matches!(
+        settings.sleep_prevention_mode.as_str(),
+        "always" | "user-activity" | "off"
+    ) {
+        settings.sleep_prevention_mode = "user-activity".to_string();
+    }
+    settings.sleep_prevention_timeout = settings.sleep_prevention_timeout.clamp(1, 480);
+
     let store = state.store.clone();
+    let sleep_mode = settings.sleep_prevention_mode.clone();
+    let sleep_timeout = settings.sleep_prevention_timeout;
     match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
-        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Ok(())) => {
+            state
+                .registry
+                .update_sleep_config(&sleep_mode, sleep_timeout)
+                .await;
+            StatusCode::OK.into_response()
+        }
         Ok(Err(e)) => {
             tracing::error!("Failed to save settings: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

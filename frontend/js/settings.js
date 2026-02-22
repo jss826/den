@@ -8,6 +8,8 @@ const DenSettings = (() => {
     ssh_agent_forwarding: false,
     keybar_position: null,
     snippets: null,
+    sleep_prevention_mode: 'user-activity',
+    sleep_prevention_timeout: 30,
   };
 
   // キーバー設定で使用する一時配列
@@ -566,6 +568,14 @@ const DenSettings = (() => {
     const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
     if (agentFwdCheck) agentFwdCheck.checked = !!current.ssh_agent_forwarding;
 
+    // Sleep prevention 設定
+    const sleepMode = document.getElementById('setting-sleep-mode');
+    if (sleepMode) sleepMode.value = current.sleep_prevention_mode || 'user-activity';
+    const sleepTimeout = document.getElementById('setting-sleep-timeout');
+    if (sleepTimeout) sleepTimeout.value = current.sleep_prevention_timeout || 30;
+    const timeoutRow = document.getElementById('sleep-timeout-row');
+    if (timeoutRow) timeoutRow.hidden = (sleepMode && sleepMode.value !== 'user-activity');
+
     // キーバー設定の初期化（items を deep clone）
     if (current.keybar_buttons && current.keybar_buttons.length > 0) {
       editingKeybarButtons = current.keybar_buttons.map(k => {
@@ -643,6 +653,11 @@ const DenSettings = (() => {
 
       const snippets = editingSnippets.length > 0 ? editingSnippets.map(s => ({ ...s })) : null;
 
+      const sleepModeEl = document.getElementById('setting-sleep-mode');
+      const sleepMode = sleepModeEl ? sleepModeEl.value : 'user-activity';
+      const sleepTimeoutEl = document.getElementById('setting-sleep-timeout');
+      const sleepTimeout = sleepTimeoutEl ? Math.max(1, Math.min(480, parseInt(sleepTimeoutEl.value, 10) || 30)) : 30;
+
       const ok = await save({
         font_size: Math.max(8, Math.min(32, fontSize)),
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
@@ -650,6 +665,8 @@ const DenSettings = (() => {
         keybar_buttons: keybarButtons,
         ssh_agent_forwarding: sshAgentFwd,
         snippets: snippets,
+        sleep_prevention_mode: sleepMode,
+        sleep_prevention_timeout: sleepTimeout,
       });
       if (!ok) return;
       apply();
@@ -677,6 +694,13 @@ const DenSettings = (() => {
     const modal = document.getElementById('settings-modal');
     if (modal) modal.addEventListener('click', (e) => {
       if (e.target === modal) closeModal();
+    });
+
+    // --- Sleep prevention ---
+    const sleepModeSelect = document.getElementById('setting-sleep-mode');
+    if (sleepModeSelect) sleepModeSelect.addEventListener('change', () => {
+      const timeoutRow = document.getElementById('sleep-timeout-row');
+      if (timeoutRow) timeoutRow.hidden = (sleepModeSelect.value !== 'user-activity');
     });
 
     // --- Keybar editor ---

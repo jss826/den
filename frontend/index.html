@@ -197,6 +197,19 @@
           <small class="setting-hint">Forward local SSH keys to remote hosts (security risk on untrusted hosts)</small>
         </div>
         <div class="modal-section">
+          <label>Sleep Prevention</label>
+          <select id="setting-sleep-mode" class="settings-input">
+            <option value="user-activity">After user activity (default)</option>
+            <option value="always">Always (while Den is running)</option>
+            <option value="off">Off</option>
+          </select>
+          <small class="setting-hint">Prevent system sleep while terminal is in use (Windows only)</small>
+          <div id="sleep-timeout-row" style="margin-top:0.5rem">
+            <label>Timeout (minutes)</label>
+            <input type="number" id="setting-sleep-timeout" class="settings-input" min="1" max="480" value="30">
+          </div>
+        </div>
+        <div class="modal-section">
           <label>Keybar Buttons</label>
           <div id="keybar-editor" class="keybar-editor">
             <div id="keybar-btn-list" class="keybar-btn-list"></div>
