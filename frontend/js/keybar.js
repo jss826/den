@@ -620,7 +620,7 @@ const Keybar = (() => {
   }
 
   /** スタックポップアップを開く */
-  function openStackPopup(anchorBtn, stackKey, keyIndex) {
+  function openStackPopup(anchorBtn, stackKey, keyIndex, keysArray) {
     closeStackPopup();
 
     const items = stackKey.items;
@@ -652,7 +652,7 @@ const Keybar = (() => {
         e.preventDefault();
         e.stopPropagation();
         stackKey.selected = i;
-        activeKeys[keyIndex] = stackKey;
+        keysArray[keyIndex] = stackKey;
         updateStackButton(anchorBtn, stackKey);
         closeStackPopup();
         scheduleSave();
@@ -751,7 +751,7 @@ const Keybar = (() => {
   }
 
   /** キー配列をターゲット要素にボタンとしてレンダリングする共通関数 */
-  function renderButtonsTo(target, keys, keysArray) {
+  function renderButtonsTo(target, keys) {
     target.innerHTML = '';
 
     keys.forEach((key, keyIndex) => {
@@ -793,7 +793,7 @@ const Keybar = (() => {
           isLongPress = false;
           pressTimer = setTimeout(() => {
             isLongPress = true;
-            openStackPopup(btn, key, keyIndex);
+            openStackPopup(btn, key, keyIndex, keys);
           }, 350);
         });
 
@@ -857,10 +857,10 @@ const Keybar = (() => {
     modifiers = { ctrl: false, alt: false, shift: false };
 
     const primaryTarget = buttonsContainer || container;
-    renderButtonsTo(primaryTarget, activeKeys, activeKeys);
+    renderButtonsTo(primaryTarget, activeKeys);
 
     if (secondaryButtonsContainer) {
-      renderButtonsTo(secondaryButtonsContainer, activeSecondaryKeys, activeSecondaryKeys);
+      renderButtonsTo(secondaryButtonsContainer, activeSecondaryKeys);
     }
 
     applySecondaryVisibility();

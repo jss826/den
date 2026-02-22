@@ -211,12 +211,17 @@ const DenSettings = (() => {
 
   // --- Keybar 設定 UI ---
 
-  function renderKeybarList() {
-    const list = document.getElementById('keybar-btn-list');
+  // Event delegation 用の状態管理（リスト ID → { array, render }）
+  const keybarBtnListState = {};
+
+  function renderKeybarBtnList(listId, editingArray, renderFn) {
+    const list = document.getElementById(listId);
     if (!list) return;
+
+    keybarBtnListState[listId] = { array: editingArray, render: renderFn };
     list.innerHTML = '';
 
-    editingKeybarButtons.forEach((key, idx) => {
+    editingArray.forEach((key, idx) => {
       const item = document.createElement('div');
       item.className = 'keybar-btn-item';
       const isStack = key.type === 'stack' || key.btn_type === 'stack';
@@ -244,54 +249,112 @@ const DenSettings = (() => {
       removeBtn.textContent = '\u00d7';
       removeBtn.type = 'button';
       removeBtn.setAttribute('data-tooltip', 'Remove');
-      removeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        editingKeybarButtons.splice(idx, 1);
-        renderKeybarList();
-      });
       item.appendChild(removeBtn);
 
-      // Desktop drag & drop
-      item.addEventListener('dragstart', (e) => {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', String(idx));
-        item.classList.add('dragging');
-      });
-      item.addEventListener('dragend', () => {
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-      });
-      item.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        item.classList.add('drag-over');
-      });
-      item.addEventListener('dragleave', () => {
-        item.classList.remove('drag-over');
-      });
-      item.addEventListener('drop', (e) => {
-        e.preventDefault();
-        item.classList.remove('drag-over');
-        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        const toIdx = idx;
-        if (fromIdx !== toIdx) {
-          const moved = editingKeybarButtons.splice(fromIdx, 1)[0];
-          editingKeybarButtons.splice(toIdx, 0, moved);
-          renderKeybarList();
-        }
-      });
+      list.appendChild(item);
+    });
 
-      // Touch drag & drop
+    // Event delegation: attach once per list element
+    if (!list._delegated) {
+      list._delegated = true;
+      let currentDragOverEl = null;
       let touchStartIdx = null;
       let touchClone = null;
       let touchCurrentOverIdx = null;
+      let touchTimer = null;
+      let touchDragItem = null;
 
-      item.addEventListener('touchstart', (e) => {
-        if (e.target.classList.contains('keybar-btn-remove')) return;
-        touchStartIdx = idx;
+      function getState() { return keybarBtnListState[listId]; }
+      function getItemIndex(el) {
+        const item = el.closest('.keybar-btn-item');
+        if (!item || item.dataset.index === undefined) return -1;
+        return parseInt(item.dataset.index, 10);
+      }
+      function clearDragOver() {
+        if (currentDragOverEl) {
+          currentDragOverEl.classList.remove('drag-over');
+          currentDragOverEl = null;
+        }
+      }
+      function cleanupTouch() {
+        clearTimeout(touchTimer);
+        touchTimer = null;
+        if (touchDragItem) {
+          touchDragItem.classList.remove('dragging');
+          touchDragItem = null;
+        }
+        clearDragOver();
+        if (touchClone) { touchClone.remove(); touchClone = null; }
+        touchStartIdx = null;
+        touchCurrentOverIdx = null;
+      }
+
+      // Click delegation (remove)
+      list.addEventListener('click', (e) => {
+        const btn = e.target.closest('.keybar-btn-remove');
+        if (!btn) return;
+        e.stopPropagation();
+        const idx = getItemIndex(btn);
+        if (idx < 0) return;
+        const s = getState();
+        s.array.splice(idx, 1);
+        s.render();
+      });
+
+      // Desktop drag & drop delegation
+      list.addEventListener('dragstart', (e) => {
+        const idx = getItemIndex(e.target);
+        if (idx < 0) return;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(idx));
+        e.target.closest('.keybar-btn-item').classList.add('dragging');
+      });
+      list.addEventListener('dragend', (e) => {
+        const item = e.target.closest('.keybar-btn-item');
+        if (item) item.classList.remove('dragging');
+        clearDragOver();
+      });
+      list.addEventListener('dragover', (e) => {
+        const item = e.target.closest('.keybar-btn-item');
+        if (!item) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (currentDragOverEl !== item) {
+          clearDragOver();
+          item.classList.add('drag-over');
+          currentDragOverEl = item;
+        }
+      });
+      list.addEventListener('dragleave', (e) => {
+        const item = e.target.closest('.keybar-btn-item');
+        if (item && currentDragOverEl === item) clearDragOver();
+      });
+      list.addEventListener('drop', (e) => {
+        e.preventDefault();
+        clearDragOver();
+        const toItem = e.target.closest('.keybar-btn-item');
+        if (!toItem) return;
+        const s = getState();
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        if (isNaN(fromIdx) || fromIdx < 0 || fromIdx >= s.array.length) return;
+        const toIdx = parseInt(toItem.dataset.index, 10);
+        if (fromIdx !== toIdx) {
+          const moved = s.array.splice(fromIdx, 1)[0];
+          s.array.splice(toIdx, 0, moved);
+          s.render();
+        }
+      });
+
+      // Touch drag & drop delegation
+      list.addEventListener('touchstart', (e) => {
+        if (e.target.closest('.keybar-btn-remove')) return;
+        const item = e.target.closest('.keybar-btn-item');
+        if (!item) return;
+        touchStartIdx = parseInt(item.dataset.index, 10);
         const touch = e.touches[0];
-        // Long press to initiate drag
-        item._touchTimer = setTimeout(() => {
+        touchTimer = setTimeout(() => {
+          touchTimer = null;
+          touchDragItem = item;
           item.classList.add('dragging');
           touchClone = item.cloneNode(true);
           touchClone.style.position = 'fixed';
@@ -304,58 +367,55 @@ const DenSettings = (() => {
         }, 200);
       }, { passive: true });
 
-      item.addEventListener('touchmove', (e) => {
-        if (!touchClone && !item._touchTimer) return;
-        if (!touchClone) return; // timer hasn't fired yet
+      list.addEventListener('touchmove', (e) => {
+        if (!touchClone) return;
         e.preventDefault();
         const touch = e.touches[0];
         touchClone.style.left = (touch.clientX - 20) + 'px';
         touchClone.style.top = (touch.clientY - 20) + 'px';
-
-        // Find element under touch
         const overEl = document.elementFromPoint(touch.clientX, touch.clientY);
         const overItem = overEl ? overEl.closest('.keybar-btn-item') : null;
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
         if (overItem && overItem.dataset.index !== undefined) {
-          overItem.classList.add('drag-over');
+          if (currentDragOverEl !== overItem) {
+            clearDragOver();
+            overItem.classList.add('drag-over');
+            currentDragOverEl = overItem;
+          }
           touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
         } else {
+          clearDragOver();
           touchCurrentOverIdx = null;
         }
       }, { passive: false });
 
-      item.addEventListener('touchend', () => {
-        clearTimeout(item._touchTimer);
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (touchClone) {
-          touchClone.remove();
-          touchClone = null;
-          if (touchCurrentOverIdx !== null && touchStartIdx !== touchCurrentOverIdx) {
-            const moved = editingKeybarButtons.splice(touchStartIdx, 1)[0];
-            editingKeybarButtons.splice(touchCurrentOverIdx, 0, moved);
-            renderKeybarList();
-          }
+      list.addEventListener('touchend', () => {
+        const startIdx = touchStartIdx;
+        const overIdx = touchCurrentOverIdx;
+        const hadClone = !!touchClone;
+        cleanupTouch();
+        if (hadClone && overIdx !== null && startIdx !== overIdx) {
+          const s = getState();
+          const moved = s.array.splice(startIdx, 1)[0];
+          s.array.splice(overIdx, 0, moved);
+          s.render();
         }
-        touchStartIdx = null;
-        touchCurrentOverIdx = null;
       });
 
-      item.addEventListener('touchcancel', () => {
-        clearTimeout(item._touchTimer);
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (touchClone) { touchClone.remove(); touchClone = null; }
-        touchStartIdx = null;
-        touchCurrentOverIdx = null;
+      list.addEventListener('touchcancel', () => {
+        cleanupTouch();
       });
+    }
+  }
 
-      list.appendChild(item);
-    });
+  function renderKeybarList() {
+    renderKeybarBtnList('keybar-btn-list', editingKeybarButtons, renderKeybarList);
+  }
+
+  function renderKeybarSecondaryList() {
+    renderKeybarBtnList('keybar-secondary-btn-list', editingKeybarSecondaryButtons, renderKeybarSecondaryList);
   }
 
   function getEditingButtons() {
-    // 保存用: items を deep clone（スタック対応）
     return editingKeybarButtons.map(k => {
       const copy = { ...k };
       if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
@@ -368,146 +428,6 @@ const DenSettings = (() => {
       const copy = { ...k };
       if (copy.items) copy.items = copy.items.map(i => ({ ...i }));
       return copy;
-    });
-  }
-
-  function renderKeybarSecondaryList() {
-    const list = document.getElementById('keybar-secondary-btn-list');
-    if (!list) return;
-    list.innerHTML = '';
-
-    editingKeybarSecondaryButtons.forEach((key, idx) => {
-      const item = document.createElement('div');
-      item.className = 'keybar-btn-item';
-      const isStack = key.type === 'stack' || key.btn_type === 'stack';
-      if (isStack) {
-        item.classList.add('stack');
-      } else if (key.type === 'modifier' || key.btn_type === 'modifier') {
-        item.classList.add('modifier');
-      }
-      if (key.type === 'action' || key.btn_type === 'action') {
-        item.classList.add('action');
-      }
-      item.setAttribute('draggable', 'true');
-      item.dataset.index = idx;
-
-      const labelSpan = document.createElement('span');
-      if (isStack && key.items && key.items.length > 0) {
-        labelSpan.textContent = key.items.map(i => i.label).join('/');
-      } else {
-        labelSpan.textContent = key.label;
-      }
-      item.appendChild(labelSpan);
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'keybar-btn-remove';
-      removeBtn.textContent = '\u00d7';
-      removeBtn.type = 'button';
-      removeBtn.setAttribute('data-tooltip', 'Remove');
-      removeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        editingKeybarSecondaryButtons.splice(idx, 1);
-        renderKeybarSecondaryList();
-      });
-      item.appendChild(removeBtn);
-
-      // Desktop drag & drop
-      item.addEventListener('dragstart', (e) => {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', String(idx));
-        item.classList.add('dragging');
-      });
-      item.addEventListener('dragend', () => {
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-      });
-      item.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        item.classList.add('drag-over');
-      });
-      item.addEventListener('dragleave', () => {
-        item.classList.remove('drag-over');
-      });
-      item.addEventListener('drop', (e) => {
-        e.preventDefault();
-        item.classList.remove('drag-over');
-        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
-        const toIdx = idx;
-        if (fromIdx !== toIdx) {
-          const moved = editingKeybarSecondaryButtons.splice(fromIdx, 1)[0];
-          editingKeybarSecondaryButtons.splice(toIdx, 0, moved);
-          renderKeybarSecondaryList();
-        }
-      });
-
-      // Touch drag & drop
-      let touchStartIdx = null;
-      let touchClone = null;
-      let touchCurrentOverIdx = null;
-
-      item.addEventListener('touchstart', (e) => {
-        if (e.target.classList.contains('keybar-btn-remove')) return;
-        touchStartIdx = idx;
-        const touch = e.touches[0];
-        item._touchTimer = setTimeout(() => {
-          item.classList.add('dragging');
-          touchClone = item.cloneNode(true);
-          touchClone.style.position = 'fixed';
-          touchClone.style.zIndex = '999';
-          touchClone.style.pointerEvents = 'none';
-          touchClone.style.opacity = '0.8';
-          touchClone.style.left = (touch.clientX - 20) + 'px';
-          touchClone.style.top = (touch.clientY - 20) + 'px';
-          document.body.appendChild(touchClone);
-        }, 200);
-      }, { passive: true });
-
-      item.addEventListener('touchmove', (e) => {
-        if (!touchClone && !item._touchTimer) return;
-        if (!touchClone) return;
-        e.preventDefault();
-        const touch = e.touches[0];
-        touchClone.style.left = (touch.clientX - 20) + 'px';
-        touchClone.style.top = (touch.clientY - 20) + 'px';
-        const overEl = document.elementFromPoint(touch.clientX, touch.clientY);
-        const overItem = overEl ? overEl.closest('.keybar-btn-item') : null;
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (overItem && overItem.dataset.index !== undefined) {
-          overItem.classList.add('drag-over');
-          touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
-        } else {
-          touchCurrentOverIdx = null;
-        }
-      }, { passive: false });
-
-      item.addEventListener('touchend', () => {
-        clearTimeout(item._touchTimer);
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (touchClone) {
-          touchClone.remove();
-          touchClone = null;
-          if (touchCurrentOverIdx !== null && touchStartIdx !== touchCurrentOverIdx) {
-            const moved = editingKeybarSecondaryButtons.splice(touchStartIdx, 1)[0];
-            editingKeybarSecondaryButtons.splice(touchCurrentOverIdx, 0, moved);
-            renderKeybarSecondaryList();
-          }
-        }
-        touchStartIdx = null;
-        touchCurrentOverIdx = null;
-      });
-
-      item.addEventListener('touchcancel', () => {
-        clearTimeout(item._touchTimer);
-        item.classList.remove('dragging');
-        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        if (touchClone) { touchClone.remove(); touchClone = null; }
-        touchStartIdx = null;
-        touchCurrentOverIdx = null;
-      });
-
-      list.appendChild(item);
     });
   }
 
