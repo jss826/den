@@ -235,7 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ハッシュルーティング: 初期タブ適用 + hashchange リスナー
     if (initialHash.tab !== 'terminal') switchTab(initialHash.tab);
-    window.addEventListener('hashchange', () => applyHash());
+    window.addEventListener('hashchange', applyHash);
 
     // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
     // Safari はキーボード表示時にページ自体をスクロールする（overflow:hidden でも）
@@ -292,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Hash routing ---
-  let hashUpdateInProgress = false;
+  let lastSetHash = '';
 
   const TAB_MAP = { files: 'filer', terminal: 'terminal' };
 
@@ -317,21 +317,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function setHash(hash) {
-    if (hashUpdateInProgress) return;
-    hashUpdateInProgress = true;
+    if (location.hash === hash) return;
+    lastSetHash = hash;
     location.hash = hash;
-    Promise.resolve().then(() => { hashUpdateInProgress = false; });
   }
 
   function applyHash() {
-    if (hashUpdateInProgress) return;
-    hashUpdateInProgress = true;
+    if (location.hash === lastSetHash) return;
     const { tab, session } = parseHash();
     switchTab(tab);
     if (tab === 'terminal' && session && !DenTerminal.validateSessionName(session) && session !== DenTerminal.getCurrentSession()) {
       DenTerminal.switchSession(session);
     }
-    Promise.resolve().then(() => { hashUpdateInProgress = false; });
   }
 
   function initSidebarToggles() {

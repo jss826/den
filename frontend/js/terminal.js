@@ -55,10 +55,13 @@ const DenTerminal = (() => {
   function selectRenderer(t) {
     try {
       const webglAddon = new WebglAddon.WebglAddon();
-      webglAddon.onContextLost(() => webglAddon.dispose());
+      webglAddon.onContextLost(() => {
+        console.warn('WebGL context lost, falling back to DOM renderer');
+        webglAddon.dispose();
+      });
       t.loadAddon(webglAddon);
-    } catch (_e) {
-      console.warn('WebGL not available, using DOM renderer');
+    } catch (e) {
+      console.warn('WebGL not available, using DOM renderer', e);
     }
   }
 
