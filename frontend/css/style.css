@@ -976,6 +976,13 @@ html, body {
   border-color: var(--accent);
 }
 
+.settings-version {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 8px 0 0;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

@@ -687,6 +687,9 @@ const DenSettings = (() => {
     const snippetAddForm = document.getElementById('snippet-add-form');
     if (snippetAddForm) snippetAddForm.hidden = true;
 
+    const verEl = document.getElementById('settings-version');
+    if (verEl && current.version) verEl.textContent = 'Den v' + current.version;
+
     modal.hidden = false;
   }
 

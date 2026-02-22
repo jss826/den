@@ -10,7 +10,10 @@ use crate::store::Settings;
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.load_settings()).await {
-        Ok(settings) => Json(settings).into_response(),
+        Ok(mut settings) => {
+            settings.version = env!("CARGO_PKG_VERSION").to_string();
+            Json(settings).into_response()
+        }
         Err(e) => {
             tracing::error!("load_settings task panicked: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
