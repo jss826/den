@@ -5,6 +5,7 @@ const DenSnippet = (() => {
   let btn = null;
   let popup = null;
   let rafId = null;
+  let resizeRaf = null;
 
   function init(button) {
     btn = button;
@@ -67,8 +68,8 @@ const DenSnippet = (() => {
     document.body.appendChild(popup);
     positionPopup();
 
-    // Reposition on resize
-    window.addEventListener('resize', positionPopup);
+    // Reposition on resize (rAF throttled)
+    window.addEventListener('resize', onResize);
 
     // Close on outside click (delayed to avoid catching the opening click)
     rafId = requestAnimationFrame(() => {
@@ -76,6 +77,11 @@ const DenSnippet = (() => {
       document.addEventListener('pointerdown', onOutsideClick, true);
       rafId = null;
     });
+  }
+
+  function onResize() {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => { resizeRaf = null; positionPopup(); });
   }
 
   function positionPopup() {
@@ -95,7 +101,11 @@ const DenSnippet = (() => {
       popup.remove();
       popup = null;
     }
-    window.removeEventListener('resize', positionPopup);
+    if (resizeRaf !== null) {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = null;
+    }
+    window.removeEventListener('resize', onResize);
     document.removeEventListener('pointerdown', onOutsideClick, true);
   }
 

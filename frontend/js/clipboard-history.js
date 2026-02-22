@@ -5,6 +5,7 @@ const ClipboardHistory = (() => {
   let btn = null;
   let popup = null;
   let rafId = null;
+  let resizeRaf = null;
 
   function init(button) {
     btn = button;
@@ -116,12 +117,17 @@ const ClipboardHistory = (() => {
     document.body.appendChild(popup);
     positionPopup();
 
-    window.addEventListener('resize', positionPopup);
+    window.addEventListener('resize', onResize);
     rafId = requestAnimationFrame(() => {
       if (!popup) return;
       document.addEventListener('pointerdown', onOutsideClick, true);
       rafId = null;
     });
+  }
+
+  function onResize() {
+    if (resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => { resizeRaf = null; positionPopup(); });
   }
 
   function positionPopup() {
@@ -140,7 +146,11 @@ const ClipboardHistory = (() => {
       popup.remove();
       popup = null;
     }
-    window.removeEventListener('resize', positionPopup);
+    if (resizeRaf !== null) {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = null;
+    }
+    window.removeEventListener('resize', onResize);
     document.removeEventListener('pointerdown', onOutsideClick, true);
   }
 

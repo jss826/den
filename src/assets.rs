@@ -2,6 +2,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use bytes::Bytes;
 use rust_embed::Embed;
 
 #[derive(Embed)]
@@ -30,10 +31,10 @@ fn serve_file(path: &str) -> Response {
             };
             // ETag: rust-embed のハッシュを利用
             let etag = hex::encode(file.metadata.sha256_hash());
-            // Cow を直接 Body に変換（Borrowed の場合コピー不要）
-            let body: Vec<u8> = match file.data {
-                std::borrow::Cow::Borrowed(b) => b.to_vec(),
-                std::borrow::Cow::Owned(v) => v,
+            // Cow を直接 Body に変換（Borrowed は zero-copy）
+            let body: Bytes = match file.data {
+                std::borrow::Cow::Borrowed(b) => Bytes::from_static(b),
+                std::borrow::Cow::Owned(v) => Bytes::from(v),
             };
             (
                 StatusCode::OK,
