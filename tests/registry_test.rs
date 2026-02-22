@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serial_test::serial;
 use tokio::sync::broadcast;
 
 use den::pty::registry::{ClientKind, RegistryError, SessionRegistry, SharedSession};
@@ -21,6 +22,7 @@ fn session_name(test: &str) -> String {
 }
 
 /// ConPTY の DSR (`ESC[6n`) に CPR で応答し、シェルが起動するまで待つ。
+/// シェルが初期化前に死亡した場合は panic する。
 async fn init_shell(session: &Arc<SharedSession>, rx: &mut broadcast::Receiver<Vec<u8>>) {
     let overall = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut buf = Vec::new();
@@ -35,7 +37,14 @@ async fn init_shell(session: &Arc<SharedSession>, rx: &mut broadcast::Receiver<V
                     break;
                 }
             }
-            _ => return,
+            _ => {
+                assert!(
+                    session.is_alive(),
+                    "Shell died during init (DSR phase). Received {} bytes but no DSR.",
+                    buf.len()
+                );
+                return;
+            }
         }
     }
 
@@ -47,6 +56,11 @@ async fn init_shell(session: &Arc<SharedSession>, rx: &mut broadcast::Receiver<V
             _ => break,
         }
     }
+
+    assert!(
+        session.is_alive(),
+        "Shell died during init (idle-wait phase)"
+    );
 }
 
 /// exit 後にセッションが dead になるまでポーリング
@@ -109,6 +123,7 @@ async fn attach_nonexistent_returns_not_found() {
 // ============================================================
 
 #[test]
+#[serial]
 fn pty_non_interactive() {
     let rt = build_test_runtime();
     rt.block_on(async {
@@ -286,6 +301,7 @@ fn pty_non_interactive() {
 // ============================================================
 
 #[test]
+#[serial]
 fn pty_interactive() {
     let rt = build_test_runtime();
     rt.block_on(async {
@@ -373,6 +389,7 @@ fn pty_interactive() {
 // ============================================================
 
 #[test]
+#[serial]
 fn pty_exit_and_recreate() {
     let rt = build_test_runtime();
     rt.block_on(async {
