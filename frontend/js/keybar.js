@@ -298,8 +298,10 @@ const Keybar = (() => {
     container.style.top = newTop + 'px';
   }
 
-  function onDragEnd() {
-    const wasTap = dragState && dragState.dist < DOUBLE_TAP_MOVE_THRESHOLD;
+  function onDragEnd(e) {
+    const wasTap = dragState && dragState.dist < DOUBLE_TAP_MOVE_THRESHOLD
+      && e && e.type === 'pointerup';
+    if (!wasTap) lastTapTime = 0;
     dragState = null;
     document.removeEventListener('pointermove', onDragMove);
     document.removeEventListener('pointerup', onDragEnd);
