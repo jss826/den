@@ -18,7 +18,7 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
    - 引数なしなら最新タグから変更規模に応じてバージョンを提案
    - タグが無ければ `v0.1.0` から開始
 5. 前回タグからの変更一覧を `git log --oneline <前回タグ>..HEAD` で取得
-6. リリースノートを生成（日本語、カテゴリ分け: 新機能 / 修正 / その他）
+6. リリースノートを生成（英語、カテゴリ分け: Features / Fixes / Other）
 7. バージョン番号とリリースノートをユーザーに提示
 
 → **承認待ち**
@@ -36,7 +36,7 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 
 - 未コミットの変更がある場合は Phase 1 で停止する
 - 既存タグと重複する場合はエラーで止まる
-- リリースノートは日本語で書く
+- リリースノートは英語で書く (Categories: Features / Fixes / Other)
 - `gh` コマンド失敗時はエラー内容を報告して止まる
 
 ## 完了条件

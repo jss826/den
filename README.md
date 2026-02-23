@@ -1,6 +1,115 @@
 # Den
 
-iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用ワークステーション。
+**English** | [日本語](README.ja.md)
+
+A self-hosted web workstation accessible from tablets and phones.
+Built-in SSH server enables seamless terminal session handoff across devices.
+
+## Features
+
+- **Web Terminal** — xterm.js v6 with touch-friendly keybar (Shift, Ctrl, F1–F12, etc.)
+- **Floating Terminal** — draggable/resizable overlay terminal (Ctrl+\` or tab bar button)
+- **File Manager** — tree view, CodeMirror 6 editor, upload/download, search, image/Markdown preview
+- **SFTP Remote Files** — connect to remote SSH hosts and browse/edit files via russh-sftp
+- **Built-in SSH Server** — russh-based, password + public key auth, session attach/create
+- **12 Themes** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
+- **Snippets** — one-click command input from customizable snippet list
+- **Clipboard History** — automatic clipboard tracking with system clipboard monitoring
+- **Authentication** — HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
+- **Server-side Persistence** — settings and session history saved to JSON files
+- **Accessibility** — ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion
+- **Mobile Support** — sidebar toggle, iPad keyboard layout, clipboard fallback for HTTP LAN access
+
+## Quick Start
+
+Requires [just](https://github.com/casey/just) task runner.
+
+```sh
+cargo install just
+
+# Set password in .env (first time only)
+echo 'DEN_PASSWORD=your_password' > .env
+
+# Development
+just dev              # debug build & run (localhost:3939)
+just watch            # hot-reload development (cargo-watch)
+
+# Production
+just prod             # release build & run (0.0.0.0:8080)
+just prod strongpw    # override password
+```
+
+In development builds, `rust-embed` reads directly from the filesystem — changes to `frontend/` are reflected with a browser reload.
+
+### All Commands
+
+| Command | Description |
+|---------|-------------|
+| `just dev` | Development build & run |
+| `just prod [pw]` | Production build & run |
+| `just watch` | Hot-reload development |
+| `just check` | fmt + clippy + test |
+| `just build` | Build only |
+| `just test` | cargo test |
+| `just e2e` | E2E tests |
+| `just fmt` | Code formatting |
+| `just ps` | List OpenConsole processes |
+| `just clean` | Clean build artifacts |
+
+## Environment Variables
+
+| Variable | `just dev` | `just prod` | Description |
+|----------|-----------|-------------|-------------|
+| `DEN_PASSWORD` | from `.env` | `.env` or argument | Login password **(required)** |
+| `DEN_ENV` | `development` | `production` | Environment mode |
+| `DEN_PORT` | `3939` | `8080` | Listen port |
+| `DEN_BIND_ADDRESS` | `127.0.0.1` | `0.0.0.0` | Bind address |
+| `DEN_DATA_DIR` | `./data-dev` | `./data` | Data persistence directory |
+| `DEN_LOG_LEVEL` | `debug` | `info` | Log level filter |
+| `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | same | Shell for terminal |
+| `DEN_SSH_PORT` | *(disabled)* | *(disabled)* | SSH server port (opt-in) |
+
+## SSH Server
+
+Set `DEN_SSH_PORT` to enable the built-in SSH server (opt-in).
+
+```sh
+# Linux/macOS
+export DEN_SSH_PORT=2222
+
+# Windows PowerShell
+$env:DEN_SSH_PORT="2222"
+```
+
+### Usage
+
+```sh
+# List sessions
+ssh -p 2222 den@localhost list
+
+# Attach to a session (creates if not found) — requires -t for PTY allocation
+ssh -t -p 2222 den@localhost attach default
+
+# Create a new session
+ssh -t -p 2222 den@localhost new mysession
+```
+
+- Username can be anything (password auth only, same as `DEN_PASSWORD`)
+- `attach` / `new` are interactive sessions — **`-t` (PTY allocation) is required**
+- Host key is auto-generated at `DEN_DATA_DIR/ssh_host_key` on first start
+
+### Public Key Authentication
+
+Place public keys in `DEN_DATA_DIR/ssh/authorized_keys` to enable passwordless login.
+
+```sh
+# Example for development (just dev → DEN_DATA_DIR=./data-dev)
+mkdir -p ./data-dev/ssh
+cat ~/.ssh/id_ed25519.pub >> ./data-dev/ssh/authorized_keys
+```
+
+When key auth is configured, password prompts are skipped.
+Falls back to password auth when no keys are set up.
 
 ## Architecture
 
@@ -26,107 +135,6 @@ iPad mini からブラウザ経由で自宅 Windows PC を操作する個人用�
 │                                         └──────────┘ │
 └──────────────────────────────────────────────────────┘
 ```
-
-## Quick Start
-
-[just](https://github.com/casey/just) task runner を使用。
-
-```powershell
-cargo install just
-
-# .env にパスワードを設定（初回のみ）
-echo 'DEN_PASSWORD=your_password' > .env
-
-# 開発
-just dev              # debug ビルド＆起動 (localhost:3939)
-just watch            # ホットリロード開発 (cargo-watch)
-
-# 本番
-just prod             # release ビルド＆起動 (0.0.0.0:8080)
-just prod strongpw    # パスワード上書き指定も可
-```
-
-開発ビルドでは `rust-embed` がファイルシステムから直接読むため、`frontend/` の変更はブラウザリロードだけで反映される。
-
-### 全コマンド
-
-| Command | Description |
-|---------|-------------|
-| `just dev` | 開発ビルド＆起動 |
-| `just prod [pw]` | 本番ビルド＆起動 |
-| `just watch` | ホットリロード開発 |
-| `just check` | fmt + clippy + test |
-| `just build` | ビルドのみ |
-| `just test` | cargo test |
-| `just e2e` | E2E テスト |
-| `just fmt` | コード整形 |
-| `just ps` | OpenConsole プロセス一覧 |
-| `just clean` | ビルド成果物削除 |
-
-## Environment Variables
-
-| Variable | `just dev` | `just prod` | Description |
-|----------|-----------|-------------|-------------|
-| `DEN_PASSWORD` | `.env` から読込 | `.env` or 引数指定 | Login password **(required)** |
-| `DEN_ENV` | `development` | `production` | Environment mode |
-| `DEN_PORT` | `3939` | `8080` | Listen port |
-| `DEN_BIND_ADDRESS` | `127.0.0.1` | `0.0.0.0` | Bind address |
-| `DEN_DATA_DIR` | `./data-dev` | `./data` | Data persistence directory |
-| `DEN_LOG_LEVEL` | `debug` | `info` | Log level filter |
-| `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | same | Shell for terminal |
-| `DEN_SSH_PORT` | *(disabled)* | *(disabled)* | SSH server port (opt-in) |
-
-## Features
-
-- **Web Terminal** - xterm.js v6 with touch-friendly keybar (Shift, Ctrl, F1-F12 etc.)
-- **Floating Terminal** - draggable/resizable overlay terminal (Ctrl+\` or tab bar button)
-- **File Manager** - tree view, CodeMirror 6 editor, upload/download, search, image/Markdown preview
-- **SFTP Remote Files** - connect to remote SSH hosts and browse/edit files via russh-sftp
-- **12 Themes** - Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
-- **Server-side Persistence** - settings saved to JSON files
-- **Authentication** - HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
-- **Built-in SSH Server** - russh-based, password + public key auth, session attach/create
-- **Accessibility** - ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion
-- **Mobile Support** - sidebar toggle, iPad keyboard layout, clipboard fallback for HTTP LAN access
-
-## SSH Server
-
-`DEN_SSH_PORT` を設定すると SSH サーバーが有効になる（opt-in）。
-
-```powershell
-$env:DEN_SSH_PORT="2222"
-```
-
-接続:
-
-```powershell
-# セッション一覧
-ssh -p 2222 den@localhost list
-
-# セッションに接続（なければ作成） — -t で PTY 割当が必要
-ssh -t -p 2222 den@localhost attach default
-
-# 新規セッション作成
-ssh -t -p 2222 den@localhost new mysession
-```
-
-- ユーザー名は任意（パスワード認証のみ、`DEN_PASSWORD` と同じ）
-- `attach` / `new` は対話セッションなので **`-t`（PTY 割当）が必須**
-- 公開鍵認証なしでも `-o PubkeyAuthentication=no` は不要（拒否が即座に完了しパスワードにフォールバック）
-- ホストキーは初回起動時に `DEN_DATA_DIR/ssh_host_key` に自動生成
-
-### 公開鍵認証
-
-`DEN_DATA_DIR/ssh/authorized_keys` に公開鍵を配置すると、パスワード不要で接続できる。
-
-```powershell
-# 開発環境の場合（just dev → DEN_DATA_DIR=./data-dev）
-mkdir ./data-dev/ssh
-Add-Content "./data-dev/ssh/authorized_keys" (Get-Content ~/.ssh/id_ed25519.pub)
-```
-
-鍵認証が有効な場合、パスワードプロンプトなしで接続される。
-鍵が未設定の場合はパスワード認証にフォールバックする。
 
 ## Project Structure
 
@@ -178,4 +186,8 @@ den/
 ├── data/                   # Runtime data (gitignored)
 └── justfile                # Task runner recipes
 ```
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
 

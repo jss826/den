@@ -11,7 +11,7 @@ allowed-tools: Bash, Read, Grep, Glob
 1. `git status` と `git diff --stat` で変更内容を確認
 2. `git log --oneline -3` でコミットメッセージのスタイルを確認
 3. untracked ファイルにゴミ（`nul`, `.DS_Store` 等）があれば警告する
-4. 変更内容に基づいてコミットメッセージを生成（日本語、prefix: feat/fix/chore/docs/refactor）
+4. 変更内容に基づいてコミットメッセージを生成（英語、Conventional Commits format: feat/fix/chore/docs/refactor/perf/test）
 5. コミット対象ファイルとメッセージをユーザーに提示
 
 → **承認待ち**
