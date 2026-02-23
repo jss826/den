@@ -91,11 +91,15 @@ const DenKeyPresets = (() => {
    */
   function setupAddForm(presetSelect, stackPreset) {
     if (!presetSelect) return;
-    // プリセット option を生成（初回のみ）
-    if (presetSelect.options.length <= 1) {
-      const nonStackPresets = KEY_PRESETS.filter(p => p.type !== 'stack');
-      const stackPresets = KEY_PRESETS.filter(p => p.type === 'stack');
+    // F006: presetSelect と stackPreset を独立して冪等判定
+    const presetDone = presetSelect.options.length > 1;
+    const stackDone = !stackPreset || stackPreset.options.length > 1;
+    if (presetDone && stackDone) return;
 
+    const nonStackPresets = KEY_PRESETS.filter(p => p.type !== 'stack');
+    const stackPresets = KEY_PRESETS.filter(p => p.type === 'stack');
+
+    if (!presetDone) {
       nonStackPresets.forEach(p => {
         const opt = document.createElement('option');
         if (p.type === 'action') {
@@ -110,7 +114,6 @@ const DenKeyPresets = (() => {
         presetSelect.appendChild(opt);
       });
 
-      // Stack presets in single-key dropdown
       stackPresets.forEach(p => {
         const opt = document.createElement('option');
         opt.value = '__stack:' + p.display;
@@ -119,21 +122,21 @@ const DenKeyPresets = (() => {
         opt.textContent = p.display;
         presetSelect.appendChild(opt);
       });
+    }
 
-      // Populate stack-item preset dropdown (non-stack only)
-      if (stackPreset) {
-        nonStackPresets.forEach(p => {
-          const opt = document.createElement('option');
-          opt.value = p.send;
-          opt.textContent = p.display;
-          if (p.label) opt.dataset.label = p.label;
-          if (p.type === 'action') {
-            opt.dataset.btnType = 'action';
-            opt.dataset.btnAction = p.action;
-          }
-          stackPreset.appendChild(opt);
-        });
-      }
+    // Populate stack-item preset dropdown (non-stack only, independent check)
+    if (stackPreset && !stackDone) {
+      nonStackPresets.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.send;
+        opt.textContent = p.display;
+        if (p.label) opt.dataset.label = p.label;
+        if (p.type === 'action') {
+          opt.dataset.btnType = 'action';
+          opt.dataset.btnAction = p.action;
+        }
+        stackPreset.appendChild(opt);
+      });
     }
   }
 

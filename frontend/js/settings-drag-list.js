@@ -1,5 +1,8 @@
 // Den - ドラッグ&ドロップリスト共通モジュール
-const DenDragList = (() => { // eslint-disable-line no-unused-vars
+const DenDragList = (() => {
+  // F003: WeakSet で冪等性を管理（DOM 直接プロパティ汚染を回避）
+  const delegated = new WeakSet();
+
   /**
    * リストにドラッグ&ドロップイベント委譲を設定（冪等）。
    * @param {HTMLElement} listEl - ドラッグ対象のリストコンテナ
@@ -10,8 +13,8 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
    *   呼び出し時点の配列と render 関数を返すコールバック
    */
   function init(listEl, opts) {
-    if (!listEl || listEl._dragDelegated) return;
-    listEl._dragDelegated = true;
+    if (!listEl || delegated.has(listEl)) return;
+    delegated.add(listEl);
 
     const { itemSelector, removeSelector, getState } = opts;
     let currentDragOverEl = null;
@@ -20,6 +23,8 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
     let touchCurrentOverIdx = null;
     let touchTimer = null;
     let touchDragItem = null;
+    // F004: touchmove の rAF スロットリング用
+    let touchMoveRaf = null;
 
     function getItemIndex(el) {
       const item = el.closest(itemSelector);
@@ -37,6 +42,7 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
     function cleanupTouch() {
       clearTimeout(touchTimer);
       touchTimer = null;
+      if (touchMoveRaf) { cancelAnimationFrame(touchMoveRaf); touchMoveRaf = null; }
       if (touchDragItem) {
         touchDragItem.classList.remove('dragging');
         touchDragItem = null;
@@ -95,7 +101,9 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
       const s = getState();
       const fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10);
       if (isNaN(fromIdx) || fromIdx < 0 || fromIdx >= s.array.length) return;
+      // F002: toIdx の NaN・境界チェック
       const toIdx = parseInt(toItem.dataset.index, 10);
+      if (isNaN(toIdx) || toIdx < 0 || toIdx >= s.array.length) return;
       if (fromIdx !== toIdx) {
         const moved = s.array.splice(fromIdx, 1)[0];
         s.array.splice(toIdx, 0, moved);
@@ -109,6 +117,8 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
       const item = e.target.closest(itemSelector);
       if (!item) return;
       touchStartIdx = parseInt(item.dataset.index, 10);
+      // F002: NaN ガード
+      if (isNaN(touchStartIdx)) { touchStartIdx = null; return; }
       const touch = e.touches[0];
       touchTimer = setTimeout(() => {
         touchTimer = null;
@@ -127,25 +137,33 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
       }, 200);
     }, { passive: true });
 
+    // F004: rAF スロットリングで touchmove の高頻度処理を抑制
     listEl.addEventListener('touchmove', (e) => {
       if (!touchClone) return;
       e.preventDefault();
+      if (touchMoveRaf) return;
       const touch = e.touches[0];
-      touchClone.style.left = (touch.clientX - 20) + 'px';
-      touchClone.style.top = (touch.clientY - 20) + 'px';
-      const overEl = document.elementFromPoint(touch.clientX, touch.clientY);
-      const overItem = overEl ? overEl.closest(itemSelector) : null;
-      if (overItem && overItem.dataset.index !== undefined) {
-        if (currentDragOverEl !== overItem) {
+      const cx = touch.clientX;
+      const cy = touch.clientY;
+      touchMoveRaf = requestAnimationFrame(() => {
+        touchMoveRaf = null;
+        if (!touchClone) return;
+        touchClone.style.left = (cx - 20) + 'px';
+        touchClone.style.top = (cy - 20) + 'px';
+        const overEl = document.elementFromPoint(cx, cy);
+        const overItem = overEl ? overEl.closest(itemSelector) : null;
+        if (overItem && overItem.dataset.index !== undefined) {
+          if (currentDragOverEl !== overItem) {
+            clearDragOver();
+            overItem.classList.add('drag-over');
+            currentDragOverEl = overItem;
+          }
+          touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
+        } else {
           clearDragOver();
-          overItem.classList.add('drag-over');
-          currentDragOverEl = overItem;
+          touchCurrentOverIdx = null;
         }
-        touchCurrentOverIdx = parseInt(overItem.dataset.index, 10);
-      } else {
-        clearDragOver();
-        touchCurrentOverIdx = null;
-      }
+      });
     }, { passive: false });
 
     listEl.addEventListener('touchend', () => {
@@ -153,11 +171,14 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
       const overIdx = touchCurrentOverIdx;
       const hadClone = !!touchClone;
       cleanupTouch();
-      if (hadClone && overIdx !== null && startIdx !== overIdx) {
+      // F002: NaN・境界チェック
+      if (hadClone && overIdx !== null && startIdx !== null && startIdx !== overIdx) {
         const s = getState();
-        const moved = s.array.splice(startIdx, 1)[0];
-        s.array.splice(overIdx, 0, moved);
-        s.render();
+        if (startIdx >= 0 && startIdx < s.array.length && overIdx >= 0 && overIdx < s.array.length) {
+          const moved = s.array.splice(startIdx, 1)[0];
+          s.array.splice(overIdx, 0, moved);
+          s.render();
+        }
       }
     });
 
@@ -168,3 +189,6 @@ const DenDragList = (() => { // eslint-disable-line no-unused-vars
 
   return { init };
 })();
+
+// F005: Node.js テスト用エクスポート
+if (typeof module !== 'undefined') module.exports = DenDragList;
