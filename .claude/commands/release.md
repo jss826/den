@@ -29,8 +29,13 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 2. バージョン更新をコミット＆プッシュ: `git add Cargo.toml Cargo.lock && git commit -m "chore: bump version to <version>" && git push`
 3. タグを作成してプッシュ: `git tag <version> && git push origin <version>`
 4. `gh release create <version> --title "<version>" --notes "<リリースノート>"` で GitHub Release を作成
-5. `git fetch --tags` でリモートタグをローカルに同期
-6. 結果を報告（タグ名 + リリースURL + 含まれるコミット数）
+5. リリースバイナリを添付:
+   - `cargo build --release` で Windows exe をビルド
+   - `Compress-Archive` で zip 化: `den-<version>-x86_64-pc-windows-msvc.zip`（中身は `den.exe`）
+   - `gh release upload <version> <zipファイル>` でアップロード
+   - ローカルの zip ファイルを削除
+6. `git fetch --tags` でリモートタグをローカルに同期
+7. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + 添付バイナリ）
 
 ## ルール
 
@@ -43,5 +48,6 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 
 - [ ] Cargo.toml の version が更新・コミットされている
 - [ ] GitHub Release が作成された
+- [ ] リリースバイナリ（zip）が添付されている
 - [ ] ローカルタグがリモートと同期されている
 - [ ] リリースURLが報告された
