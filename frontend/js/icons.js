@@ -1,9 +1,14 @@
 // Den - SVG アイコンライブラリ
 // すべてのアイコンは currentColor ベースでテーマ追従
-// eslint-disable-next-line no-unused-vars
 const DenIcons = (() => {
   const S = 16; // デフォルトサイズ
 
+  /**
+   * SVG ラッパー文字列を生成する。
+   * @param {string} inner - SVG 内部要素の HTML 文字列
+   * @param {number} [size] - width/height（デフォルト 16）
+   * @returns {string} 完全な SVG 文字列
+   */
   function svg(inner, size) {
     const s = size || S;
     return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -114,6 +119,8 @@ const DenIcons = (() => {
     chevronLeft, chevronRight, download,
     panelLeft, panelRight,
     snippet, clipboard,
-    folder, file, fileColor,
+    folder, file, fileColor, svg,
   };
 })();
+
+if (typeof module !== 'undefined') module.exports = DenIcons;

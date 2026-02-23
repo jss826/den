@@ -1,6 +1,5 @@
 /* global DenClipboard, Toast */
 // Den - クリップボード履歴モジュール
-// eslint-disable-next-line no-unused-vars
 const ClipboardHistory = (() => {
   let btn = null;
   let popup = null;
@@ -175,15 +174,23 @@ const ClipboardHistory = (() => {
     }).catch(() => { /* ignore tracking errors */ });
   }
 
-  function formatTime(ts) {
+  /**
+   * タイムスタンプを相対時間文字列に変換する。
+   * @param {number} ts - Unix ミリ秒タイムスタンプ
+   * @param {number} [now] - 現在時刻（テスト用、デフォルト Date.now()）
+   * @returns {string} 'just now', '5m ago', '2h ago', or locale date string
+   */
+  function formatTime(ts, now) {
     const d = new Date(ts);
-    const now = new Date();
-    const diff = now - d;
+    const n = now !== undefined ? now : Date.now();
+    const diff = n - ts;
     if (diff < 60000) return 'just now';
     if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
     if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
     return d.toLocaleDateString();
   }
 
-  return { init, open, close, isOpen, track };
+  return { init, open, close, isOpen, track, formatTime };
 })();
+
+if (typeof module !== 'undefined') module.exports = ClipboardHistory;
