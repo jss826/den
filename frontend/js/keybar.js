@@ -5,7 +5,6 @@ const Keybar = (() => {
   let secondaryContainer = null;
   let secondaryButtonsContainer = null;
   let secondaryToggleBtn = null;
-  let dragHandle = null;
   let collapseBtn = null;
   let tabEl = null;
   let modifiers = { ctrl: false, alt: false, shift: false };
@@ -98,7 +97,7 @@ const Keybar = (() => {
     secondaryContainer = container.querySelector('.keybar-secondary');
     secondaryButtonsContainer = container.querySelector('.keybar-buttons-secondary');
     secondaryToggleBtn = container.querySelector('.keybar-secondary-toggle');
-    dragHandle = container.querySelector('.keybar-drag-handle');
+    container.querySelector('.keybar-drag-handle');
     collapseBtn = container.querySelector('.keybar-collapse-btn');
     tabEl = document.getElementById('keybar-tab');
 

@@ -1,4 +1,3 @@
-/* global Toast */
 // Den - SFTP リモート接続管理
 // eslint-disable-next-line no-unused-vars
 const FilerRemote = (() => {

@@ -1,4 +1,4 @@
-/* global Auth, DenClipboard, FilerTree, FilerEditor, FilerRemote */
+/* global DenClipboard, FilerTree, FilerEditor, FilerRemote */
 // Den - ファイラ メインモジュール
 // eslint-disable-next-line no-unused-vars
 const DenFiler = (() => {

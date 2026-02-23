@@ -1,4 +1,4 @@
-/* global CM, Auth, DenMarkdown, FilerRemote */
+/* global CM, DenMarkdown, FilerRemote */
 // Den - ファイラ CodeMirror 6 エディタ統合
 // eslint-disable-next-line no-unused-vars
 const FilerEditor = (() => {

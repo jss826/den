@@ -11,6 +11,7 @@ const DenMarkdown = (() => {
   function renderMarkdown(text) {
     if (!text) return '';
     // NUL 文字を除去（プレースホルダー \x00CB..\x00 / \x00IC..\x00 との衝突防止）
+    // eslint-disable-next-line no-control-regex
     let html = esc(text.replace(/\x00/g, ''));
 
     // コードブロック ```lang\n...\n``` — プレースホルダーで退避
@@ -111,7 +112,9 @@ const DenMarkdown = (() => {
     html = html.replace(/\n/g, '<br>');
 
     // プレースホルダー復元
+    // eslint-disable-next-line no-control-regex
     html = html.replace(/\x00IC(\d+)\x00/g, (_, idx) => inlineCodes[parseInt(idx, 10)]);
+    // eslint-disable-next-line no-control-regex
     html = html.replace(/\x00CB(\d+)\x00/g, (_, idx) => codeBlocks[parseInt(idx, 10)]);
 
     return html;

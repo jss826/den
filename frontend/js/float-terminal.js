@@ -1,4 +1,4 @@
-/* global Terminal, FitAddon, WebglAddon, Auth, DenSettings, DenTerminal, Toast */
+/* global Terminal, FitAddon, DenSettings, DenTerminal */
 // Den - Floating Terminal module
 const FloatTerminal = (() => {
   // --- State ---

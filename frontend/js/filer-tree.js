@@ -1,4 +1,4 @@
-/* global Auth, DenIcons, FilerRemote */
+/* global DenIcons, FilerRemote */
 // Den - ファイラ ツリービュー
 // eslint-disable-next-line no-unused-vars
 const FilerTree = (() => {
