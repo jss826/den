@@ -96,6 +96,8 @@ const DenTerminal = (() => {
       return true;
     });
 
+    term.onTitleChange((title) => { DenSettings.setOscTitle(title); });
+
     fitAndRefresh();
     requestAnimationFrame(() => fitAndRefresh());
     setTimeout(() => fitAndRefresh(), 300);
@@ -297,6 +299,7 @@ const DenTerminal = (() => {
   function switchSession(name) {
     if (name === currentSession) return;
     currentSession = name;
+    DenSettings.setOscTitle('');
     term.clear();
     doConnect();
     window.DenApp?.updateSessionHash(name);

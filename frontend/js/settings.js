@@ -97,6 +97,18 @@ const DenSettings = (() => {
   }
 
   let mediaQuery = null;
+  let currentOscTitle = '';
+
+  function updateDocumentTitle() {
+    const host = current.hostname || '';
+    const base = host ? `Den @ ${host}` : 'Den';
+    document.title = currentOscTitle ? `${currentOscTitle} - ${base}` : base;
+  }
+
+  function setOscTitle(title) {
+    currentOscTitle = title || '';
+    updateDocumentTitle();
+  }
 
   /**
    * 現在の設定をDOMに反映する（フォントサイズ・テーマ）。
@@ -104,6 +116,7 @@ const DenSettings = (() => {
   function apply() {
     document.documentElement.style.setProperty('--den-font-size', current.font_size + 'px');
     applyTheme();
+    updateDocumentTitle();
   }
 
   function applyTheme() {
@@ -672,5 +685,5 @@ const DenSettings = (() => {
     });
   }
 
-  return { load, save, apply, get, getAll, bindUI, openModal };
+  return { load, save, apply, get, getAll, bindUI, openModal, setOscTitle };
 })();

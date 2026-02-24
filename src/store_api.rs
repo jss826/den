@@ -12,6 +12,7 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
     match tokio::task::spawn_blocking(move || store.load_settings()).await {
         Ok(mut settings) => {
             settings.version = env!("CARGO_PKG_VERSION").to_string();
+            settings.hostname = gethostname::gethostname().to_string_lossy().into_owned();
             Json(settings).into_response()
         }
         Err(e) => {

@@ -115,6 +115,8 @@ pub struct Settings {
     pub sleep_prevention_timeout: u16,
     #[serde(skip_deserializing, default)]
     pub version: String,
+    #[serde(skip_deserializing, default)]
+    pub hostname: String,
 }
 
 fn default_font_size() -> u8 {
@@ -144,6 +146,7 @@ impl Default for Settings {
             sleep_prevention_mode: SleepPreventionMode::default(),
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
             version: String::new(),
+            hostname: String::new(),
         }
     }
 }

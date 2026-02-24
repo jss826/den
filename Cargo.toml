@@ -38,6 +38,7 @@ russh-sftp = "2.1"
 async-trait = "0.1"
 anyhow = "1"
 dotenvy = "0.15"
+gethostname = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
