@@ -22,6 +22,25 @@
 
 ## クイックスタート
 
+### バイナリ単体で起動
+
+`den.exe` は単一の自己完結型バイナリです — 外部ファイル不要。
+同じディレクトリに `.env` ファイルを置くだけで設定できます:
+
+```
+DEN_PASSWORD=your_password
+```
+
+起動:
+
+```sh
+./den
+```
+
+ブラウザで `http://localhost:3939` を開いてください。
+
+### 開発（just 使用）
+
 [just](https://github.com/casey/just) タスクランナーが必要です。
 
 ```powershell

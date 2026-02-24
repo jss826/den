@@ -5,6 +5,14 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    // Load .env from the executable's directory (if present)
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        let _ = dotenvy::from_path(exe_dir.join(".env"));
+    }
+
     let config = Config::from_env();
     let port = config.port;
     let ssh_port = config.ssh_port;

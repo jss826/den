@@ -22,6 +22,25 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 
 ## Quick Start
 
+### Standalone Binary
+
+`den.exe` is a single self-contained binary — no external files needed.
+Place a `.env` file in the same directory to configure it:
+
+```
+DEN_PASSWORD=your_password
+```
+
+Then just run:
+
+```sh
+./den
+```
+
+Open `http://localhost:3939` in your browser.
+
+### Development (with just)
+
 Requires [just](https://github.com/casey/just) task runner.
 
 ```sh
