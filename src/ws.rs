@@ -216,6 +216,12 @@ fn filter_sgr_mouse(data: &[u8]) -> Cow<'_, [u8]> {
         return Cow::Borrowed(data);
     }
 
+    // Second fast path: no SGR mouse prefix (ESC [ <) → skip allocation.
+    // Common ESC inputs (arrow keys, etc.) pass through without heap alloc.
+    if !data.windows(3).any(|w| w == b"\x1b[<") {
+        return Cow::Borrowed(data);
+    }
+
     let mut result = Vec::with_capacity(data.len());
     let mut i = 0;
 
@@ -317,5 +323,37 @@ mod tests {
         let data = b"\x1b[<0;35";
         let result = filter_sgr_mouse(data);
         assert_eq!(&result[..], &data[..]);
+    }
+
+    #[test]
+    fn empty_input() {
+        let data = b"";
+        let result = filter_sgr_mouse(data);
+        assert!(result.is_empty());
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn arrow_keys_no_alloc() {
+        // Arrow keys contain ESC but not ESC [ < — should skip allocation
+        let data = b"\x1b[A\x1b[B\x1b[C\x1b[D";
+        let result = filter_sgr_mouse(data);
+        assert_eq!(&result[..], &data[..]);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn minimal_sgr_mouse() {
+        // ESC [ < 0 ; 0 ; 0 M — minimal valid SGR mouse
+        let data = b"\x1b[<0;0;0M";
+        let result = filter_sgr_mouse(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn interleaved_text_and_multiple_mouse() {
+        let data = b"hello\x1b[<0;1;2Mworld\x1b[<0;3;4m!";
+        let result = filter_sgr_mouse(data);
+        assert_eq!(&result[..], b"helloworld!");
     }
 }
