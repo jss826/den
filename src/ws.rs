@@ -9,6 +9,7 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -122,7 +123,10 @@ async fn handle_socket(
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
-                    if let Err(e) = session.write_input_from(client_id, &data).await {
+                    let filtered = filter_sgr_mouse(&data);
+                    if !filtered.is_empty()
+                        && let Err(e) = session.write_input_from(client_id, &filtered).await
+                    {
                         tracing::warn!("WS write_input failed for session {name_for_input}: {e}");
                         break;
                     }
@@ -134,8 +138,10 @@ async fn handle_socket(
                                 session.resize(client_id, cols, rows).await;
                             }
                             WsCommand::Input { data } => {
-                                if let Err(e) =
-                                    session.write_input_from(client_id, data.as_bytes()).await
+                                let filtered = filter_sgr_mouse(data.as_bytes());
+                                if !filtered.is_empty()
+                                    && let Err(e) =
+                                        session.write_input_from(client_id, &filtered).await
                                 {
                                     tracing::warn!(
                                         "WS write_input failed for session {name_for_input}: {e}"
@@ -197,4 +203,119 @@ pub async fn destroy_session(
 ) -> StatusCode {
     state.registry.destroy(&name).await;
     StatusCode::NO_CONTENT
+}
+
+/// Strip SGR mouse sequences (CSI < Btn;X;Y M/m) from input.
+///
+/// ConPTY does not understand SGR mouse reports — it consumes the CSI prefix
+/// but passes the parameters through as literal text, producing garbage input
+/// in applications like Zellij running over SSH.
+fn filter_sgr_mouse(data: &[u8]) -> Cow<'_, [u8]> {
+    // Fast path: no ESC → no mouse sequences possible
+    if !data.contains(&0x1b) {
+        return Cow::Borrowed(data);
+    }
+
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+
+    while i < data.len() {
+        if data[i] == 0x1b && i + 2 < data.len() && data[i + 1] == b'[' && data[i + 2] == b'<' {
+            // Potential SGR mouse sequence: ESC [ < Btn ; X ; Y M/m
+            let start = i;
+            i += 3; // skip ESC [ <
+
+            // Parameter bytes: digits and semicolons
+            while i < data.len() && (data[i].is_ascii_digit() || data[i] == b';') {
+                i += 1;
+            }
+
+            // Final byte must be M (press/move) or m (release)
+            if i < data.len() && (data[i] == b'M' || data[i] == b'm') {
+                i += 1;
+                // Valid SGR mouse sequence → drop it
+                continue;
+            }
+
+            // Not a valid SGR mouse sequence → keep original bytes
+            result.extend_from_slice(&data[start..i]);
+        } else {
+            result.push(data[i]);
+            i += 1;
+        }
+    }
+
+    if result.len() == data.len() {
+        Cow::Borrowed(data)
+    } else {
+        Cow::Owned(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_esc_passthrough() {
+        let data = b"hello world";
+        let result = filter_sgr_mouse(data);
+        assert_eq!(&result[..], &data[..]);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn strip_sgr_mouse_press() {
+        // ESC [ < 0 ; 35 ; 5 M — button press at (35,5)
+        let data = b"\x1b[<0;35;5M";
+        let result = filter_sgr_mouse(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn strip_sgr_mouse_release() {
+        // ESC [ < 0 ; 35 ; 5 m — button release
+        let data = b"\x1b[<0;35;5m";
+        let result = filter_sgr_mouse(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn strip_sgr_mouse_move() {
+        // ESC [ < 35 ; 70 ; 15 M — mouse move (button 0 + 32 = movement)
+        let data = b"\x1b[<35;70;15M";
+        let result = filter_sgr_mouse(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn strip_multiple_mouse_events() {
+        let data = b"\x1b[<35;70;15M\x1b[<35;71;15M\x1b[<35;72;15m";
+        let result = filter_sgr_mouse(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn keep_text_around_mouse_events() {
+        let data = b"abc\x1b[<0;10;20Mdef";
+        let result = filter_sgr_mouse(data);
+        assert_eq!(&result[..], b"abcdef");
+    }
+
+    #[test]
+    fn keep_non_mouse_csi() {
+        // ESC [ 1 ; 2 H — cursor position (not SGR mouse)
+        let data = b"\x1b[1;2H";
+        let result = filter_sgr_mouse(data);
+        assert_eq!(&result[..], &data[..]);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn keep_incomplete_sgr_mouse() {
+        // ESC [ < 0 ; 35 — no final M/m, incomplete
+        let data = b"\x1b[<0;35";
+        let result = filter_sgr_mouse(data);
+        assert_eq!(&result[..], &data[..]);
+    }
 }
