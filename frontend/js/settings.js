@@ -97,15 +97,16 @@ const DenSettings = (() => {
   }
 
   let mediaQuery = null;
-  let titleCtx = { tab: 'terminal', session: 'default', remoteHost: '' };
+  let titleCtx = { tab: 'terminal', session: 'default', oscDisplay: '', remoteHost: '' };
 
-  function extractRemoteHost(oscTitle) {
-    if (!oscTitle) return '';
-    // Skip executable full paths (e.g. "C:\...\pwsh.exe", "/usr/bin/bash")
-    if (/^[A-Za-z]:[\\\/]/.test(oscTitle) || /^\/(?:usr|bin|opt|home)\//.test(oscTitle)) return '';
-    // Extract hostname from user@host or user@host:path patterns
-    const m = oscTitle.match(/@([^:\s/\\]+)/);
-    return m ? m[1] : '';
+  function isWindowsPath(s) {
+    return /^[A-Za-z]:[\\\/]/.test(s);
+  }
+
+  function parseOscTitle(oscTitle) {
+    if (!oscTitle || isWindowsPath(oscTitle)) return { display: '', remoteHost: '' };
+    const hostMatch = oscTitle.match(/@([^:\s/\\]+)/);
+    return { display: oscTitle, remoteHost: hostMatch ? hostMatch[1] : '' };
   }
 
   function updateDocumentTitle() {
@@ -117,8 +118,9 @@ const DenSettings = (() => {
     const parts = [];
     if (titleCtx.tab === 'filer') {
       parts.push('Files');
-    } else if (titleCtx.session && titleCtx.session !== 'default') {
-      parts.push(titleCtx.session);
+    } else {
+      if (titleCtx.oscDisplay) parts.push(titleCtx.oscDisplay);
+      if (titleCtx.session) parts.push(titleCtx.session);
     }
     parts.push(base);
     document.title = parts.join(' - ');
@@ -131,7 +133,9 @@ const DenSettings = (() => {
   }
 
   function setOscTitle(title) {
-    titleCtx.remoteHost = extractRemoteHost(title);
+    const parsed = parseOscTitle(title);
+    titleCtx.oscDisplay = parsed.display;
+    titleCtx.remoteHost = parsed.remoteHost;
     updateDocumentTitle();
   }
 
