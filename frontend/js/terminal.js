@@ -181,6 +181,7 @@ const DenTerminal = (() => {
 
   function connect(sessionName) {
     currentSession = sessionName || 'default';
+    DenSettings.setTitleTab('terminal', currentSession);
     doConnect();
   }
 
@@ -300,6 +301,7 @@ const DenTerminal = (() => {
     if (name === currentSession) return;
     currentSession = name;
     DenSettings.setOscTitle('');
+    DenSettings.setTitleTab('terminal', name);
     term.clear();
     doConnect();
     window.DenApp?.updateSessionHash(name);
@@ -581,6 +583,8 @@ const DenTerminal = (() => {
           }
           if (name === currentSession) {
             currentSession = 'default';
+            DenSettings.setOscTitle('');
+            DenSettings.setTitleTab('terminal', 'default');
             term.clear();
             doConnect();
             window.DenApp?.updateSessionHash('default');

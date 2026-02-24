@@ -290,6 +290,8 @@ document.addEventListener('DOMContentLoaded', () => {
       DenTerminal.focus();
     }
 
+    DenSettings.setTitleTab(tabName, tabName === 'terminal' ? DenTerminal.getCurrentSession() : null);
+
     // Filer 初期化（初回のみ）
     if (tabName === 'filer' && !filerInitialized) {
       filerInitialized = true;

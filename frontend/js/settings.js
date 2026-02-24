@@ -97,16 +97,41 @@ const DenSettings = (() => {
   }
 
   let mediaQuery = null;
-  let currentOscTitle = '';
+  let titleCtx = { tab: 'terminal', session: 'default', remoteHost: '' };
+
+  function extractRemoteHost(oscTitle) {
+    if (!oscTitle) return '';
+    // Skip executable full paths (e.g. "C:\...\pwsh.exe", "/usr/bin/bash")
+    if (/^[A-Za-z]:[\\\/]/.test(oscTitle) || /^\/(?:usr|bin|opt|home)\//.test(oscTitle)) return '';
+    // Extract hostname from user@host or user@host:path patterns
+    const m = oscTitle.match(/@([^:\s/\\]+)/);
+    return m ? m[1] : '';
+  }
 
   function updateDocumentTitle() {
-    const host = current.hostname || '';
-    const base = host ? `Den @ ${host}` : 'Den';
-    document.title = currentOscTitle ? `${currentOscTitle} - ${base}` : base;
+    const serverHost = current.hostname || '';
+    const remote = titleCtx.remoteHost;
+    const showRemote = remote && remote !== serverHost;
+    const hostPart = showRemote ? `${remote} via ${serverHost}` : serverHost;
+    const base = hostPart ? `Den @ ${hostPart}` : 'Den';
+    const parts = [];
+    if (titleCtx.tab === 'filer') {
+      parts.push('Files');
+    } else if (titleCtx.session && titleCtx.session !== 'default') {
+      parts.push(titleCtx.session);
+    }
+    parts.push(base);
+    document.title = parts.join(' - ');
+  }
+
+  function setTitleTab(tab, session) {
+    titleCtx.tab = tab;
+    if (session != null) titleCtx.session = session;
+    updateDocumentTitle();
   }
 
   function setOscTitle(title) {
-    currentOscTitle = title || '';
+    titleCtx.remoteHost = extractRemoteHost(title);
     updateDocumentTitle();
   }
 
@@ -685,5 +710,5 @@ const DenSettings = (() => {
     });
   }
 
-  return { load, save, apply, get, getAll, bindUI, openModal, setOscTitle };
+  return { load, save, apply, get, getAll, bindUI, openModal, setTitleTab, setOscTitle };
 })();
