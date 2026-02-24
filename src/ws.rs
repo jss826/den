@@ -123,7 +123,7 @@ async fn handle_socket(
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Binary(data) => {
-                    let filtered = filter_sgr_mouse(&data);
+                    let filtered = filter_mouse_sequences(&data);
                     if !filtered.is_empty()
                         && let Err(e) = session.write_input_from(client_id, &filtered).await
                     {
@@ -138,7 +138,7 @@ async fn handle_socket(
                                 session.resize(client_id, cols, rows).await;
                             }
                             WsCommand::Input { data } => {
-                                let filtered = filter_sgr_mouse(data.as_bytes());
+                                let filtered = filter_mouse_sequences(data.as_bytes());
                                 if !filtered.is_empty()
                                     && let Err(e) =
                                         session.write_input_from(client_id, &filtered).await
@@ -205,53 +205,100 @@ pub async fn destroy_session(
     StatusCode::NO_CONTENT
 }
 
-/// Strip SGR mouse sequences (CSI < Btn;X;Y M/m) from input.
+/// Strip mouse sequences from input (defense-in-depth; frontend filters first).
 ///
-/// ConPTY does not understand SGR mouse reports — it consumes the CSI prefix
+/// Handles three mouse encodings:
+/// - **SGR**: `ESC [ < Btn ; X ; Y M/m`
+/// - **URXVT**: `ESC [ Btn ; X ; Y M` (digits+semicolons, no `<`)
+/// - **X10**: `ESC [ M Cb Cx Cy` (3 raw bytes after `M`)
+///
+/// ConPTY does not understand mouse reports — it consumes the CSI prefix
 /// but passes the parameters through as literal text, producing garbage input
 /// in applications like Zellij running over SSH.
-fn filter_sgr_mouse(data: &[u8]) -> Cow<'_, [u8]> {
+fn filter_mouse_sequences(data: &[u8]) -> Cow<'_, [u8]> {
     // Fast path: no ESC → no mouse sequences possible
     if !data.contains(&0x1b) {
         return Cow::Borrowed(data);
     }
 
-    // Second fast path: no SGR mouse prefix (ESC [ <) → skip allocation.
-    // Common ESC inputs (arrow keys, etc.) pass through without heap alloc.
-    if !data.windows(3).any(|w| w == b"\x1b[<") {
+    // Second fast path: no CSI prefix (ESC [) → skip allocation.
+    if !data.windows(2).any(|w| w == b"\x1b[") {
         return Cow::Borrowed(data);
     }
 
     let mut result = Vec::with_capacity(data.len());
     let mut i = 0;
+    let mut modified = false;
 
     while i < data.len() {
-        if data[i] == 0x1b && i + 2 < data.len() && data[i + 1] == b'[' && data[i + 2] == b'<' {
-            // Potential SGR mouse sequence: ESC [ < Btn ; X ; Y M/m
-            let start = i;
-            i += 3; // skip ESC [ <
-
-            // Parameter bytes: digits and semicolons
-            while i < data.len() && (data[i].is_ascii_digit() || data[i] == b';') {
-                i += 1;
-            }
-
-            // Final byte must be M (press/move) or m (release)
-            if i < data.len() && (data[i] == b'M' || data[i] == b'm') {
-                i += 1;
-                // Valid SGR mouse sequence → drop it
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b'[' {
+            // X10 mouse: ESC [ M Cb Cx Cy (exactly 3 raw bytes after M)
+            if i + 2 < data.len() && data[i + 2] == b'M' && i + 5 < data.len() {
+                // Skip ESC [ M + 3 bytes
+                i += 6;
+                modified = true;
                 continue;
             }
 
-            // Not a valid SGR mouse sequence → keep original bytes
-            result.extend_from_slice(&data[start..i]);
+            // SGR mouse: ESC [ < Btn ; X ; Y M/m
+            if i + 2 < data.len() && data[i + 2] == b'<' {
+                let start = i;
+                i += 3; // skip ESC [ <
+
+                // Parameter bytes: digits and semicolons
+                while i < data.len() && (data[i].is_ascii_digit() || data[i] == b';') {
+                    i += 1;
+                }
+
+                // Final byte must be M (press/move) or m (release)
+                if i < data.len() && (data[i] == b'M' || data[i] == b'm') {
+                    i += 1;
+                    modified = true;
+                    continue;
+                }
+
+                // Not a valid SGR mouse sequence → keep original bytes
+                result.extend_from_slice(&data[start..i]);
+                continue;
+            }
+
+            // URXVT mouse: ESC [ Btn ; X ; Y M (digits+semicolons, terminated by M only)
+            // Must have at least one digit after ESC [
+            if i + 2 < data.len() && data[i + 2].is_ascii_digit() {
+                let start = i;
+                let mut j = i + 2;
+                let mut semicolons = 0;
+
+                while j < data.len() && (data[j].is_ascii_digit() || data[j] == b';') {
+                    if data[j] == b';' {
+                        semicolons += 1;
+                    }
+                    j += 1;
+                }
+
+                // URXVT needs exactly 2 semicolons and final byte M
+                if semicolons == 2 && j < data.len() && data[j] == b'M' {
+                    i = j + 1;
+                    modified = true;
+                    continue;
+                }
+
+                // Not URXVT mouse → keep original bytes
+                result.extend_from_slice(&data[start..start + 1]);
+                i = start + 1;
+                continue;
+            }
+
+            // Not a mouse sequence — keep ESC byte
+            result.push(data[i]);
+            i += 1;
         } else {
             result.push(data[i]);
             i += 1;
         }
     }
 
-    if result.len() == data.len() {
+    if !modified {
         Cow::Borrowed(data)
     } else {
         Cow::Owned(result)
@@ -262,98 +309,164 @@ fn filter_sgr_mouse(data: &[u8]) -> Cow<'_, [u8]> {
 mod tests {
     use super::*;
 
+    // --- SGR mouse tests ---
+
     #[test]
     fn no_esc_passthrough() {
         let data = b"hello world";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert_eq!(&result[..], &data[..]);
         assert!(matches!(result, Cow::Borrowed(_)));
     }
 
     #[test]
     fn strip_sgr_mouse_press() {
-        // ESC [ < 0 ; 35 ; 5 M — button press at (35,5)
         let data = b"\x1b[<0;35;5M";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert!(result.is_empty());
     }
 
     #[test]
     fn strip_sgr_mouse_release() {
-        // ESC [ < 0 ; 35 ; 5 m — button release
         let data = b"\x1b[<0;35;5m";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert!(result.is_empty());
     }
 
     #[test]
     fn strip_sgr_mouse_move() {
-        // ESC [ < 35 ; 70 ; 15 M — mouse move (button 0 + 32 = movement)
         let data = b"\x1b[<35;70;15M";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn strip_multiple_mouse_events() {
+    fn strip_multiple_sgr_mouse_events() {
         let data = b"\x1b[<35;70;15M\x1b[<35;71;15M\x1b[<35;72;15m";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn keep_text_around_mouse_events() {
+    fn keep_text_around_sgr_mouse() {
         let data = b"abc\x1b[<0;10;20Mdef";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert_eq!(&result[..], b"abcdef");
     }
 
     #[test]
     fn keep_non_mouse_csi() {
-        // ESC [ 1 ; 2 H — cursor position (not SGR mouse)
+        // ESC [ 1 ; 2 H — cursor position (not mouse)
         let data = b"\x1b[1;2H";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert_eq!(&result[..], &data[..]);
-        assert!(matches!(result, Cow::Borrowed(_)));
     }
 
     #[test]
     fn keep_incomplete_sgr_mouse() {
-        // ESC [ < 0 ; 35 — no final M/m, incomplete
         let data = b"\x1b[<0;35";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert_eq!(&result[..], &data[..]);
     }
 
     #[test]
     fn empty_input() {
         let data = b"";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert!(result.is_empty());
         assert!(matches!(result, Cow::Borrowed(_)));
     }
 
     #[test]
     fn arrow_keys_no_alloc() {
-        // Arrow keys contain ESC but not ESC [ < — should skip allocation
         let data = b"\x1b[A\x1b[B\x1b[C\x1b[D";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert_eq!(&result[..], &data[..]);
-        assert!(matches!(result, Cow::Borrowed(_)));
     }
 
     #[test]
     fn minimal_sgr_mouse() {
-        // ESC [ < 0 ; 0 ; 0 M — minimal valid SGR mouse
         let data = b"\x1b[<0;0;0M";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn interleaved_text_and_multiple_mouse() {
+    fn interleaved_text_and_multiple_sgr_mouse() {
         let data = b"hello\x1b[<0;1;2Mworld\x1b[<0;3;4m!";
-        let result = filter_sgr_mouse(data);
+        let result = filter_mouse_sequences(data);
         assert_eq!(&result[..], b"helloworld!");
+    }
+
+    // --- URXVT mouse tests ---
+
+    #[test]
+    fn strip_urxvt_mouse() {
+        // ESC [ 35 ; 70 ; 15 M — URXVT mouse (no <)
+        let data = b"\x1b[35;70;15M";
+        let result = filter_mouse_sequences(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn strip_urxvt_mouse_with_text() {
+        let data = b"abc\x1b[35;70;15Mdef";
+        let result = filter_mouse_sequences(data);
+        assert_eq!(&result[..], b"abcdef");
+    }
+
+    #[test]
+    fn strip_multiple_urxvt_mouse() {
+        let data = b"\x1b[35;70;15M\x1b[35;71;15M";
+        let result = filter_mouse_sequences(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn keep_csi_with_one_semicolon() {
+        // ESC [ 1 ; 2 H — not URXVT (only 1 semicolon)
+        let data = b"\x1b[1;2H";
+        let result = filter_mouse_sequences(data);
+        assert_eq!(&result[..], &data[..]);
+    }
+
+    // --- X10 mouse tests ---
+
+    #[test]
+    fn strip_x10_mouse() {
+        // ESC [ M Cb Cx Cy — X10 mouse (3 raw bytes)
+        let data = b"\x1b[M !\"";
+        let result = filter_mouse_sequences(data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn strip_x10_mouse_with_text() {
+        let data = b"abc\x1b[M !\"def";
+        let result = filter_mouse_sequences(data);
+        assert_eq!(&result[..], b"abcdef");
+    }
+
+    #[test]
+    fn strip_multiple_x10_mouse() {
+        let data = b"\x1b[M !\"\x1b[M #$";
+        let result = filter_mouse_sequences(data);
+        assert!(result.is_empty());
+    }
+
+    // --- Mixed format tests ---
+
+    #[test]
+    fn strip_mixed_sgr_and_urxvt() {
+        let data = b"a\x1b[<0;1;2Mb\x1b[35;70;15Mc";
+        let result = filter_mouse_sequences(data);
+        assert_eq!(&result[..], b"abc");
+    }
+
+    #[test]
+    fn strip_mixed_all_formats() {
+        let data = b"a\x1b[<0;1;2Mb\x1b[35;70;15Mc\x1b[M !\"d";
+        let result = filter_mouse_sequences(data);
+        assert_eq!(&result[..], b"abcd");
     }
 }

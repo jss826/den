@@ -7,6 +7,13 @@ const DenTerminal = (() => {
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
+  // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
+  const MOUSE_SEQ_RE = /\x1b\[<?\d+;\d+;\d+[Mm]/g;
+  function filterMouseSeqs(s) { return s.replace(MOUSE_SEQ_RE, ''); }
+  function isX10Mouse(d) {
+    return d.length >= 6 && d.charCodeAt(0) === 0x1b && d.charCodeAt(1) === 0x5b && d.charCodeAt(2) === 0x4d;
+  }
+
   /** fit + refresh + resize 通知をまとめて実行 */
   let fitRetryCount = 0;
   function fitAndRefresh() {
@@ -162,15 +169,19 @@ const DenTerminal = (() => {
         return;
       }
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(textEncoder.encode(data));
+        const filtered = filterMouseSeqs(data);
+        if (filtered) ws.send(textEncoder.encode(filtered));
       }
     });
 
     term.onBinary((data) => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        const bytes = new Uint8Array(data.length);
-        for (let i = 0; i < data.length; i++) {
-          bytes[i] = data.charCodeAt(i) & 0xff;
+        if (isX10Mouse(data)) return;
+        const filtered = filterMouseSeqs(data);
+        if (!filtered) return;
+        const bytes = new Uint8Array(filtered.length);
+        for (let i = 0; i < filtered.length; i++) {
+          bytes[i] = filtered.charCodeAt(i) & 0xff;
         }
         ws.send(bytes);
       }
