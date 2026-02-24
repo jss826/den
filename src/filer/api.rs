@@ -255,14 +255,17 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
     data[..check_len].contains(&0)
 }
 
-/// I/O エラーを API エラーに変換
+/// I/O エラーを API エラーに変換（OS エラー詳細はログのみ、クライアントにはジェネリックメッセージ）
 fn io_err(e: io::Error) -> ApiError {
     let (status, msg) = match e.kind() {
         io::ErrorKind::NotFound => (StatusCode::NOT_FOUND, "Not found"),
         io::ErrorKind::PermissionDenied => (StatusCode::FORBIDDEN, "Permission denied"),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "I/O error"),
+        _ => {
+            tracing::error!("Filer I/O error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "I/O error")
+        }
     };
-    err(status, &format!("{}: {}", msg, e))
+    err(status, msg)
 }
 
 // --- API ハンドラ ---

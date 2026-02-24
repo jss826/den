@@ -7,6 +7,7 @@ use russh::server::{Auth, Handler, Msg, Server as _, Session};
 use russh::{ChannelId, CryptoVec, Pty};
 use tokio::net::TcpListener;
 
+use crate::auth::constant_time_eq;
 use crate::pty::registry::{ClientKind, SessionRegistry, SharedSession};
 
 /// SSH セッション非アクティブタイムアウト（1時間）
@@ -729,37 +730,9 @@ fn skip_osc_sequence(data: &[u8], start: usize) -> usize {
     start
 }
 
-/// タイミング攻撃防止用の定数時間文字列比較
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let a = a.as_bytes();
-    let b = b.as_bytes();
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn constant_time_eq_same() {
-        assert!(constant_time_eq("password123", "password123"));
-    }
-
-    #[test]
-    fn constant_time_eq_different() {
-        assert!(!constant_time_eq("password123", "password456"));
-    }
-
-    #[test]
-    fn constant_time_eq_different_length() {
-        assert!(!constant_time_eq("short", "longer-string"));
-    }
 
     #[test]
     fn keep_cpr_response() {

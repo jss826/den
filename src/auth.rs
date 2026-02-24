@@ -128,7 +128,7 @@ fn compute_hmac(password: &str, secret: &[u8], issued_at: u64) -> String {
 }
 
 /// 定数時間比較（タイミング攻撃対策）
-fn constant_time_eq(a: &str, b: &str) -> bool {
+pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }

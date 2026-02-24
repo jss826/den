@@ -785,7 +785,8 @@ impl SharedSession {
             tracing::debug!("write_input_from: client_id {client_id} not found in session");
         }
         std::io::Write::write_all(&mut inner.pty_writer, data)
-            .map_err(|e| format!("Write failed: {e}"))
+            .map_err(|e| format!("Write failed: {e}"))?;
+        std::io::Write::flush(&mut inner.pty_writer).map_err(|e| format!("Flush failed: {e}"))
     }
 
     /// クライアントのリサイズ通知
