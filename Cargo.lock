@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "den"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
