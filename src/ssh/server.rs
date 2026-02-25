@@ -27,6 +27,18 @@ const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Escape character state machine for `~` sequences (like OpenSSH).
+/// Detects `Enter → ~ → command` patterns in SSH input.
+#[derive(Default, Clone, Copy)]
+enum EscapeState {
+    #[default]
+    Normal,
+    /// CR or LF received — next `~` starts an escape sequence
+    AfterNewline,
+    /// `~` received after newline — waiting for the command character
+    AfterTilde,
+}
+
 /// `{data_dir}/ssh/authorized_keys` から公開鍵を読み込む。
 /// 各行の "algorithm base64" 部分（コメント除去）を返す。
 fn load_authorized_keys(data_dir: &str) -> HashSet<String> {
@@ -128,6 +140,8 @@ impl russh::server::Server for DenSshServer {
             pty_cols: 80,
             pty_rows: 24,
             pty_requested: false,
+            escape_state: EscapeState::default(),
+            connected_at: None,
         }
     }
 }
@@ -145,6 +159,8 @@ struct DenSshHandler {
     pty_cols: u16,
     pty_rows: u16,
     pty_requested: bool,
+    escape_state: EscapeState,
+    connected_at: Option<std::time::Instant>,
 }
 
 impl DenSshHandler {
@@ -166,6 +182,8 @@ impl DenSshHandler {
         self.session_name = Some(session_name.to_string());
         self.client_id = Some(client_id);
         self.shared_session = Some(Arc::clone(&shared_session));
+        self.connected_at = Some(std::time::Instant::now());
+        self.escape_state = EscapeState::AfterNewline;
 
         let channel_id = self
             .channel_id
@@ -182,6 +200,9 @@ impl DenSshHandler {
                 session.data(channel_id, CryptoVec::from_slice(&filtered_replay))?;
             }
         }
+
+        // Set terminal title to "Den SSH"
+        session.data(channel_id, CryptoVec::from_slice(b"\x1b]0;Den SSH\x07"))?;
 
         // Output: broadcast::Receiver → SSH channel
         let handle = session.handle();
@@ -232,6 +253,64 @@ impl DenSshHandler {
         }));
 
         Ok(())
+    }
+
+    /// Filter and forward buffered bytes to the PTY.
+    async fn flush_to_pty(shared: &SharedSession, client_id: Option<u64>, buf: &[u8]) {
+        if buf.is_empty() {
+            return;
+        }
+        let filtered = filter_terminal_responses(buf);
+        if filtered.is_empty() {
+            return;
+        }
+        if let Some(client_id) = client_id {
+            let _ = shared.write_input_from(client_id, &filtered).await;
+        }
+    }
+
+    /// Format the `~s` status message to inject into the SSH channel.
+    async fn format_status(&self) -> String {
+        let session_name = self.session_name.as_deref().unwrap_or("(none)");
+
+        let connected = match self.connected_at {
+            Some(t) => {
+                let secs = t.elapsed().as_secs();
+                let h = secs / 3600;
+                let m = (secs % 3600) / 60;
+                if h > 0 {
+                    format!("{h}h {m:02}m")
+                } else {
+                    format!("{m}m")
+                }
+            }
+            None => "-".to_string(),
+        };
+
+        let (process, clients) = if let Some(ref ss) = self.shared_session {
+            let alive = if ss.is_alive() { "alive" } else { "dead" };
+            let count = ss.inner.lock().await.client_count();
+            (alive.to_string(), count.to_string())
+        } else {
+            ("-".to_string(), "-".to_string())
+        };
+
+        format!(
+            "\r\n\x1b[1m── Den SSH ─────────────────────\x1b[0m\r\n\
+             \x1b[1m  Session:\x1b[0m   {session_name}\r\n\
+             \x1b[1m  Connected:\x1b[0m {connected}\r\n\
+             \x1b[1m  Process:\x1b[0m   {process}\r\n\
+             \x1b[1m  Clients:\x1b[0m   {clients}\r\n\
+             \x1b[1m─────────────────────────────────\x1b[0m\r\n"
+        )
+    }
+
+    /// Format the `~?` help message.
+    fn format_help() -> &'static str {
+        "\r\n\
+         \x1b[1m  ~s\x1b[0m  Show status\r\n\
+         \x1b[1m  ~?\x1b[0m  Show help\r\n\
+         \x1b[1m  ~~\x1b[0m  Send literal ~\r\n"
     }
 
     /// cleanup: detach + output_task abort
@@ -461,32 +540,30 @@ impl Handler for DenSshHandler {
         &mut self,
         _channel: ChannelId,
         data: &[u8],
-        _session: &mut Session,
+        session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // stdin データ → PTY writer（ターミナル応答シーケンスを除去）
-        if let Some(ref session) = self.shared_session {
-            let filtered = filter_terminal_responses(data);
-            if data.len() != filtered.len()
-                && let Some(ref name) = self.session_name
-            {
-                tracing::debug!(
-                    "SSH data: {} bytes in, {} bytes after filter (session {name})",
-                    data.len(),
-                    filtered.len(),
-                );
-            }
-            if !filtered.is_empty() {
-                if let Some(client_id) = self.client_id {
-                    let _ = session.write_input_from(client_id, &filtered).await;
-                } else if let Some(ref name) = self.session_name {
-                    tracing::warn!("SSH data: client_id is None, dropping input (session {name})");
-                } else {
-                    tracing::warn!(
-                        "SSH data: both client_id and session_name are None, dropping input"
-                    );
-                }
-            }
+        let Some(ref shared) = self.shared_session else {
+            return Ok(());
+        };
+        let channel_id = match self.channel_id {
+            Some(ch) => ch,
+            None => return Ok(()),
+        };
+
+        let (forward, commands) = process_escape_input(&mut self.escape_state, data);
+
+        // Inject escape command outputs into SSH channel
+        for cmd in &commands {
+            let output = match cmd {
+                EscapeCommand::ShowStatus => self.format_status().await,
+                EscapeCommand::ShowHelp => Self::format_help().to_string(),
+            };
+            session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
         }
+
+        // Forward remaining bytes to PTY
+        Self::flush_to_pty(shared, self.client_id, &forward).await;
+
         Ok(())
     }
 
@@ -546,6 +623,64 @@ impl Drop for DenSshHandler {
             task.abort();
         }
     }
+}
+
+/// Escape command detected during input processing.
+#[derive(Debug, PartialEq)]
+enum EscapeCommand {
+    /// `~s` — show status (inject into SSH channel, don't forward to PTY)
+    ShowStatus,
+    /// `~?` — show help
+    ShowHelp,
+}
+
+/// Process input bytes through the escape state machine.
+/// Returns (bytes to forward to PTY, list of escape commands detected).
+///
+/// The returned forward buffer does NOT include bytes consumed by escape commands.
+/// `~~` produces a single literal `~` in the forward buffer.
+fn process_escape_input(state: &mut EscapeState, data: &[u8]) -> (Vec<u8>, Vec<EscapeCommand>) {
+    let mut forward = Vec::with_capacity(data.len());
+    let mut commands = Vec::new();
+
+    for &byte in data {
+        match *state {
+            EscapeState::Normal => {
+                if byte == b'\r' || byte == b'\n' {
+                    *state = EscapeState::AfterNewline;
+                }
+                forward.push(byte);
+            }
+            EscapeState::AfterNewline => {
+                if byte == b'~' {
+                    *state = EscapeState::AfterTilde;
+                } else if byte == b'\r' || byte == b'\n' {
+                    // Stay in AfterNewline
+                    forward.push(byte);
+                } else {
+                    *state = EscapeState::Normal;
+                    forward.push(byte);
+                }
+            }
+            EscapeState::AfterTilde => {
+                *state = EscapeState::Normal;
+                match byte {
+                    b's' => commands.push(EscapeCommand::ShowStatus),
+                    b'?' => commands.push(EscapeCommand::ShowHelp),
+                    b'~' => forward.push(b'~'),
+                    _ => {
+                        forward.push(b'~');
+                        if byte == b'\r' || byte == b'\n' {
+                            *state = EscapeState::AfterNewline;
+                        }
+                        forward.push(byte);
+                    }
+                }
+            }
+        }
+    }
+
+    (forward, commands)
 }
 
 /// SSH クライアントへの出力から、SSH 非互換な ConPTY モードを除去する。
@@ -989,5 +1124,146 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(keys.contains("ssh-ed25519 AAAAB3NzaKey1"));
         assert!(keys.contains("ssh-rsa AAAAB3NzaKey2"));
+    }
+
+    // ── Escape state machine tests ──────────────────────────────────
+
+    #[test]
+    fn escape_plain_text_passthrough() {
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"hello world");
+        assert_eq!(fwd, b"hello world");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn escape_tilde_s_after_cr() {
+        // CR → ~ → s triggers ShowStatus
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r~s");
+        assert_eq!(fwd, b"\r");
+        assert_eq!(cmds, vec![EscapeCommand::ShowStatus]);
+    }
+
+    #[test]
+    fn escape_tilde_s_after_lf() {
+        // LF → ~ → s triggers ShowStatus
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\n~s");
+        assert_eq!(fwd, b"\n");
+        assert_eq!(cmds, vec![EscapeCommand::ShowStatus]);
+    }
+
+    #[test]
+    fn escape_tilde_question_after_newline() {
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r~?");
+        assert_eq!(fwd, b"\r");
+        assert_eq!(cmds, vec![EscapeCommand::ShowHelp]);
+    }
+
+    #[test]
+    fn escape_double_tilde_sends_literal() {
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r~~");
+        assert_eq!(fwd, b"\r~");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn escape_tilde_unknown_forwards_both() {
+        // ~ + unknown char → forward both
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r~x");
+        assert_eq!(fwd, b"\r~x");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn escape_tilde_without_newline_is_literal() {
+        // In Normal state, ~ is just a regular character
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"a~s");
+        assert_eq!(fwd, b"a~s");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn escape_initial_after_newline_state() {
+        // start_bridge sets AfterNewline — can ~s immediately
+        let mut state = EscapeState::AfterNewline;
+        let (fwd, cmds) = process_escape_input(&mut state, b"~s");
+        assert!(fwd.is_empty());
+        assert_eq!(cmds, vec![EscapeCommand::ShowStatus]);
+    }
+
+    #[test]
+    fn escape_multiple_newlines_before_tilde() {
+        // Multiple newlines keep AfterNewline state
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r\n\r\n~s");
+        assert_eq!(fwd, b"\r\n\r\n");
+        assert_eq!(cmds, vec![EscapeCommand::ShowStatus]);
+    }
+
+    #[test]
+    fn escape_tilde_then_newline_resets() {
+        // ~<newline> → forwards both, and newline sets AfterNewline
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r~\r");
+        assert_eq!(fwd, b"\r~\r");
+        assert!(cmds.is_empty());
+        // State should be AfterNewline now (the second \r)
+        assert!(matches!(state, EscapeState::AfterNewline));
+    }
+
+    #[test]
+    fn escape_multiple_commands_in_one_chunk() {
+        // Two status requests in one data chunk
+        let mut state = EscapeState::Normal;
+        let (fwd, cmds) = process_escape_input(&mut state, b"\r~s\r~?");
+        assert_eq!(fwd, b"\r\r");
+        assert_eq!(
+            cmds,
+            vec![EscapeCommand::ShowStatus, EscapeCommand::ShowHelp]
+        );
+    }
+
+    #[test]
+    fn escape_across_chunks() {
+        // State persists across calls: first chunk ends with \r
+        let mut state = EscapeState::Normal;
+        let (fwd1, cmds1) = process_escape_input(&mut state, b"hello\r");
+        assert_eq!(fwd1, b"hello\r");
+        assert!(cmds1.is_empty());
+        assert!(matches!(state, EscapeState::AfterNewline));
+
+        // Second chunk starts with ~s
+        let (fwd2, cmds2) = process_escape_input(&mut state, b"~s");
+        assert!(fwd2.is_empty());
+        assert_eq!(cmds2, vec![EscapeCommand::ShowStatus]);
+    }
+
+    #[test]
+    fn escape_tilde_held_across_chunks() {
+        // First chunk: \r~ (tilde held)
+        let mut state = EscapeState::Normal;
+        let (fwd1, cmds1) = process_escape_input(&mut state, b"\r~");
+        assert_eq!(fwd1, b"\r");
+        assert!(cmds1.is_empty());
+        assert!(matches!(state, EscapeState::AfterTilde));
+
+        // Second chunk: s (completes the escape)
+        let (fwd2, cmds2) = process_escape_input(&mut state, b"s");
+        assert!(fwd2.is_empty());
+        assert_eq!(cmds2, vec![EscapeCommand::ShowStatus]);
+    }
+
+    #[test]
+    fn escape_format_help_content() {
+        let help = DenSshHandler::format_help();
+        assert!(help.contains("~s"));
+        assert!(help.contains("~?"));
+        assert!(help.contains("~~"));
     }
 }

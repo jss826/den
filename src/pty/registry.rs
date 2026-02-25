@@ -147,6 +147,13 @@ pub struct SessionInner {
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
 }
 
+impl SessionInner {
+    /// Number of currently attached clients.
+    pub fn client_count(&self) -> usize {
+        self.clients.len()
+    }
+}
+
 #[derive(Debug)]
 pub struct ClientInfo {
     pub id: u64,
