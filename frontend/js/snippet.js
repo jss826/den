@@ -1,4 +1,4 @@
-/* global DenSettings, DenTerminal, Toast */
+/* global DenSettings, DenTerminal, Toast, Keybar */
 // Den - スニペット管理モジュール
 // eslint-disable-next-line no-unused-vars
 const DenSnippet = (() => {
@@ -119,7 +119,7 @@ const DenSnippet = (() => {
     // textarea newlines → CR (terminal Enter)
     let data = snippet.command.replace(/\n/g, '\r');
     // escape sequence conversion (\r, \n, \t, \x## etc.)
-    data = DenKeybar.unescapeSend(data);
+    data = Keybar.unescapeSend(data);
     if (snippet.auto_run) data += '\r';
     DenTerminal.sendInput(data);
     DenTerminal.focus();
