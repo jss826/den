@@ -116,7 +116,11 @@ const DenSnippet = (() => {
   }
 
   function execute(snippet) {
-    const data = snippet.auto_run ? snippet.command + '\r' : snippet.command;
+    // textarea newlines → CR (terminal Enter)
+    let data = snippet.command.replace(/\n/g, '\r');
+    // escape sequence conversion (\r, \n, \t, \x## etc.)
+    data = DenKeybar.unescapeSend(data);
+    if (snippet.auto_run) data += '\r';
     DenTerminal.sendInput(data);
     DenTerminal.focus();
   }

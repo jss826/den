@@ -917,6 +917,6 @@ const Keybar = (() => {
   return {
     init, reload, getDefaultKeys, getDefaultSecondaryKeys, isTouchDevice,
     getModifiers, resetModifiers, executeKey: executeNormalKey,
-    toggleVisibility, collapse, expand, isVisible,
+    toggleVisibility, collapse, expand, isVisible, unescapeSend,
   };
 })();
