@@ -256,16 +256,32 @@ impl DenSshHandler {
     }
 
     /// Filter and forward buffered bytes to the PTY.
-    async fn flush_to_pty(shared: &SharedSession, client_id: Option<u64>, buf: &[u8]) {
+    async fn flush_to_pty(
+        shared: &SharedSession,
+        client_id: Option<u64>,
+        session_name: Option<&str>,
+        buf: &[u8],
+    ) {
         if buf.is_empty() {
             return;
         }
         let filtered = filter_terminal_responses(buf);
+        if buf.len() != filtered.len()
+            && let Some(name) = session_name
+        {
+            tracing::debug!(
+                "SSH data: {} bytes in, {} bytes after filter (session {name})",
+                buf.len(),
+                filtered.len(),
+            );
+        }
         if filtered.is_empty() {
             return;
         }
         if let Some(client_id) = client_id {
             let _ = shared.write_input_from(client_id, &filtered).await;
+        } else if let Some(name) = session_name {
+            tracing::warn!("SSH data: client_id is None, dropping input (session {name})");
         }
     }
 
@@ -562,7 +578,13 @@ impl Handler for DenSshHandler {
         }
 
         // Forward remaining bytes to PTY
-        Self::flush_to_pty(shared, self.client_id, &forward).await;
+        Self::flush_to_pty(
+            shared,
+            self.client_id,
+            self.session_name.as_deref(),
+            &forward,
+        )
+        .await;
 
         Ok(())
     }

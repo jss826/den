@@ -149,7 +149,7 @@ pub struct SessionInner {
 
 impl SessionInner {
     /// Number of currently attached clients.
-    pub fn client_count(&self) -> usize {
+    pub(crate) fn client_count(&self) -> usize {
         self.clients.len()
     }
 }
