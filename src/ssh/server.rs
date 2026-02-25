@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use russh::keys::ssh_key;
 use russh::server::{Auth, Handler, Msg, Server as _, Session};
@@ -26,6 +27,9 @@ const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3
 
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Maximum concurrent SSH connections from localhost (loopback self-connection guard)
+const MAX_SSH_LOOPBACK: usize = 3;
 
 /// Escape character state machine for `~` sequences (like OpenSSH).
 /// Detects `Enter → ~ → command` patterns in SSH input.
@@ -101,10 +105,13 @@ pub async fn run(
     };
     let config = Arc::new(config);
 
+    let instance_id = registry.instance_id().to_string();
     let mut server = DenSshServer {
         registry,
         password,
         authorized_keys,
+        instance_id,
+        loopback_count: Arc::new(AtomicUsize::new(0)),
     };
 
     let addr = format!("{bind_address}:{port}");
@@ -121,6 +128,8 @@ struct DenSshServer {
     registry: Arc<SessionRegistry>,
     password: String,
     authorized_keys: Arc<HashSet<String>>,
+    instance_id: String,
+    loopback_count: Arc<AtomicUsize>,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -128,10 +137,18 @@ impl russh::server::Server for DenSshServer {
 
     fn new_client(&mut self, addr: Option<std::net::SocketAddr>) -> DenSshHandler {
         tracing::info!("SSH client connected from {:?}", addr);
+        let is_loopback = addr.is_some_and(|a| a.ip().is_loopback());
+        if is_loopback {
+            self.loopback_count.fetch_add(1, Ordering::Relaxed);
+        }
         DenSshHandler {
             registry: Arc::clone(&self.registry),
             password: self.password.clone(),
             authorized_keys: Arc::clone(&self.authorized_keys),
+            instance_id: self.instance_id.clone(),
+            is_loopback,
+            self_connection_detected: false,
+            loopback_count: Arc::clone(&self.loopback_count),
             session_name: None,
             client_id: None,
             channel_id: None,
@@ -150,6 +167,11 @@ struct DenSshHandler {
     registry: Arc<SessionRegistry>,
     password: String,
     authorized_keys: Arc<HashSet<String>>,
+    // Self-connection detection
+    instance_id: String,
+    is_loopback: bool,
+    self_connection_detected: bool,
+    loopback_count: Arc<AtomicUsize>,
     // Per-connection state
     session_name: Option<String>,
     client_id: Option<u64>,
@@ -170,6 +192,41 @@ impl DenSshHandler {
         session_name: &str,
         session: &mut Session,
     ) -> Result<(), anyhow::Error> {
+        let channel_id = self
+            .channel_id
+            .ok_or_else(|| anyhow::anyhow!("No channel"))?;
+
+        // Layer 1: DEN_INSTANCE env var match → definite self-connection
+        if self.self_connection_detected {
+            tracing::warn!("SSH self-connection detected via DEN_INSTANCE env var");
+            session.data(
+                channel_id,
+                CryptoVec::from_slice(
+                    b"Error: Self-connection detected (DEN_INSTANCE match).\r\n\
+                      Connecting to Den from within a Den session creates an infinite loop.\r\n",
+                ),
+            )?;
+            session.close(channel_id)?;
+            return Ok(());
+        }
+
+        // Layer 2: Too many loopback connections → likely self-connection loop
+        if self.is_loopback {
+            let count = self.loopback_count.load(Ordering::Relaxed);
+            if count > MAX_SSH_LOOPBACK {
+                tracing::warn!(
+                    "SSH loopback connection limit exceeded: {count}/{MAX_SSH_LOOPBACK}"
+                );
+                let msg = format!(
+                    "Error: Too many SSH connections from localhost ({count} exceeds limit of {MAX_SSH_LOOPBACK}).\r\n\
+                     This may indicate a self-connection loop (SSH into Den from within Den).\r\n"
+                );
+                session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
+                session.close(channel_id)?;
+                return Ok(());
+            }
+        }
+
         let cols = self.pty_cols;
         let rows = self.pty_rows;
 
@@ -184,10 +241,6 @@ impl DenSshHandler {
         self.shared_session = Some(Arc::clone(&shared_session));
         self.connected_at = Some(std::time::Instant::now());
         self.escape_state = EscapeState::AfterNewline;
-
-        let channel_id = self
-            .channel_id
-            .ok_or_else(|| anyhow::anyhow!("No channel"))?;
 
         // replay data を送信（SSH 非互換モードを除去）
         tracing::debug!(
@@ -430,6 +483,25 @@ impl Handler for DenSshHandler {
         Ok(())
     }
 
+    async fn env_request(
+        &mut self,
+        channel: ChannelId,
+        variable_name: &str,
+        variable_value: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if variable_name == "DEN_INSTANCE" {
+            if variable_value == self.instance_id {
+                tracing::debug!("SSH env_request: DEN_INSTANCE matches — self-connection");
+                self.self_connection_detected = true;
+            }
+            session.channel_success(channel)?;
+        } else {
+            session.channel_failure(channel)?;
+        }
+        Ok(())
+    }
+
     async fn shell_request(
         &mut self,
         _channel: ChannelId,
@@ -630,6 +702,10 @@ impl Handler for DenSshHandler {
 
 impl Drop for DenSshHandler {
     fn drop(&mut self) {
+        if self.is_loopback {
+            self.loopback_count.fetch_sub(1, Ordering::Relaxed);
+        }
+
         // Drop 時に cleanup できない（async）のでタスクを spawn
         let session_name = self.session_name.take();
         let client_id = self.client_id.take();

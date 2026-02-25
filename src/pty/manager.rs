@@ -19,6 +19,7 @@ impl PtyManager {
         shell: &str,
         cols: u16,
         rows: u16,
+        instance_id: &str,
     ) -> Result<PtySession, Box<dyn std::error::Error + Send + Sync>> {
         let pty_system = native_pty_system();
 
@@ -36,6 +37,7 @@ impl PtyManager {
         let pair = pty_system.openpty(size)?;
 
         let mut cmd = CommandBuilder::new(shell);
+        cmd.env("DEN_INSTANCE", instance_id);
         // Windows の場合、ホームディレクトリで起動
         if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             cmd.cwd(home);

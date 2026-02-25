@@ -108,6 +108,8 @@ pub struct SessionRegistry {
     sleep_config: Arc<std::sync::Mutex<SleepConfig>>,
     /// ユーザー操作タイムスタンプ（Unix epoch 秒、Relaxed atomic で更新）
     last_activity: Arc<AtomicU64>,
+    /// Instance ID for self-connection detection (set in DEN_INSTANCE env var)
+    instance_id: String,
 }
 
 /// 1 つの名前付き PTY セッション
@@ -203,11 +205,20 @@ impl SessionRegistry {
             currently_preventing: false,
         }));
 
+        // Generate random instance ID for self-connection detection
+        let instance_id = {
+            use rand::Rng;
+            let mut buf = [0u8; 16];
+            rand::thread_rng().fill(&mut buf);
+            hex::encode(buf)
+        };
+
         let registry = Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
             shell,
             sleep_config,
             last_activity,
+            instance_id,
         });
 
         // always モードなら即座に ON
@@ -226,6 +237,11 @@ impl SessionRegistry {
         });
 
         registry
+    }
+
+    /// Instance ID for self-connection detection
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     /// PTY を spawn し read_task/resize_task を起動する共通ヘルパー
@@ -381,7 +397,8 @@ impl SessionRegistry {
         // PTY を spawn（blocking）
         let pty = tokio::task::spawn_blocking({
             let shell = self.shell.clone();
-            move || PtyManager::spawn(&shell, cols, rows)
+            let instance_id = self.instance_id.clone();
+            move || PtyManager::spawn(&shell, cols, rows, &instance_id)
         })
         .await
         .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?
