@@ -260,10 +260,12 @@ impl DenSshHandler {
         // Output: broadcast::Receiver → SSH channel
         let handle = session.handle();
         let name_for_task = session_name.to_string();
-        let registry = Arc::clone(&self.registry);
-        let _shared_session = shared_session; // keep alive reference for output task duration
+        // Keep Arc alive so the session isn't dropped while output_task runs.
+        // Also used for is_alive() checks inside the task.
+        let session_ref = shared_session;
 
         self.output_task = Some(tokio::spawn(async move {
+            let reason;
             loop {
                 // recv with timeout: ConPTY は子プロセス終了後も reader を
                 // ブロックし続けるため、定期的に alive を確認する
@@ -278,6 +280,10 @@ impl DenSshHandler {
                             .await
                             .is_err()
                         {
+                            tracing::info!(
+                                "SSH output_task: handle.data() failed for {name_for_task}, client disconnected"
+                            );
+                            reason = "client_disconnected";
                             break;
                         }
                     }
@@ -285,24 +291,34 @@ impl DenSshHandler {
                         tracing::warn!("SSH client lagged {n} messages on {name_for_task}");
                     }
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                        tracing::debug!(
+                            "SSH output_task: broadcast closed for {name_for_task}, session ended"
+                        );
                         let _ = handle.exit_status_request(channel_id, 0).await;
                         let _ = handle.eof(channel_id).await;
                         let _ = handle.close(channel_id).await;
+                        reason = "broadcast_closed";
                         break;
                     }
                     Err(_) => {
-                        if !_shared_session.is_alive() {
+                        if !session_ref.is_alive() {
+                            tracing::debug!(
+                                "SSH output_task: session {name_for_task} is no longer alive"
+                            );
                             let _ = handle.exit_status_request(channel_id, 0).await;
                             let _ = handle.eof(channel_id).await;
                             let _ = handle.close(channel_id).await;
+                            reason = "session_dead";
                             break;
                         }
                     }
                 }
             }
 
-            // セッションが死んでいたら registry から削除
-            registry.destroy(&name_for_task).await;
+            tracing::debug!(
+                "SSH output_task ended for session {name_for_task} (alive={}, reason={reason})",
+                session_ref.is_alive()
+            );
         }));
 
         Ok(())
