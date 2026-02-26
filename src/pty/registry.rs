@@ -83,12 +83,17 @@ const SLEEP_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 fn apply_sleep_state(prevent: bool, currently_preventing: &mut bool) {
     use windows_sys::Win32::System::Power::{ES_SYSTEM_REQUIRED, SetThreadExecutionState};
     if prevent {
-        unsafe { SetThreadExecutionState(ES_SYSTEM_REQUIRED) };
+        let prev = unsafe { SetThreadExecutionState(ES_SYSTEM_REQUIRED) };
+        if prev == 0 {
+            tracing::warn!("SetThreadExecutionState(ES_SYSTEM_REQUIRED) failed (returned 0)");
+        } else {
+            tracing::debug!("SetThreadExecutionState(ES_SYSTEM_REQUIRED) ok (prev=0x{prev:08x})");
+        }
         if !*currently_preventing {
-            tracing::debug!("Sleep prevention: ON");
+            tracing::info!("Sleep prevention: ON");
         }
     } else if *currently_preventing {
-        tracing::debug!("Sleep prevention: OFF");
+        tracing::info!("Sleep prevention: OFF");
     }
     *currently_preventing = prevent;
 }
@@ -228,10 +233,16 @@ impl SessionRegistry {
         let weak = Arc::downgrade(&registry);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(SLEEP_CHECK_INTERVAL);
+            let mut tick_count: u64 = 0;
             loop {
                 interval.tick().await;
+                tick_count += 1;
                 let Some(reg) = weak.upgrade() else { break };
                 let session_count = reg.sessions.read().await.len();
+                // log every 10 ticks (~10 min) to confirm the task is alive
+                if tick_count % 10 == 1 {
+                    tracing::info!(tick_count, "sleep prevention periodic task alive");
+                }
                 reg.evaluate_sleep_prevention(session_count);
             }
         });
@@ -754,7 +765,15 @@ impl SessionRegistry {
             SleepPreventionMode::UserActivity => {
                 let last = self.last_activity.load(Ordering::Relaxed);
                 let elapsed_secs = now_epoch_secs().saturating_sub(last);
-                session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60
+                let prevent = session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60;
+                tracing::debug!(
+                    sessions = session_count,
+                    elapsed_secs,
+                    timeout_mins = config.timeout_minutes,
+                    prevent,
+                    "sleep prevention eval"
+                );
+                prevent
             }
         };
         apply_sleep_state(should_prevent, &mut config.currently_preventing);
