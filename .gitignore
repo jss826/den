@@ -1,5 +1,6 @@
 /target
 /target-test
+/target-release
 node_modules/
 .claude/settings.local.json
 !frontend/vendor/
