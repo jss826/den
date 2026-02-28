@@ -765,7 +765,8 @@ impl SessionRegistry {
             SleepPreventionMode::UserActivity => {
                 let last = self.last_activity.load(Ordering::Relaxed);
                 let elapsed_secs = now_epoch_secs().saturating_sub(last);
-                let prevent = session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60;
+                let prevent =
+                    session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60;
                 tracing::debug!(
                     sessions = session_count,
                     elapsed_secs,

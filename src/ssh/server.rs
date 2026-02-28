@@ -249,13 +249,15 @@ impl DenSshHandler {
         );
         if !replay.is_empty() {
             let filtered_replay = filter_output_for_ssh(&replay);
+            let filtered_replay = replace_osc_title(&filtered_replay, session_name);
             if !filtered_replay.is_empty() {
                 session.data(channel_id, CryptoVec::from_slice(&filtered_replay))?;
             }
         }
 
-        // Set terminal title to "Den SSH"
-        session.data(channel_id, CryptoVec::from_slice(b"\x1b]0;Den SSH\x07"))?;
+        // Set terminal title to "Den SSH [session_name]"
+        let initial_title = format!("\x1b]0;Den SSH [{session_name}]\x07");
+        session.data(channel_id, CryptoVec::from_slice(initial_title.as_bytes()))?;
 
         // Output: broadcast::Receiver → SSH channel
         let handle = session.handle();
@@ -272,6 +274,7 @@ impl DenSshHandler {
                 match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
                     Ok(Ok(data)) => {
                         let filtered = filter_output_for_ssh(&data);
+                        let filtered = replace_osc_title(&filtered, &name_for_task);
                         if filtered.is_empty() {
                             continue;
                         }
@@ -840,6 +843,87 @@ fn filter_output_for_ssh(data: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(result)
 }
 
+/// Check if position `start` in `data` begins an OSC 0, 1, or 2 sequence.
+/// Expects `data[start]` to be `ESC` and `data[start+1]` to be `]`.
+fn is_title_osc(data: &[u8], start: usize) -> bool {
+    let i = start + 2; // skip ESC ]
+    if i >= data.len() {
+        return false;
+    }
+    match data[i] {
+        // OSC 0 ; ... or OSC 1 ; ... or OSC 2 ; ...
+        b'0' | b'1' | b'2' => {
+            let next = i + 1;
+            // Must be followed by `;` or terminator (BEL/ST) or end of data
+            next >= data.len()
+                || data[next] == b';'
+                || data[next] == 0x07
+                || (data[next] == 0x1b && next + 1 < data.len() && data[next + 1] == b'\\')
+        }
+        _ => false,
+    }
+}
+
+/// Fast scan: does `data` contain any OSC 0/1/2 title sequence?
+fn has_osc_title_sequence(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 1 < data.len() {
+        if data[i] == 0x1b && data[i + 1] == b']' && is_title_osc(data, i) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Replace OSC 0/1/2 title sequences with `Den SSH [session_name]`.
+///
+/// PowerShell (and other shells) continuously set the terminal title via
+/// OSC 0/1/2 sequences. This overwrites any title we set initially.
+/// By replacing every title OSC in the PTY output stream, the SSH client's
+/// terminal always displays the Den session identifier.
+///
+/// Both BEL (0x07) and ST (ESC \) terminators are handled.
+/// Unterminated sequences are passed through unchanged (chunk-boundary safe).
+fn replace_osc_title<'a>(data: &'a [u8], session_name: &str) -> Cow<'a, [u8]> {
+    // Fast path 1: no ESC ] at all
+    if !data.contains(&0x1b) {
+        return Cow::Borrowed(data);
+    }
+
+    // Fast path 2: ESC present but no title OSC
+    if !has_osc_title_sequence(data) {
+        return Cow::Borrowed(data);
+    }
+
+    let replacement = format!("\x1b]0;Den SSH [{session_name}]\x07");
+    let replacement_bytes = replacement.as_bytes();
+
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+
+    while i < data.len() {
+        if data[i] == 0x1b && i + 1 < data.len() && data[i + 1] == b']' && is_title_osc(data, i) {
+            // Find the end of this OSC sequence
+            let end = skip_osc_sequence(data, i);
+            if end > i {
+                // Terminated → replace with our title
+                result.extend_from_slice(replacement_bytes);
+                i = end;
+            } else {
+                // Unterminated → pass through as-is
+                result.push(data[i]);
+                i += 1;
+            }
+        } else {
+            result.push(data[i]);
+            i += 1;
+        }
+    }
+
+    Cow::Owned(result)
+}
+
 /// SSH クライアントのターミナルが返す応答シーケンスをフィルタする。
 ///
 /// ConPTY は初期化時にクエリを送信し、ターミナルが応答を返す。
@@ -1379,5 +1463,108 @@ mod tests {
         assert!(help.contains("~s"));
         assert!(help.contains("~?"));
         assert!(help.contains("~~"));
+    }
+
+    // ── replace_osc_title tests ─────────────────────────────────────
+
+    #[test]
+    fn osc_title_replace_osc0_bel() {
+        // OSC 0 with BEL terminator → replaced
+        let data = b"\x1b]0;PowerShell\x07";
+        let result = replace_osc_title(data, "main");
+        assert_eq!(&result[..], b"\x1b]0;Den SSH [main]\x07");
+    }
+
+    #[test]
+    fn osc_title_replace_osc0_st() {
+        // OSC 0 with ST terminator → replaced
+        let data = b"\x1b]0;PowerShell\x1b\\";
+        let result = replace_osc_title(data, "dev");
+        assert_eq!(&result[..], b"\x1b]0;Den SSH [dev]\x07");
+    }
+
+    #[test]
+    fn osc_title_replace_osc1_bel() {
+        // OSC 1 (icon name) → replaced
+        let data = b"\x1b]1;icon\x07";
+        let result = replace_osc_title(data, "s1");
+        assert_eq!(&result[..], b"\x1b]0;Den SSH [s1]\x07");
+    }
+
+    #[test]
+    fn osc_title_replace_osc2_bel() {
+        // OSC 2 (window title) → replaced
+        let data = b"\x1b]2;Window Title\x07";
+        let result = replace_osc_title(data, "s2");
+        assert_eq!(&result[..], b"\x1b]0;Den SSH [s2]\x07");
+    }
+
+    #[test]
+    fn osc_title_keep_other_osc() {
+        // OSC 7 (current directory) → keep unchanged
+        let data = b"\x1b]7;file:///home/user\x07";
+        let result = replace_osc_title(data, "main");
+        assert_eq!(&result[..], &data[..]);
+    }
+
+    #[test]
+    fn osc_title_keep_high_osc_numbers() {
+        // OSC 10 (foreground color query) → keep unchanged
+        let data = b"\x1b]10;rgb:ff/ff/ff\x07";
+        let result = replace_osc_title(data, "main");
+        assert_eq!(&result[..], &data[..]);
+    }
+
+    #[test]
+    fn osc_title_multiple_sequences() {
+        // Two title sequences in one chunk → both replaced
+        let data = b"\x1b]0;Title1\x07some text\x1b]2;Title2\x07";
+        let result = replace_osc_title(data, "main");
+        assert_eq!(
+            &result[..],
+            b"\x1b]0;Den SSH [main]\x07some text\x1b]0;Den SSH [main]\x07"
+        );
+    }
+
+    #[test]
+    fn osc_title_unterminated_passthrough() {
+        // Unterminated OSC → pass through unchanged (chunk boundary)
+        let data = b"\x1b]0;partial title";
+        let result = replace_osc_title(data, "main");
+        assert_eq!(&result[..], &data[..]);
+    }
+
+    #[test]
+    fn osc_title_plain_text_fast_path() {
+        // No ESC at all → Cow::Borrowed
+        let data = b"hello world";
+        let result = replace_osc_title(data, "main");
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(&result[..], &data[..]);
+    }
+
+    #[test]
+    fn osc_title_esc_but_no_title_osc() {
+        // ESC present but not a title OSC → Cow::Borrowed
+        let data = b"\x1b[?25h";
+        let result = replace_osc_title(data, "main");
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(&result[..], &data[..]);
+    }
+
+    #[test]
+    fn osc_title_mixed_with_text() {
+        // Text + OSC 0 + text → only OSC replaced, text preserved
+        let data = b"before\x1b]0;PS\x07after";
+        let result = replace_osc_title(data, "t1");
+        assert_eq!(&result[..], b"before\x1b]0;Den SSH [t1]\x07after");
+    }
+
+    #[test]
+    fn osc_title_empty_title_bel() {
+        // OSC 0 with empty title (immediately terminated) → replaced
+        let data = b"\x1b]0;\x07";
+        let result = replace_osc_title(data, "x");
+        assert_eq!(&result[..], b"\x1b]0;Den SSH [x]\x07");
     }
 }
