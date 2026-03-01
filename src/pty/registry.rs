@@ -67,6 +67,8 @@ struct SleepConfig {
     mode: SleepPreventionMode,
     timeout_minutes: u16,
     currently_preventing: bool,
+    /// UI toggle for temporary forced awake (resets on restart)
+    force_awake: bool,
 }
 
 /// 定期タスクのポーリング間隔
@@ -208,6 +210,7 @@ impl SessionRegistry {
             mode: sleep_mode,
             timeout_minutes: sleep_timeout,
             currently_preventing: false,
+            force_awake: false,
         }));
 
         // Generate random instance ID for self-connection detection
@@ -759,22 +762,26 @@ impl SessionRegistry {
     /// スリープ抑止の要否を判定し、OS に反映
     fn evaluate_sleep_prevention(&self, session_count: usize) {
         let mut config = self.sleep_config.lock().unwrap_or_else(|e| e.into_inner());
-        let should_prevent = match config.mode {
-            SleepPreventionMode::Always => true,
-            SleepPreventionMode::Off => false,
-            SleepPreventionMode::UserActivity => {
-                let last = self.last_activity.load(Ordering::Relaxed);
-                let elapsed_secs = now_epoch_secs().saturating_sub(last);
-                let prevent =
-                    session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60;
-                tracing::debug!(
-                    sessions = session_count,
-                    elapsed_secs,
-                    timeout_mins = config.timeout_minutes,
-                    prevent,
-                    "sleep prevention eval"
-                );
-                prevent
+        let should_prevent = if config.force_awake {
+            true
+        } else {
+            match config.mode {
+                SleepPreventionMode::Always => true,
+                SleepPreventionMode::Off => false,
+                SleepPreventionMode::UserActivity => {
+                    let last = self.last_activity.load(Ordering::Relaxed);
+                    let elapsed_secs = now_epoch_secs().saturating_sub(last);
+                    let prevent =
+                        session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60;
+                    tracing::debug!(
+                        sessions = session_count,
+                        elapsed_secs,
+                        timeout_mins = config.timeout_minutes,
+                        prevent,
+                        "sleep prevention eval"
+                    );
+                    prevent
+                }
             }
         };
         apply_sleep_state(should_prevent, &mut config.currently_preventing);
@@ -789,6 +796,24 @@ impl SessionRegistry {
             config.timeout_minutes = timeout;
         }
         self.evaluate_sleep_prevention(session_count);
+    }
+
+    /// Set temporary force-awake toggle (memory only, resets on restart)
+    pub async fn set_force_awake(&self, enabled: bool) {
+        let session_count = self.sessions.read().await.len();
+        {
+            let mut config = self.sleep_config.lock().unwrap_or_else(|e| e.into_inner());
+            config.force_awake = enabled;
+        }
+        self.evaluate_sleep_prevention(session_count);
+    }
+
+    /// Read current force-awake state (synchronous)
+    pub fn is_force_awake(&self) -> bool {
+        self.sleep_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .force_awake
     }
 }
 

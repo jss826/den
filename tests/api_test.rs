@@ -1070,3 +1070,98 @@ async fn clipboard_history_post_invalid_source_rejected() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+// --- Keep Awake API ---
+
+#[tokio::test]
+async fn keep_awake_get_default() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/keep-awake")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], false);
+}
+
+#[tokio::test]
+async fn keep_awake_put_and_get() {
+    let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
+    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+
+    // PUT true
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/keep-awake")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"enabled":true}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET — should be true
+    let req = Request::builder()
+        .uri("/api/keep-awake")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], true);
+
+    // PUT false
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/keep-awake")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"enabled":false}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // GET — should be false
+    let req = Request::builder()
+        .uri("/api/keep-awake")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], false);
+}
+
+#[tokio::test]
+async fn keep_awake_requires_auth() {
+    let app = test_app();
+
+    // GET
+    let req = Request::builder()
+        .uri("/api/keep-awake")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // PUT
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/keep-awake")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"enabled":true}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}

@@ -68,6 +68,10 @@ pub fn create_app_with_secret(
     let protected_routes = Router::new()
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
+        .route(
+            "/api/keep-awake",
+            get(store_api::get_keep_awake).put(store_api::put_keep_awake),
+        )
         // Clipboard history API
         .route(
             "/api/clipboard-history",

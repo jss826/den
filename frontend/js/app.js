@@ -179,6 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'clipboard-history-btn': DenIcons.clipboard,
       'snippet-btn': DenIcons.snippet,
       'float-terminal-btn': DenIcons.terminal,
+      'keep-awake-btn': DenIcons.coffee,
       'settings-btn': DenIcons.gear,
     };
     for (const [id, fn] of Object.entries(map)) {
@@ -228,6 +229,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // スニペット初期化
     DenSnippet.init(document.getElementById('snippet-btn'));
 
+    // Keep Awake トグル初期化
+    initKeepAwake();
+
     // クリップボード履歴初期化
     ClipboardHistory.init(document.getElementById('clipboard-history-btn'));
 
@@ -269,6 +273,26 @@ document.addEventListener('DOMContentLoaded', () => {
     switchTab: (tab) => switchTab(tab),
     updateSessionHash: (name) => setHash(buildHash('terminal', name)),
   };
+
+  function initKeepAwake() {
+    const btn = document.getElementById('keep-awake-btn');
+    if (!btn) return;
+    fetch('/api/keep-awake', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((data) => { if (data.enabled) btn.classList.add('active'); })
+      .catch(() => {});
+    btn.addEventListener('click', () => {
+      const enabling = !btn.classList.contains('active');
+      fetch('/api/keep-awake', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: enabling }),
+      }).then((r) => {
+        if (r.ok) btn.classList.toggle('active', enabling);
+      }).catch(() => {});
+    });
+  }
 
   function switchTab(tabName) {
     // タブボタン更新

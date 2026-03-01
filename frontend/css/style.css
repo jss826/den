@@ -1045,6 +1045,10 @@ html, body {
   color: var(--fg);
 }
 
+.tab-icon-btn.active {
+  color: var(--accent);
+}
+
 /* === 設定モーダル === */
 
 .settings-input {

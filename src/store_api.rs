@@ -1,6 +1,7 @@
 // テスト: tests/api_test.rs の Settings API セクションで統合テスト済み
 // （GET/PUT 正常系・認証必須・不正JSON・部分JSON）
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -91,4 +92,32 @@ pub async fn put_settings(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+// --- Keep Awake API ---
+
+#[derive(Deserialize)]
+pub struct KeepAwakeRequest {
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+struct KeepAwakeResponse {
+    enabled: bool,
+}
+
+/// GET /api/keep-awake
+pub async fn get_keep_awake(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(KeepAwakeResponse {
+        enabled: state.registry.is_force_awake(),
+    })
+}
+
+/// PUT /api/keep-awake
+pub async fn put_keep_awake(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<KeepAwakeRequest>,
+) -> impl IntoResponse {
+    state.registry.set_force_awake(req.enabled).await;
+    StatusCode::OK
 }
