@@ -250,9 +250,16 @@ impl SftpManager {
                     };
                     let _ = tx.send(result);
                 });
-                session = rx.await.map_err(|_| {
-                    SftpError::Io(std::io::Error::other("Agent auth thread panicked"))
-                })??;
+                session = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+                    .await
+                    .map_err(|_| {
+                        SftpError::Io(std::io::Error::other(
+                            "Agent auth timed out after 30 seconds",
+                        ))
+                    })?
+                    .map_err(|_| {
+                        SftpError::Io(std::io::Error::other("Agent auth thread panicked"))
+                    })??;
             }
         }
 

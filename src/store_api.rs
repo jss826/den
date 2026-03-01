@@ -118,8 +118,9 @@ pub async fn put_keep_awake(
     State(state): State<Arc<AppState>>,
     Json(req): Json<KeepAwakeRequest>,
 ) -> impl IntoResponse {
+    tracing::info!(enabled = req.enabled, "keep-awake toggled via API");
     state.registry.set_force_awake(req.enabled).await;
     Json(KeepAwakeResponse {
-        enabled: state.registry.is_force_awake(),
+        enabled: req.enabled,
     })
 }
