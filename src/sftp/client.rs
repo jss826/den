@@ -105,7 +105,16 @@ async fn authenticate_agent(
             .await
         {
             Ok(result) if result.success() => return Ok(session),
-            Ok(_) | Err(_) => continue,
+            Ok(_) => continue, // server rejected this key, try next
+            Err(e) => {
+                tracing::warn!("sftp: agent auth error: {e}");
+                let _ = session
+                    .disconnect(russh::Disconnect::ByApplication, "", "")
+                    .await;
+                return Err(SftpError::Io(std::io::Error::other(format!(
+                    "Agent auth error: {e}"
+                ))));
+            }
         }
     }
     let _ = session
@@ -122,10 +131,15 @@ impl russh::client::Handler for SftpClientHandler {
     type Error = anyhow::Error;
 
     // v1: 全ホストキーを受け入れ（known_hosts 検証は v2 で対応）
+    // WARNING: MITM risk — Agent auth signs challenges for unverified hosts.
     async fn check_server_key(
         &mut self,
-        _server_public_key: &ssh_key::PublicKey,
+        server_public_key: &ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
+        tracing::warn!(
+            fingerprint = %server_public_key.fingerprint(ssh_key::HashAlg::Sha256),
+            "sftp: accepting unverified host key (known_hosts check not yet implemented)"
+        );
         Ok(true)
     }
 }
@@ -221,21 +235,23 @@ impl SftpManager {
             SftpAuth::Agent => {
                 // Agent auth uses russh's Signer RPITIT which causes higher-ranked
                 // lifetime / Send issues with axum's Handler trait. We isolate the
-                // problematic future by running it on a dedicated single-thread runtime
-                // inside spawn_blocking, which avoids the Send requirement entirely.
+                // problematic future on a dedicated OS thread with its own single-thread
+                // runtime, avoiding both the Send requirement and blocking-thread-pool
+                // exhaustion that spawn_blocking would cause.
                 let username_owned = username.to_string();
-                session = tokio::task::spawn_blocking(move || {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                std::thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
-                        .build()
-                        .map_err(SftpError::Io)?;
-                    rt.block_on(authenticate_agent(session, username_owned))
-                })
-                .await
-                .map_err(|e| {
-                    SftpError::Io(std::io::Error::other(format!(
-                        "Agent auth task failed: {e}"
-                    )))
+                        .build();
+                    let result = match rt {
+                        Ok(rt) => rt.block_on(authenticate_agent(session, username_owned)),
+                        Err(e) => Err(SftpError::Io(e)),
+                    };
+                    let _ = tx.send(result);
+                });
+                session = rx.await.map_err(|_| {
+                    SftpError::Io(std::io::Error::other("Agent auth thread panicked"))
                 })??;
             }
         }

@@ -289,7 +289,9 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: enabling }),
       }).then((r) => {
-        if (r.ok) btn.classList.toggle('active', enabling);
+        if (r.ok) return r.json();
+      }).then((data) => {
+        if (data) btn.classList.toggle('active', data.enabled);
       }).catch(() => {});
     });
   }

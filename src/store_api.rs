@@ -119,5 +119,7 @@ pub async fn put_keep_awake(
     Json(req): Json<KeepAwakeRequest>,
 ) -> impl IntoResponse {
     state.registry.set_force_awake(req.enabled).await;
-    StatusCode::OK
+    Json(KeepAwakeResponse {
+        enabled: state.registry.is_force_awake(),
+    })
 }
