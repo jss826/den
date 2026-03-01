@@ -12,6 +12,8 @@ const FloatTerminal = (() => {
   let currentSession = 'float';
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
+  let lastSentCols = 0;
+  let lastSentRows = 0;
 
   // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
   const MOUSE_SEQ_RE = /\x1b\[<?\d+;\d+;\d+[Mm]/g;
@@ -169,7 +171,11 @@ const FloatTerminal = (() => {
 
   function sendResize() {
     if (ws && ws.readyState === WebSocket.OPEN && term) {
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      const { cols, rows } = term;
+      if (cols === lastSentCols && rows === lastSentRows) return;
+      lastSentCols = cols;
+      lastSentRows = rows;
+      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
     }
   }
 
@@ -183,6 +189,8 @@ const FloatTerminal = (() => {
     if (!term) return;
     const generation = ++connectGeneration;
     reconnectAttempts = 0;
+    lastSentCols = 0;
+    lastSentRows = 0;
     if (connectDelayTimer) { clearTimeout(connectDelayTimer); connectDelayTimer = null; }
     if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
     const cols = term.cols;

@@ -6,6 +6,8 @@ const DenTerminal = (() => {
   let currentSession = 'default';
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
+  let lastSentCols = 0;
+  let lastSentRows = 0;
 
   // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
   const MOUSE_SEQ_RE = /\x1b\[<?\d+;\d+;\d+[Mm]/g;
@@ -199,6 +201,8 @@ const DenTerminal = (() => {
   function doConnect() {
     const generation = ++connectGeneration;
     reconnectAttempts = 0;
+    lastSentCols = 0;
+    lastSentRows = 0;
     if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
     const cols = term.cols;
     const rows = term.rows;
@@ -320,11 +324,11 @@ const DenTerminal = (() => {
 
   function sendResize() {
     if (ws && ws.readyState === WebSocket.OPEN && term) {
-      ws.send(JSON.stringify({
-        type: 'resize',
-        cols: term.cols,
-        rows: term.rows,
-      }));
+      const { cols, rows } = term;
+      if (cols === lastSentCols && rows === lastSentRows) return;
+      lastSentCols = cols;
+      lastSentRows = rows;
+      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
     }
   }
 

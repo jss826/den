@@ -771,19 +771,20 @@ impl SessionRegistry {
                 SleepPreventionMode::UserActivity => {
                     let last = self.last_activity.load(Ordering::Relaxed);
                     let elapsed_secs = now_epoch_secs().saturating_sub(last);
-                    let prevent =
-                        session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60;
-                    tracing::debug!(
-                        sessions = session_count,
-                        elapsed_secs,
-                        timeout_mins = config.timeout_minutes,
-                        prevent,
-                        "sleep prevention eval"
-                    );
-                    prevent
+                    session_count > 0 && elapsed_secs < config.timeout_minutes as u64 * 60
                 }
             }
         };
+        let was_preventing = config.currently_preventing;
+        if should_prevent != was_preventing {
+            tracing::info!(
+                mode = ?config.mode,
+                force_awake = config.force_awake,
+                sessions = session_count,
+                should_prevent,
+                "sleep prevention state changed"
+            );
+        }
         apply_sleep_state(should_prevent, &mut config.currently_preventing);
     }
 
@@ -860,15 +861,18 @@ impl SharedSession {
 
     /// クライアントのリサイズ通知
     pub async fn resize(&self, client_id: u64, cols: u16, rows: u16) {
-        // スリープ抑止: ユーザー操作タイムスタンプ更新（lock-free）
-        self.last_activity
-            .store(now_epoch_secs(), Ordering::Relaxed);
         let mut inner = self.inner.lock().await;
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+            if client.cols == cols && client.rows == rows {
+                return;
+            }
             client.cols = cols;
             client.rows = rows;
             client.last_active = std::time::Instant::now();
             inner.active_client_id = Some(client_id);
+            // Update activity only on actual size change
+            self.last_activity
+                .store(now_epoch_secs(), Ordering::Relaxed);
         }
         SessionRegistry::recalculate_size(&mut inner);
     }
