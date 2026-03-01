@@ -476,7 +476,17 @@ const FloatTerminal = (() => {
         disconnect();
         if (term) term.clear();
       }
-    } else {
+    } else if (!currentSession) {
+      // Recovery: sessions appeared while disconnected — auto-connect to first alive
+      const alive = sessions.filter(s => s.alive);
+      const target = alive.length > 0 ? alive[0].name : sessions[0].name;
+      currentSession = target;
+      if (term) term.clear();
+      if (visible && !minimized) doConnect(0);
+      // Fall through to build the option list below
+    }
+
+    if (sessions.length > 0) {
       for (const s of sessions) {
         const opt = document.createElement('option');
         opt.value = s.name;

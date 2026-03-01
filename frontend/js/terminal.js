@@ -195,6 +195,7 @@ const DenTerminal = (() => {
   function connect(sessionName) {
     currentSession = sessionName || null;
     if (!currentSession) {
+      disconnect();
       showEmptyState();
       DenSettings.setTitleTab('terminal', null);
       return;
@@ -577,6 +578,11 @@ const DenTerminal = (() => {
         showEmptyState();
         window.DenApp?.updateSessionHash(null);
       }
+    } else if (!currentSession) {
+      // Recovery: sessions appeared while in empty state (e.g. startup fetch failed, or external creation)
+      const alive = sessions.filter(s => s.alive);
+      const target = alive.length > 0 ? alive[0].name : sessions[0].name;
+      switchSession(target);
     } else if (currentSession && !sessions.find(s => s.name === currentSession)) {
       // Current session no longer exists: switch to first alive session
       const alive = sessions.filter(s => s.alive);
