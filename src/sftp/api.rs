@@ -37,7 +37,7 @@ pub struct ConnectRequest {
     pub host: String,
     pub port: Option<u16>,
     pub username: String,
-    pub auth_type: String, // "password" or "key"
+    pub auth_type: String, // "password", "key", or "agent"
     pub password: Option<String>,
     pub key_path: Option<String>,
 }
@@ -55,6 +55,10 @@ fn sftp_err(e: SftpError) -> ApiError {
     match &e {
         SftpError::NotConnected => err(StatusCode::SERVICE_UNAVAILABLE, "Not connected to SFTP"),
         SftpError::AuthFailed => err(StatusCode::UNAUTHORIZED, "Authentication failed"),
+        SftpError::AgentUnavailable => err(
+            StatusCode::BAD_GATEWAY,
+            "SSH agent unavailable. Ensure ssh-agent or Pageant is running.",
+        ),
         SftpError::Ssh(se) => err(StatusCode::BAD_GATEWAY, &format!("SSH error: {se}")),
         SftpError::Sftp(se) => err(StatusCode::BAD_GATEWAY, &format!("SFTP error: {se}")),
         SftpError::Io(ie) => err(
@@ -116,10 +120,11 @@ pub async fn connect(
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Key path required"))?;
             super::client::SftpAuth::KeyFile(path)
         }
+        "agent" => super::client::SftpAuth::Agent,
         _ => {
             return Err(err(
                 StatusCode::BAD_REQUEST,
-                "auth_type must be 'password' or 'key'",
+                "auth_type must be 'password', 'key', or 'agent'",
             ));
         }
     };

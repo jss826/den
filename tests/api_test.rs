@@ -1071,6 +1071,30 @@ async fn clipboard_history_post_invalid_source_rejected() {
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
+// --- SFTP Agent auth ---
+
+#[tokio::test]
+async fn sftp_connect_agent_unavailable() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/sftp/connect")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"host":"127.0.0.1","port":1,"username":"user","auth_type":"agent"}"#,
+        ))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    // Agent may or may not be running; either way connection to 127.0.0.1:1 will fail
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "Expected error status, got {}",
+        resp.status()
+    );
+}
+
 // --- Keep Awake API ---
 
 #[tokio::test]
@@ -1097,7 +1121,7 @@ async fn keep_awake_put_and_get() {
     let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
-    // PUT true
+    // PUT true — response body should confirm the state
     let req = Request::builder()
         .method("PUT")
         .uri("/api/keep-awake")
@@ -1107,6 +1131,9 @@ async fn keep_awake_put_and_get() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], true);
 
     // GET — should be true
     let req = Request::builder()
@@ -1120,7 +1147,7 @@ async fn keep_awake_put_and_get() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["enabled"], true);
 
-    // PUT false
+    // PUT false — response body should confirm the state
     let req = Request::builder()
         .method("PUT")
         .uri("/api/keep-awake")
@@ -1130,6 +1157,9 @@ async fn keep_awake_put_and_get() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], false);
 
     // GET — should be false
     let req = Request::builder()

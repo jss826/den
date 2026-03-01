@@ -1,3 +1,4 @@
+use russh::keys::agent::client::AgentClient;
 use russh::keys::ssh_key;
 use russh_sftp::client::SftpSession;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use tokio::sync::{Mutex, MutexGuard};
 pub enum SftpError {
     NotConnected,
     AuthFailed,
+    AgentUnavailable,
     Ssh(russh::Error),
     Sftp(russh_sftp::client::error::Error),
     Io(std::io::Error),
@@ -19,6 +21,7 @@ impl std::fmt::Display for SftpError {
         match self {
             SftpError::NotConnected => write!(f, "Not connected"),
             SftpError::AuthFailed => write!(f, "Authentication failed"),
+            SftpError::AgentUnavailable => write!(f, "SSH agent unavailable"),
             SftpError::Ssh(e) => write!(f, "SSH error: {}", e),
             SftpError::Sftp(e) => write!(f, "SFTP error: {}", e),
             SftpError::Io(e) => write!(f, "I/O error: {}", e),
@@ -49,6 +52,66 @@ impl From<std::io::Error> for SftpError {
 pub enum SftpAuth {
     Password(String),
     KeyFile(String),
+    Agent,
+}
+
+// --- SSH Agent 接続 ---
+
+type DynAgentClient =
+    AgentClient<Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin + 'static>>;
+
+#[cfg(windows)]
+async fn connect_agent() -> Result<DynAgentClient, SftpError> {
+    // Try OpenSSH Agent (named pipe) first
+    if let Ok(agent) = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
+        return Ok(agent.dynamic());
+    }
+    // Fallback to Pageant
+    AgentClient::connect_pageant()
+        .await
+        .map(|a| a.dynamic())
+        .map_err(|_| SftpError::AgentUnavailable)
+}
+
+#[cfg(unix)]
+async fn connect_agent() -> Result<DynAgentClient, SftpError> {
+    AgentClient::connect_env()
+        .await
+        .map(|a| a.dynamic())
+        .map_err(|_| SftpError::AgentUnavailable)
+}
+
+/// SSH Agent を使って認証（全鍵を順に試行）。
+/// session を所有権で受け取り、認証済みの session を返す。
+/// tokio::spawn で呼ばれるため 'static + Send が必要。
+async fn authenticate_agent(
+    mut session: russh::client::Handle<SftpClientHandler>,
+    username: String,
+) -> Result<russh::client::Handle<SftpClientHandler>, SftpError> {
+    let mut agent = connect_agent().await?;
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|e| SftpError::Io(std::io::Error::other(format!("SSH agent error: {e}"))))?;
+    if identities.is_empty() {
+        let _ = session
+            .disconnect(russh::Disconnect::ByApplication, "", "")
+            .await;
+        return Err(SftpError::AuthFailed);
+    }
+    for key in identities {
+        match session
+            .authenticate_publickey_with(username.clone(), key, None, &mut agent)
+            .await
+        {
+            Ok(result) if result.success() => return Ok(session),
+            Ok(_) | Err(_) => continue,
+        }
+    }
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "", "")
+        .await;
+    Err(SftpError::AuthFailed)
 }
 
 // --- SSH クライアントハンドラ ---
@@ -126,12 +189,18 @@ impl SftpManager {
             .map_err(|e| SftpError::Ssh(russh::Error::IO(std::io::Error::other(e.to_string()))))?;
 
         // 認証
-        let auth_result = match &auth {
+        match auth {
             SftpAuth::Password(password) => {
-                session.authenticate_password(username, password).await?
+                let auth_result = session.authenticate_password(username, &password).await?;
+                if !auth_result.success() {
+                    let _ = session
+                        .disconnect(russh::Disconnect::ByApplication, "", "")
+                        .await;
+                    return Err(SftpError::AuthFailed);
+                }
             }
             SftpAuth::KeyFile(key_path) => {
-                let key_data = tokio::fs::read_to_string(key_path).await?;
+                let key_data = tokio::fs::read_to_string(&key_path).await?;
                 let key_pair = russh::keys::decode_secret_key(&key_data, None).map_err(|e| {
                     SftpError::Io(std::io::Error::other(format!("Invalid key: {e}")))
                 })?;
@@ -139,17 +208,36 @@ impl SftpManager {
                     Arc::new(key_pair),
                     None, // デフォルトのハッシュアルゴリズム
                 );
-                session
+                let auth_result = session
                     .authenticate_publickey(username, key_with_alg)
-                    .await?
+                    .await?;
+                if !auth_result.success() {
+                    let _ = session
+                        .disconnect(russh::Disconnect::ByApplication, "", "")
+                        .await;
+                    return Err(SftpError::AuthFailed);
+                }
             }
-        };
-
-        if !auth_result.success() {
-            let _ = session
-                .disconnect(russh::Disconnect::ByApplication, "", "")
-                .await;
-            return Err(SftpError::AuthFailed);
+            SftpAuth::Agent => {
+                // Agent auth uses russh's Signer RPITIT which causes higher-ranked
+                // lifetime / Send issues with axum's Handler trait. We isolate the
+                // problematic future by running it on a dedicated single-thread runtime
+                // inside spawn_blocking, which avoids the Send requirement entirely.
+                let username_owned = username.to_string();
+                session = tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(SftpError::Io)?;
+                    rt.block_on(authenticate_agent(session, username_owned))
+                })
+                .await
+                .map_err(|e| {
+                    SftpError::Io(std::io::Error::other(format!(
+                        "Agent auth task failed: {e}"
+                    )))
+                })??;
+            }
         }
 
         // SFTP サブシステムを開く
