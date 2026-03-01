@@ -9,7 +9,7 @@ const FloatTerminal = (() => {
   let term = null;
   let fitAddon = null;
   let ws = null;
-  let currentSession = 'float';
+  let currentSession = null;
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
   let lastSentCols = 0;
@@ -186,7 +186,7 @@ const FloatTerminal = (() => {
   let connectDelayTimer = null;
 
   function doConnect(delay = CONNECT_DELAY_MS) {
-    if (!term) return;
+    if (!term || !currentSession) return;
     const generation = ++connectGeneration;
     reconnectAttempts = 0;
     lastSentCols = 0;
@@ -329,7 +329,7 @@ const FloatTerminal = (() => {
   }
 
   // --- Show / Hide / Toggle ---
-  function show() {
+  async function show() {
     if (visible) { term?.focus(); return; }
     ensureTerminal();
     visible = true;
@@ -341,7 +341,18 @@ const FloatTerminal = (() => {
     panel.hidden = false;
     restoreBtn.hidden = true;
 
-    // Connect WS
+    // If no session selected, pick the first available one
+    if (!currentSession) {
+      const sessions = await DenTerminal.fetchSessions();
+      const alive = sessions.filter(s => s.alive);
+      if (alive.length > 0) {
+        currentSession = alive[0].name;
+      } else if (sessions.length > 0) {
+        currentSession = sessions[0].name;
+      }
+    }
+
+    // Connect WS (doConnect handles null currentSession gracefully)
     doConnect();
 
     // Single RAF for initial fit + focus; ResizeObserver handles late layout changes
@@ -399,7 +410,7 @@ const FloatTerminal = (() => {
 
   // --- Session management ---
   function switchSession(name) {
-    if (name === currentSession) return;
+    if (!name || name === currentSession) return;
     currentSession = name;
     if (term) term.clear();
     if (visible && !minimized) doConnect(0);
@@ -421,15 +432,22 @@ const FloatTerminal = (() => {
   }
 
   async function onKillSession() {
+    if (!currentSession) return;
     if (!(await Toast.confirm(`Kill session "${currentSession}"?`))) return;
     const ok = await DenTerminal.destroySession(currentSession);
     if (!ok) { Toast.error('Failed to kill session'); return; }
     await DenTerminal.refreshSessionList();
     const sessions = (await DenTerminal.fetchSessions()) ?? [];
-    const alive = sessions.filter(s => s.status !== 'dead');
-    currentSession = alive.length > 0 ? alive[0].name : 'float';
-    if (term) term.clear();
-    if (visible && !minimized) doConnect(0);
+    const alive = sessions.filter(s => s.alive);
+    if (alive.length > 0) {
+      currentSession = alive[0].name;
+      if (term) term.clear();
+      if (visible && !minimized) doConnect(0);
+    } else {
+      currentSession = null;
+      disconnect();
+      if (term) term.clear();
+    }
   }
 
   async function refreshSessionList(sessions) {
@@ -448,9 +466,16 @@ const FloatTerminal = (() => {
     sessionSelect.innerHTML = '';
     if (sessions.length === 0) {
       const opt = document.createElement('option');
-      opt.value = 'float';
-      opt.textContent = 'float';
+      opt.value = '';
+      opt.textContent = '(no sessions)';
+      opt.disabled = true;
+      opt.selected = true;
       sessionSelect.appendChild(opt);
+      if (currentSession !== null) {
+        currentSession = null;
+        disconnect();
+        if (term) term.clear();
+      }
     } else {
       for (const s of sessions) {
         const opt = document.createElement('option');

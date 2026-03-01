@@ -211,12 +211,27 @@ document.addEventListener('DOMContentLoaded', () => {
     // ターミナル初期化
     const container = document.getElementById('terminal-container');
     DenTerminal.init(container);
-    const initialHash = parseHash();
-    if (initialHash.session && DenTerminal.validateSessionName(initialHash.session)) {
-      initialHash.session = null;
-    }
-    DenTerminal.connect(initialHash.session);
     DenTerminal.initSessionBar();
+
+    // Fetch existing sessions before connecting
+    const initialHash = parseHash();
+    const existingSessions = await DenTerminal.fetchSessions();
+    let initialSession = null;
+
+    if (initialHash.session && !DenTerminal.validateSessionName(initialHash.session)) {
+      // Hash specifies a valid session name — use it if it exists
+      if (existingSessions.some(s => s.name === initialHash.session)) {
+        initialSession = initialHash.session;
+      }
+    }
+
+    if (!initialSession && existingSessions.length > 0) {
+      // No hash session or not found — pick the first alive session
+      const alive = existingSessions.filter(s => s.alive);
+      initialSession = alive.length > 0 ? alive[0].name : existingSessions[0].name;
+    }
+
+    DenTerminal.connect(initialSession);
     DenTerminal.refreshSessionList();
 
     // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
@@ -347,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function buildHash(tabName, sessionName) {
     const urlTab = tabName === 'filer' ? 'files' : 'terminal';
-    if (urlTab === 'terminal' && sessionName && sessionName !== 'default') {
+    if (urlTab === 'terminal' && sessionName) {
       return '#' + urlTab + '/' + encodeURIComponent(sessionName);
     }
     return '#' + urlTab;

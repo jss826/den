@@ -3,7 +3,7 @@ const DenTerminal = (() => {
   let term = null;
   let fitAddon = null;
   let ws = null;
-  let currentSession = 'default';
+  let currentSession = null;
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
   let lastSentCols = 0;
@@ -193,9 +193,39 @@ const DenTerminal = (() => {
   }
 
   function connect(sessionName) {
-    currentSession = sessionName || 'default';
+    currentSession = sessionName || null;
+    if (!currentSession) {
+      showEmptyState();
+      DenSettings.setTitleTab('terminal', null);
+      return;
+    }
+    hideEmptyState();
     DenSettings.setTitleTab('terminal', currentSession);
     doConnect();
+  }
+
+  function showEmptyState() {
+    const container = document.getElementById('terminal-container');
+    if (!container || container.querySelector('.terminal-empty-state')) return;
+    const el = document.createElement('div');
+    el.className = 'terminal-empty-state';
+    el.textContent = 'No sessions. Press + to create one.';
+    container.appendChild(el);
+  }
+
+  function hideEmptyState() {
+    const el = document.querySelector('.terminal-empty-state');
+    if (el) el.remove();
+  }
+
+  function disconnect() {
+    connectGeneration++;
+    if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
+    if (ws) {
+      ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+      ws.close();
+      ws = null;
+    }
   }
 
   function doConnect() {
@@ -315,6 +345,7 @@ const DenTerminal = (() => {
   function switchSession(name) {
     if (name === currentSession) return;
     currentSession = name;
+    hideEmptyState();
     DenSettings.setOscTitle('');
     DenSettings.setTitleTab('terminal', name);
     term.clear();
@@ -534,8 +565,26 @@ const DenTerminal = (() => {
     lastSessionsKey = sessionsKey;
 
     sessionTabsEl.innerHTML = '';
-    const list = sessions.length > 0 ? sessions : [{ name: 'default', alive: true, client_count: 0 }];
-    for (const s of list) {
+
+    // No sessions: show empty state and disconnect
+    if (sessions.length === 0) {
+      if (currentSession !== null) {
+        currentSession = null;
+        DenSettings.setOscTitle('');
+        DenSettings.setTitleTab('terminal', null);
+        disconnect();
+        if (term) term.clear();
+        showEmptyState();
+        window.DenApp?.updateSessionHash(null);
+      }
+    } else if (currentSession && !sessions.find(s => s.name === currentSession)) {
+      // Current session no longer exists: switch to first alive session
+      const alive = sessions.filter(s => s.alive);
+      const target = alive.length > 0 ? alive[0].name : sessions[0].name;
+      switchSession(target);
+    }
+
+    for (const s of sessions) {
       const tab = document.createElement('div');
       tab.className = 'session-tab';
       tab.dataset.session = s.name;
@@ -597,12 +646,13 @@ const DenTerminal = (() => {
             return;
           }
           if (name === currentSession) {
-            currentSession = 'default';
+            currentSession = null;
             DenSettings.setOscTitle('');
-            DenSettings.setTitleTab('terminal', 'default');
-            term.clear();
-            doConnect();
-            window.DenApp?.updateSessionHash('default');
+            DenSettings.setTitleTab('terminal', null);
+            disconnect();
+            if (term) term.clear();
+            showEmptyState();
+            window.DenApp?.updateSessionHash(null);
           }
           lastSessionsKey = ''; // Force refresh
           await refreshSessionList();
@@ -689,7 +739,7 @@ const DenTerminal = (() => {
   }
 
   return {
-    init, connect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
+    init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
     getCurrentSession, switchSession, refreshSessionList, initSessionBar,
     fetchSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,

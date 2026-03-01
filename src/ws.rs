@@ -43,13 +43,20 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let Some(session_name) = query.session else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Missing required parameter: session",
+        )
+            .into_response();
+    };
     let cols = query.cols.unwrap_or(80);
     let rows = query.rows.unwrap_or(24);
-    let session_name = query.session.unwrap_or_else(|| "default".to_string());
     let registry = Arc::clone(&state.registry);
 
     ws.on_upgrade(move |socket| handle_socket(socket, registry, session_name, cols, rows))
+        .into_response()
 }
 
 async fn handle_socket(
