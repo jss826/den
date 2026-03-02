@@ -6,6 +6,7 @@ use axum::{
 };
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -13,6 +14,7 @@ use crate::filer::api::{
     DeleteQuery, DownloadQuery, ErrorResponse, FileContent, FilerEntry, FilerListing, MkdirRequest,
     ReadQuery, RenameRequest, SearchQuery, SearchResult, WriteRequest, err, is_binary,
 };
+use crate::store::KnownHost;
 
 use super::client::SftpError;
 
@@ -59,6 +61,10 @@ fn sftp_err(e: SftpError) -> ApiError {
             StatusCode::BAD_GATEWAY,
             "SSH agent unavailable. Ensure ssh-agent or Pageant is running.",
         ),
+        // Host key errors are handled specially in the connect handler
+        SftpError::UnknownHostKey { .. } | SftpError::HostKeyMismatch { .. } => {
+            err(StatusCode::CONFLICT, &e.to_string())
+        }
         SftpError::Ssh(se) => err(StatusCode::BAD_GATEWAY, &format!("SSH error: {se}")),
         SftpError::Sftp(se) => err(StatusCode::BAD_GATEWAY, &format!("SFTP error: {se}")),
         SftpError::Io(ie) => err(
@@ -102,40 +108,122 @@ fn mtime_to_rfc3339(mtime: u32) -> String {
 
 // --- API ハンドラ ---
 
+// --- Host key types ---
+
+#[derive(Serialize)]
+pub struct ConnectErrorResponse {
+    error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_key: Option<HostKeyInfo>,
+}
+
+#[derive(Serialize)]
+pub struct HostKeyInfo {
+    host_port: String,
+    fingerprint: String,
+    algorithm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_fingerprint: Option<String>,
+}
+
+type ConnectApiError = (StatusCode, Json<ConnectErrorResponse>);
+
 /// POST /api/sftp/connect
 pub async fn connect(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ConnectRequest>,
-) -> Result<Json<StatusResponse>, ApiError> {
+) -> Result<Json<StatusResponse>, ConnectApiError> {
     let auth = match req.auth_type.as_str() {
         "password" => {
-            let pw = req
-                .password
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Password required"))?;
+            let pw = req.password.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ConnectErrorResponse {
+                        error: "Password required".to_string(),
+                        host_key: None,
+                    }),
+                )
+            })?;
             super::client::SftpAuth::Password(pw)
         }
         "key" => {
-            let path = req
-                .key_path
-                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Key path required"))?;
+            let path = req.key_path.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ConnectErrorResponse {
+                        error: "Key path required".to_string(),
+                        host_key: None,
+                    }),
+                )
+            })?;
             super::client::SftpAuth::KeyFile(path)
         }
         "agent" => super::client::SftpAuth::Agent,
         _ => {
-            return Err(err(
+            return Err((
                 StatusCode::BAD_REQUEST,
-                "auth_type must be 'password', 'key', or 'agent'",
+                Json(ConnectErrorResponse {
+                    error: "auth_type must be 'password', 'key', or 'agent'".to_string(),
+                    host_key: None,
+                }),
             ));
         }
     };
 
     let port = req.port.unwrap_or(22);
 
-    state
+    if let Err(e) = state
         .sftp_manager
         .connect(&req.host, port, &req.username, auth)
         .await
-        .map_err(sftp_err)?;
+    {
+        return Err(match e {
+            SftpError::UnknownHostKey {
+                host_port,
+                fingerprint,
+                algorithm,
+            } => (
+                StatusCode::CONFLICT,
+                Json(ConnectErrorResponse {
+                    error: "unknown_host_key".to_string(),
+                    host_key: Some(HostKeyInfo {
+                        host_port,
+                        fingerprint,
+                        algorithm,
+                        expected_fingerprint: None,
+                    }),
+                }),
+            ),
+            SftpError::HostKeyMismatch {
+                host_port,
+                fingerprint,
+                algorithm,
+                expected_fingerprint,
+            } => (
+                StatusCode::CONFLICT,
+                Json(ConnectErrorResponse {
+                    error: "host_key_mismatch".to_string(),
+                    host_key: Some(HostKeyInfo {
+                        host_port,
+                        fingerprint,
+                        algorithm,
+                        expected_fingerprint: Some(expected_fingerprint),
+                    }),
+                }),
+            ),
+            other => {
+                let msg = other.to_string();
+                let (status, _) = sftp_err(other);
+                (
+                    status,
+                    Json(ConnectErrorResponse {
+                        error: msg,
+                        host_key: None,
+                    }),
+                )
+            }
+        });
+    }
 
     let status = state.sftp_manager.status().await;
     Ok(Json(StatusResponse {
@@ -601,4 +689,117 @@ async fn search_recursive(
             .await;
         }
     }
+}
+
+// --- Known Hosts API ---
+
+#[derive(Deserialize)]
+pub struct TrustHostRequest {
+    pub host_port: String,
+    pub fingerprint: String,
+    pub algorithm: String,
+}
+
+#[derive(Deserialize)]
+pub struct RemoveHostQuery {
+    pub host_port: String,
+}
+
+/// Allowed SSH key algorithms for host key trust
+const ALLOWED_ALGORITHMS: &[&str] = &[
+    "ssh-ed25519",
+    "ssh-rsa",
+    "rsa-sha2-256",
+    "rsa-sha2-512",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+];
+
+/// GET /api/sftp/known-hosts
+pub async fn list_known_hosts(
+    State(state): State<Arc<AppState>>,
+) -> Json<HashMap<String, KnownHost>> {
+    let hosts = tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        move || store.load_known_hosts()
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!("sftp: list_known_hosts spawn_blocking failed: {e}");
+        HashMap::new()
+    });
+    Json(hosts)
+}
+
+/// POST /api/sftp/known-hosts
+pub async fn trust_host(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TrustHostRequest>,
+) -> Result<StatusCode, ApiError> {
+    // Validate fingerprint format: SHA256:<43 base64 chars>
+    if !req.fingerprint.starts_with("SHA256:") || req.fingerprint.len() < 50 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Invalid fingerprint format (expected SHA256:<base64>)",
+        ));
+    }
+    if req.host_port.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "host_port is required"));
+    }
+    if !ALLOWED_ALGORITHMS.contains(&req.algorithm.as_str()) {
+        return Err(err(StatusCode::BAD_REQUEST, "Unsupported key algorithm"));
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let entry = KnownHost {
+        fingerprint: req.fingerprint,
+        algorithm: req.algorithm,
+        first_seen: now,
+        last_seen: now,
+    };
+
+    tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        let host_port = req.host_port;
+        move || store.save_known_host(&host_port, entry)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("sftp: trust_host spawn_blocking failed: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+    })?
+    .map_err(|e| {
+        tracing::error!("sftp: trust_host save failed: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+/// DELETE /api/sftp/known-hosts
+pub async fn remove_known_host(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RemoveHostQuery>,
+) -> Result<StatusCode, ApiError> {
+    tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        let host_port = q.host_port;
+        move || store.remove_known_host(&host_port)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("sftp: remove_known_host spawn_blocking failed: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+    })?
+    .map_err(|e| {
+        tracing::error!("sftp: remove_known_host failed: {e}");
+        err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+    })?;
+
+    Ok(StatusCode::OK)
 }

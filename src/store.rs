@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,8 @@ pub struct Store {
     settings_cache: Arc<Mutex<Option<Settings>>>,
     /// Write-through cache for clipboard history
     clipboard_cache: Arc<Mutex<Option<Vec<ClipboardEntry>>>>,
+    /// Write-through cache for SSH known hosts
+    known_hosts_cache: Arc<Mutex<Option<HashMap<String, KnownHost>>>>,
 }
 
 // --- データモデル ---
@@ -36,6 +39,16 @@ pub struct ClipboardEntry {
 
 const CLIPBOARD_MAX_ENTRIES: usize = 100;
 const CLIPBOARD_MAX_TEXT_BYTES: usize = 10_240; // 10KB
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnownHost {
+    pub fingerprint: String,
+    pub algorithm: String,
+    /// Unix timestamp in milliseconds
+    pub first_seen: u64,
+    /// Unix timestamp in milliseconds
+    pub last_seen: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snippet {
@@ -167,6 +180,7 @@ impl Store {
             root,
             settings_cache: Arc::new(Mutex::new(None)),
             clipboard_cache: Arc::new(Mutex::new(None)),
+            known_hosts_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -286,6 +300,105 @@ impl Store {
             serde_json::to_string(&Vec::<ClipboardEntry>::new()).map_err(std::io::Error::other)?;
         fs::write(path, json)?;
         *cache = Some(Vec::new());
+        Ok(())
+    }
+
+    // --- SSH Known Hosts ---
+
+    pub fn load_known_hosts(&self) -> HashMap<String, KnownHost> {
+        let mut cache = self.known_hosts_cache.lock().unwrap();
+        if let Some(cached) = cache.as_ref() {
+            return cached.clone();
+        }
+        let hosts = self.load_known_hosts_from_disk();
+        *cache = Some(hosts.clone());
+        hosts
+    }
+
+    fn load_known_hosts_from_disk(&self) -> HashMap<String, KnownHost> {
+        let path = self.root.join("ssh-known-hosts.json");
+        match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Corrupt ssh-known-hosts.json, using empty: {e}");
+                HashMap::new()
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => {
+                tracing::warn!("Failed to read ssh-known-hosts.json: {e}");
+                HashMap::new()
+            }
+        }
+    }
+
+    pub fn get_known_host(&self, host_port: &str) -> Option<KnownHost> {
+        let mut cache = self.known_hosts_cache.lock().unwrap();
+        if cache.is_none() {
+            *cache = Some(self.load_known_hosts_from_disk());
+        }
+        cache.as_ref().unwrap().get(host_port).cloned()
+    }
+
+    pub fn save_known_host(&self, host_port: &str, entry: KnownHost) -> std::io::Result<()> {
+        let mut cache = self.known_hosts_cache.lock().unwrap();
+        let mut hosts = cache
+            .take()
+            .unwrap_or_else(|| self.load_known_hosts_from_disk());
+
+        // Preserve first_seen if entry already exists
+        let entry = if let Some(existing) = hosts.get(host_port) {
+            KnownHost {
+                first_seen: existing.first_seen,
+                ..entry
+            }
+        } else {
+            entry
+        };
+
+        hosts.insert(host_port.to_string(), entry);
+
+        let path = self.root.join("ssh-known-hosts.json");
+        let json = serde_json::to_string(&hosts).map_err(std::io::Error::other)?;
+        if let Err(e) = fs::write(path, &json) {
+            // Restore cache before returning error
+            *cache = Some(hosts);
+            return Err(e);
+        }
+
+        *cache = Some(hosts);
+        Ok(())
+    }
+
+    /// Update last_seen timestamp (cache-only, best-effort disk write on next save)
+    pub fn update_known_host_last_seen(&self, host_port: &str) {
+        let mut cache = self.known_hosts_cache.lock().unwrap();
+        if cache.is_none() {
+            *cache = Some(self.load_known_hosts_from_disk());
+        }
+        if let Some(entry) = cache.as_mut().unwrap().get_mut(host_port) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            entry.last_seen = now;
+        }
+    }
+
+    pub fn remove_known_host(&self, host_port: &str) -> std::io::Result<()> {
+        let mut cache = self.known_hosts_cache.lock().unwrap();
+        let mut hosts = cache
+            .take()
+            .unwrap_or_else(|| self.load_known_hosts_from_disk());
+
+        hosts.remove(host_port);
+
+        let path = self.root.join("ssh-known-hosts.json");
+        let json = serde_json::to_string(&hosts).map_err(std::io::Error::other)?;
+        if let Err(e) = fs::write(path, &json) {
+            *cache = Some(hosts);
+            return Err(e);
+        }
+
+        *cache = Some(hosts);
         Ok(())
     }
 }
@@ -581,5 +694,94 @@ mod tests {
         assert!(entries[0].text.len() <= CLIPBOARD_MAX_TEXT_BYTES);
         // Must be valid UTF-8 (no panic, no partial char)
         assert!(entries[0].text.is_char_boundary(entries[0].text.len()));
+    }
+
+    // --- Known Hosts tests ---
+
+    #[test]
+    fn known_hosts_empty_when_missing() {
+        let (store, _tmp) = temp_store();
+        let hosts = store.load_known_hosts();
+        assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn known_hosts_save_and_get() {
+        let (store, _tmp) = temp_store();
+        let entry = KnownHost {
+            fingerprint: "SHA256:abc123".to_string(),
+            algorithm: "ssh-ed25519".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store.save_known_host("example.com:22", entry).unwrap();
+        let loaded = store.get_known_host("example.com:22");
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.fingerprint, "SHA256:abc123");
+        assert_eq!(loaded.algorithm, "ssh-ed25519");
+    }
+
+    #[test]
+    fn known_hosts_preserves_first_seen_on_update() {
+        let (store, _tmp) = temp_store();
+        let entry = KnownHost {
+            fingerprint: "SHA256:abc123".to_string(),
+            algorithm: "ssh-ed25519".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store.save_known_host("example.com:22", entry).unwrap();
+
+        let updated = KnownHost {
+            fingerprint: "SHA256:def456".to_string(),
+            algorithm: "ssh-ed25519".to_string(),
+            first_seen: 2000,
+            last_seen: 2000,
+        };
+        store.save_known_host("example.com:22", updated).unwrap();
+
+        let loaded = store.get_known_host("example.com:22").unwrap();
+        assert_eq!(loaded.fingerprint, "SHA256:def456");
+        assert_eq!(loaded.first_seen, 1000); // preserved
+        assert_eq!(loaded.last_seen, 2000);
+    }
+
+    #[test]
+    fn known_hosts_remove() {
+        let (store, _tmp) = temp_store();
+        let entry = KnownHost {
+            fingerprint: "SHA256:abc123".to_string(),
+            algorithm: "ssh-ed25519".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store.save_known_host("example.com:22", entry).unwrap();
+        store.remove_known_host("example.com:22").unwrap();
+        assert!(store.get_known_host("example.com:22").is_none());
+    }
+
+    #[test]
+    fn known_hosts_corrupt_json_returns_empty() {
+        let (store, tmp) = temp_store();
+        fs::write(tmp.path().join("ssh-known-hosts.json"), "NOT JSON!!!").unwrap();
+        let hosts = store.load_known_hosts();
+        assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn known_hosts_disk_roundtrip() {
+        let (store, _tmp) = temp_store();
+        let entry = KnownHost {
+            fingerprint: "SHA256:abc123".to_string(),
+            algorithm: "ssh-ed25519".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store.save_known_host("example.com:22", entry).unwrap();
+        // Clear cache to force disk read
+        *store.known_hosts_cache.lock().unwrap() = None;
+        let loaded = store.get_known_host("example.com:22").unwrap();
+        assert_eq!(loaded.fingerprint, "SHA256:abc123");
     }
 }

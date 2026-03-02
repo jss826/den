@@ -163,6 +163,37 @@
       </div>
     </div>
 
+    <!-- SSH ホスト鍵確認モーダル -->
+    <div id="hostkey-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Host Key Verification">
+      <div class="modal-content">
+        <h3 id="hostkey-title">Host Key Verification</h3>
+        <div id="hostkey-warning" class="hostkey-warning" hidden>
+          <strong>WARNING: HOST KEY HAS CHANGED!</strong><br>
+          This could indicate a man-in-the-middle attack.
+        </div>
+        <div class="modal-section">
+          <label>Host</label>
+          <code id="hostkey-host" class="hostkey-value"></code>
+        </div>
+        <div class="modal-section">
+          <label>Algorithm</label>
+          <code id="hostkey-algorithm" class="hostkey-value"></code>
+        </div>
+        <div class="modal-section">
+          <label>Fingerprint</label>
+          <code id="hostkey-fingerprint" class="hostkey-value"></code>
+        </div>
+        <div id="hostkey-expected-section" class="modal-section" hidden>
+          <label>Expected Fingerprint</label>
+          <code id="hostkey-expected" class="hostkey-value"></code>
+        </div>
+        <div class="modal-actions">
+          <button id="hostkey-cancel" class="modal-btn">Cancel</button>
+          <button id="hostkey-trust" class="modal-btn hostkey-trust-btn">Trust</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 設定モーダル -->
     <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-content">

@@ -48,13 +48,15 @@ pub fn create_app_with_secret(
     // 例: 前回の異常終了で中断状態のままのリソースをリセットする（orphaned state cleanup）。
     // 以前はセッション永続化に対して store.cleanup_stale_running_sessions() を呼んでいた。
 
+    let sftp_manager = sftp::client::SftpManager::new(store.clone());
+
     let state = Arc::new(AppState {
         config,
         store,
         registry,
         hmac_secret,
         rate_limiter: auth::LoginRateLimiter::new(),
-        sftp_manager: sftp::client::SftpManager::new(),
+        sftp_manager,
     });
 
     // 認証不要のルート
@@ -110,6 +112,12 @@ pub fn create_app_with_secret(
         .route("/api/sftp/download", get(sftp::api::download))
         .route("/api/sftp/upload", post(sftp::api::upload))
         .route("/api/sftp/search", get(sftp::api::search))
+        .route(
+            "/api/sftp/known-hosts",
+            get(sftp::api::list_known_hosts)
+                .post(sftp::api::trust_host)
+                .delete(sftp::api::remove_known_host),
+        )
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::auth_middleware,

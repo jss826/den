@@ -4,6 +4,8 @@ use russh_sftp::client::SftpSession;
 use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
+use crate::store::Store;
+
 // --- エラー型 ---
 
 #[derive(Debug)]
@@ -11,6 +13,17 @@ pub enum SftpError {
     NotConnected,
     AuthFailed,
     AgentUnavailable,
+    UnknownHostKey {
+        host_port: String,
+        fingerprint: String,
+        algorithm: String,
+    },
+    HostKeyMismatch {
+        host_port: String,
+        fingerprint: String,
+        algorithm: String,
+        expected_fingerprint: String,
+    },
     Ssh(russh::Error),
     Sftp(russh_sftp::client::error::Error),
     Io(std::io::Error),
@@ -22,12 +35,49 @@ impl std::fmt::Display for SftpError {
             SftpError::NotConnected => write!(f, "Not connected"),
             SftpError::AuthFailed => write!(f, "Authentication failed"),
             SftpError::AgentUnavailable => write!(f, "SSH agent unavailable"),
+            SftpError::UnknownHostKey { host_port, .. } => {
+                write!(f, "Unknown host key for {host_port}")
+            }
+            SftpError::HostKeyMismatch { host_port, .. } => {
+                write!(f, "Host key mismatch for {host_port}")
+            }
             SftpError::Ssh(e) => write!(f, "SSH error: {}", e),
             SftpError::Sftp(e) => write!(f, "SFTP error: {}", e),
             SftpError::Io(e) => write!(f, "I/O error: {}", e),
         }
     }
 }
+
+/// Internal error type for host key verification (used with anyhow downcast)
+#[derive(Debug, Clone)]
+pub(crate) enum HostKeyStatus {
+    Unknown {
+        host_port: String,
+        fingerprint: String,
+        algorithm: String,
+    },
+    Mismatch {
+        host_port: String,
+        fingerprint: String,
+        algorithm: String,
+        expected: String,
+    },
+}
+
+impl std::fmt::Display for HostKeyStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostKeyStatus::Unknown { host_port, .. } => {
+                write!(f, "Unknown host key for {host_port}")
+            }
+            HostKeyStatus::Mismatch { host_port, .. } => {
+                write!(f, "Host key mismatch for {host_port}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for HostKeyStatus {}
 
 impl From<russh::Error> for SftpError {
     fn from(e: russh::Error) -> Self {
@@ -125,22 +175,77 @@ async fn authenticate_agent(
 
 // --- SSH クライアントハンドラ ---
 
-struct SftpClientHandler;
+struct SftpClientHandler {
+    host_port: String,
+    store: Store,
+}
 
 impl russh::client::Handler for SftpClientHandler {
     type Error = anyhow::Error;
 
-    // v1: 全ホストキーを受け入れ（known_hosts 検証は v2 で対応）
-    // WARNING: MITM risk — Agent auth signs challenges for unverified hosts.
     async fn check_server_key(
         &mut self,
         server_public_key: &ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        tracing::warn!(
-            fingerprint = %server_public_key.fingerprint(ssh_key::HashAlg::Sha256),
-            "sftp: accepting unverified host key (known_hosts check not yet implemented)"
-        );
-        Ok(true)
+        let fingerprint = server_public_key
+            .fingerprint(ssh_key::HashAlg::Sha256)
+            .to_string();
+        let algorithm = server_public_key.algorithm().to_string();
+        let host_port = self.host_port.clone();
+
+        let store = self.store.clone();
+        let fp = fingerprint.clone();
+        let hp = host_port.clone();
+        let known = tokio::task::spawn_blocking(move || store.get_known_host(&hp))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?;
+
+        match known {
+            Some(entry) if entry.fingerprint == fp => {
+                tracing::info!(
+                    host_port = %host_port,
+                    fingerprint = %fingerprint,
+                    "sftp: host key verified (known)"
+                );
+                // Best-effort last_seen update (fire-and-forget)
+                let store = self.store.clone();
+                let hp = host_port.clone();
+                tokio::task::spawn_blocking(move || {
+                    store.update_known_host_last_seen(&hp);
+                });
+                Ok(true)
+            }
+            Some(entry) => {
+                tracing::warn!(
+                    host_port = %host_port,
+                    algorithm = %algorithm,
+                    expected = %entry.fingerprint,
+                    actual = %fingerprint,
+                    "sftp: HOST KEY MISMATCH — possible MITM attack"
+                );
+                Err(HostKeyStatus::Mismatch {
+                    host_port,
+                    fingerprint,
+                    algorithm,
+                    expected: entry.fingerprint,
+                }
+                .into())
+            }
+            None => {
+                tracing::info!(
+                    host_port = %host_port,
+                    fingerprint = %fingerprint,
+                    algorithm = %algorithm,
+                    "sftp: unknown host key, user approval required"
+                );
+                Err(HostKeyStatus::Unknown {
+                    host_port,
+                    fingerprint,
+                    algorithm,
+                }
+                .into())
+            }
+        }
     }
 }
 
@@ -159,6 +264,7 @@ pub struct SftpConnection {
 #[derive(Clone)]
 pub struct SftpManager {
     conn: Arc<Mutex<Option<SftpConnection>>>,
+    store: Store,
 }
 
 pub struct SftpStatus {
@@ -167,16 +273,24 @@ pub struct SftpStatus {
     pub username: Option<String>,
 }
 
-impl Default for SftpManager {
-    fn default() -> Self {
-        Self::new()
+/// Format host:port key for known hosts storage.
+/// IPv6 addresses are wrapped in brackets: `[::1]:22`
+fn format_host_port(host: &str, port: u16) -> String {
+    if host.starts_with('[') {
+        // Already bracketed (e.g. "[::1]")
+        format!("{host}:{port}")
+    } else if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
     }
 }
 
 impl SftpManager {
-    pub fn new() -> Self {
+    pub fn new(store: Store) -> Self {
         SftpManager {
             conn: Arc::new(Mutex::new(None)),
+            store,
         }
     }
 
@@ -198,9 +312,42 @@ impl SftpManager {
             ..Default::default()
         };
 
-        let mut session = russh::client::connect(Arc::new(config), (host, port), SftpClientHandler)
+        let host_port = format_host_port(host, port);
+        let handler = SftpClientHandler {
+            host_port,
+            store: self.store.clone(),
+        };
+
+        let mut session = russh::client::connect(Arc::new(config), (host, port), handler)
             .await
-            .map_err(|e| SftpError::Ssh(russh::Error::IO(std::io::Error::other(e.to_string()))))?;
+            .map_err(|e| {
+                // Downcast to HostKeyStatus if this is a host key verification failure
+                if let Some(status) = e.downcast_ref::<HostKeyStatus>() {
+                    return match status {
+                        HostKeyStatus::Unknown {
+                            host_port,
+                            fingerprint,
+                            algorithm,
+                        } => SftpError::UnknownHostKey {
+                            host_port: host_port.clone(),
+                            fingerprint: fingerprint.clone(),
+                            algorithm: algorithm.clone(),
+                        },
+                        HostKeyStatus::Mismatch {
+                            host_port,
+                            fingerprint,
+                            algorithm,
+                            expected,
+                        } => SftpError::HostKeyMismatch {
+                            host_port: host_port.clone(),
+                            fingerprint: fingerprint.clone(),
+                            algorithm: algorithm.clone(),
+                            expected_fingerprint: expected.clone(),
+                        },
+                    };
+                }
+                SftpError::Ssh(russh::Error::IO(std::io::Error::other(e.to_string())))
+            })?;
 
         // 認証
         match auth {
@@ -336,5 +483,27 @@ impl SftpGuard<'_> {
     pub fn sftp(&self) -> &SftpSession {
         // get() で None チェック済み
         &self.guard.as_ref().unwrap().sftp
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_host_port_ipv4() {
+        assert_eq!(format_host_port("example.com", 22), "example.com:22");
+        assert_eq!(format_host_port("192.168.1.1", 2222), "192.168.1.1:2222");
+    }
+
+    #[test]
+    fn format_host_port_ipv6() {
+        assert_eq!(format_host_port("::1", 22), "[::1]:22");
+        assert_eq!(format_host_port("2001:db8::1", 22), "[2001:db8::1]:22");
+    }
+
+    #[test]
+    fn format_host_port_ipv6_already_bracketed() {
+        assert_eq!(format_host_port("[::1]", 22), "[::1]:22");
     }
 }

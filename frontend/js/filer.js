@@ -227,7 +227,9 @@ const DenFiler = (() => {
         document.getElementById('sftp-connect-modal').hidden = true;
         Toast.success(`Connected to ${username}@${host}`);
       } catch (e) {
-        Toast.error(e.message || 'Connection failed');
+        if (e.message !== 'Connection cancelled') {
+          Toast.error(e.message || 'Connection failed');
+        }
       }
     });
   }

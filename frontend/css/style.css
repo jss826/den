@@ -1018,6 +1018,34 @@ html, body {
   font-weight: 600;
 }
 
+/* Host key modal */
+.hostkey-warning {
+  background: rgba(238, 85, 85, 0.15);
+  border: 1px solid var(--danger, #e55);
+  color: var(--danger, #e55);
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.hostkey-trust-btn {
+  background: var(--danger, #e55);
+  border-color: var(--danger, #e55);
+  color: #fff;
+  font-weight: 600;
+}
+.hostkey-value {
+  display: block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
 /* タッチデバイス検出 */
 @media (hover: none) and (pointer: coarse) {
   #main-screen {
