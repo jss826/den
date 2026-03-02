@@ -59,6 +59,14 @@ const CHILD_MONITOR_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 /// タスク join タイムアウト
 const TASK_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// ConPTY nudge: output quiet 判定の debounce 期間
+#[cfg(windows)]
+const NUDGE_QUIET_DURATION: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// ConPTY nudge: 再発火防止のクールダウン期間
+#[cfg(windows)]
+const NUDGE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// クライアント ID 生成用グローバルカウンター
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -150,6 +158,9 @@ pub struct SessionInner {
     active_client_id: Option<u64>,
     /// 前回の PTY サイズ（同一サイズでのリサイズ抑止用）
     last_size: (u16, u16),
+    /// ConPTY nudge task の JoinHandle（destroy 時に await）
+    #[cfg(windows)]
+    nudge_handle: Option<tokio::task::JoinHandle<()>>,
     // Resources
     #[cfg(windows)]
     pub job: Option<super::job::PtyJobObject>,
@@ -317,6 +328,8 @@ impl SessionRegistry {
                 active_client_id: None,
                 last_size: (0, 0),
                 #[cfg(windows)]
+                nudge_handle: None,
+                #[cfg(windows)]
                 job,
                 child: Some(child),
             }),
@@ -388,6 +401,88 @@ impl SessionRegistry {
             session_for_monitor.output_tx.lock().unwrap().take();
         });
 
+        // ConPTY nudge task: debounced resize after output stops.
+        // ConPTY sometimes fails to emit erase sequences (CSI K etc.) in its
+        // incremental VT output. A resize forces a full screen redraw with
+        // correct content. This task subscribes to PTY output, waits for
+        // NUDGE_QUIET_DURATION of quiet, then sends a resize nudge (cols-1 → cols)
+        // to trigger a ConPTY redraw. NUDGE_COOLDOWN prevents re-triggering
+        // from redraw output.
+        #[cfg(windows)]
+        {
+            let nudge_session = Arc::clone(&session);
+            let nudge_rx = {
+                let guard = session.output_tx.lock().unwrap();
+                guard.as_ref().map(|tx| tx.subscribe())
+            };
+            if let Some(mut rx) = nudge_rx {
+                let nudge_handle = tokio::spawn(async move {
+                    'nudge: loop {
+                        // Phase 1: Wait for any output
+                        // Lagged means output occurred but we missed it — treat as received
+                        match rx.recv().await {
+                            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => break 'nudge,
+                        }
+
+                        // Phase 2: Drain until NUDGE_QUIET_DURATION of quiet
+                        loop {
+                            match tokio::time::timeout(NUDGE_QUIET_DURATION, rx.recv()).await {
+                                Ok(Ok(_)) => continue,
+                                Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                                Ok(Err(broadcast::error::RecvError::Closed)) => {
+                                    break 'nudge;
+                                }
+                                Err(_) => break, // quiet reached
+                            }
+                        }
+
+                        if !nudge_session.is_alive() {
+                            break;
+                        }
+
+                        // Phase 3: Resize nudge (cols-1 → cols), only when clients are attached
+                        {
+                            let inner = nudge_session.inner.lock().await;
+                            let (cols, rows) = inner.last_size;
+                            if cols > 0
+                                && rows > 0
+                                && inner.client_count() > 0
+                                && let Some(ref tx) = inner.resize_tx
+                            {
+                                let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
+                                let _ = tx.send((nudge_cols, rows));
+                                let _ = tx.send((cols, rows));
+                                tracing::debug!(
+                                    session = %nudge_session.name,
+                                    cols,
+                                    rows,
+                                    nudge_cols,
+                                    "ConPTY resize nudge"
+                                );
+                            }
+                        }
+
+                        // Phase 4: Cooldown — prevents re-nudge from own redraw output
+                        tokio::time::sleep(NUDGE_COOLDOWN).await;
+                        if !nudge_session.is_alive() {
+                            break;
+                        }
+                    }
+                    tracing::debug!(
+                        session = %nudge_session.name,
+                        "ConPTY nudge task exited"
+                    );
+                });
+                // Session was just created; no other task has locked inner yet
+                session
+                    .inner
+                    .try_lock()
+                    .expect("nudge: inner uncontested")
+                    .nudge_handle = Some(nudge_handle);
+            }
+        }
+
         (session, first_rx, monitor_handle)
     }
 
@@ -451,6 +546,8 @@ impl SessionRegistry {
             if let Some(err) = race_err {
                 // レース: 別の呼び出しが先に作成した or 上限到達 → クリーンアップ
                 session.alive.store(false, Ordering::Release);
+                #[cfg(windows)]
+                let nudge_handle;
                 let (resize_handle, monitor_handle) = {
                     let mut inner = session.inner.lock().await;
                     if let Some(mut child) = inner.child.take() {
@@ -462,8 +559,16 @@ impl SessionRegistry {
                     }
                     inner.pty_writer = Box::new(std::io::sink());
                     inner.resize_tx.take();
+                    #[cfg(windows)]
+                    {
+                        nudge_handle = inner.nudge_handle.take();
+                    }
                     (inner.resize_handle.take(), inner.monitor_handle.take())
                 };
+                #[cfg(windows)]
+                if let Some(handle) = nudge_handle {
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
+                }
                 if let Some(handle) = monitor_handle {
                     let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
                 }
@@ -673,6 +778,8 @@ impl SessionRegistry {
 
         session.alive.store(false, Ordering::Release);
 
+        #[cfg(windows)]
+        let nudge_handle;
         let (resize_handle, monitor_handle) = {
             let mut inner = session.inner.lock().await;
 
@@ -705,8 +812,23 @@ impl SessionRegistry {
             // 4. resize_tx を drop → resize_task 終了 → master drop → ClosePseudoConsole
             inner.resize_tx.take();
 
+            #[cfg(windows)]
+            {
+                nudge_handle = inner.nudge_handle.take();
+            }
+
             (inner.resize_handle.take(), inner.monitor_handle.take())
         };
+
+        // nudge_handle を await（ConPTY nudge タスク終了保証）
+        #[cfg(windows)]
+        if let Some(handle) = nudge_handle
+            && tokio::time::timeout(TASK_JOIN_TIMEOUT, handle)
+                .await
+                .is_err()
+        {
+            tracing::warn!("Session {name}: nudge_task did not finish within 5s");
+        }
 
         // monitor_handle を await（child monitor タスク終了保証）
         if let Some(handle) = monitor_handle
