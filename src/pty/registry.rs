@@ -70,6 +70,94 @@ const NUDGE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(2);
 /// クライアント ID 生成用グローバルカウンター
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// 専用 OS スレッドで ES_CONTINUOUS | ES_SYSTEM_REQUIRED を管理するハンドル。
+/// スレッドアフィニティの問題を回避するため、Tokio スレッドプールではなく
+/// 固定の OS スレッドで SetThreadExecutionState を呼び出す。
+///
+/// Drop 時に tx を drop → チャネル切断 → スレッドが ES_CONTINUOUS でクリアして終了
+/// → handle.join() で完了を待つ。
+#[cfg(windows)]
+struct SleepGuardHandle {
+    tx: Option<std::sync::mpsc::Sender<bool>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+impl SleepGuardHandle {
+    fn new() -> Option<Self> {
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let handle = std::thread::Builder::new()
+            .name("sleep-guard".into())
+            .spawn(move || {
+                use windows_sys::Win32::System::Power::{
+                    ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+                };
+                for prevent in rx {
+                    let flags = if prevent {
+                        ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+                    } else {
+                        ES_CONTINUOUS // clear
+                    };
+                    // SAFETY: SetThreadExecutionState is a Windows API that accepts
+                    // a bitmask of EXECUTION_STATE flags. The flags used here
+                    // (ES_CONTINUOUS, ES_SYSTEM_REQUIRED) are valid documented values.
+                    // This dedicated thread owns the ES_CONTINUOUS state.
+                    let prev = unsafe { SetThreadExecutionState(flags) };
+                    if prev == 0 {
+                        tracing::warn!(
+                            "SetThreadExecutionState(0x{flags:08x}) failed (returned 0)"
+                        );
+                    } else {
+                        tracing::debug!(
+                            "SetThreadExecutionState(0x{flags:08x}) ok (prev=0x{prev:08x})"
+                        );
+                    }
+                }
+                // Channel closed: clear prevention and exit
+                // SAFETY: ES_CONTINUOUS alone clears all prior flags on this thread.
+                unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+                tracing::debug!("sleep-guard thread exiting");
+            });
+
+        match handle {
+            Ok(handle) => Some(Self {
+                tx: Some(tx),
+                handle: Some(handle),
+            }),
+            Err(e) => {
+                tracing::error!(
+                    "Failed to spawn sleep-guard thread: {e}. Sleep prevention disabled."
+                );
+                None
+            }
+        }
+    }
+
+    /// Send state to the dedicated thread. Returns true on success.
+    fn set(&self, prevent: bool) -> bool {
+        if let Some(ref tx) = self.tx {
+            if tx.send(prevent).is_err() {
+                tracing::error!("sleep-guard: channel send failed (thread may have exited)");
+                return false;
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SleepGuardHandle {
+    fn drop(&mut self) {
+        // Drop tx to close channel → thread clears ES_CONTINUOUS and exits
+        self.tx.take();
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 /// スリープ抑止設定
 struct SleepConfig {
     mode: SleepPreventionMode,
@@ -77,6 +165,8 @@ struct SleepConfig {
     currently_preventing: bool,
     /// UI toggle for temporary forced awake (resets on restart)
     force_awake: bool,
+    #[cfg(windows)]
+    guard: Option<SleepGuardHandle>,
 }
 
 /// 定期タスクのポーリング間隔
@@ -84,36 +174,37 @@ const SLEEP_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 
 /// スリープ抑止の状態を OS に反映
 ///
-/// ステートレス方式: ES_CONTINUOUS を使わず ES_SYSTEM_REQUIRED のみを呼び出す。
-/// Tokio のスレッドプールでは毎回同じスレッドが使われる保証がないため、
-/// ES_CONTINUOUS によるスレッド単位の永続的状態設定は不適切。
-/// ES_SYSTEM_REQUIRED は呼び出しごとにアイドルタイマーをリセットするだけなので
-/// スレッドアフィニティの問題が発生しない。
+/// 専用 OS スレッド方式: ES_CONTINUOUS | ES_SYSTEM_REQUIRED を固定スレッドで管理。
+/// 状態変化時のみ guard にメッセージを送信する（currently_preventing で重複排除）。
+/// guard が None の場合（スレッド spawn 失敗）は no-op。
+/// 送信失敗時は currently_preventing を更新せず、次回の再試行を可能にする。
 #[cfg(windows)]
-fn apply_sleep_state(prevent: bool, currently_preventing: &mut bool) {
-    use windows_sys::Win32::System::Power::{ES_SYSTEM_REQUIRED, SetThreadExecutionState};
-    if prevent {
-        let prev = unsafe { SetThreadExecutionState(ES_SYSTEM_REQUIRED) };
-        if prev == 0 {
-            tracing::warn!("SetThreadExecutionState(ES_SYSTEM_REQUIRED) failed (returned 0)");
-        } else {
-            tracing::debug!("SetThreadExecutionState(ES_SYSTEM_REQUIRED) ok (prev=0x{prev:08x})");
-        }
-        if !*currently_preventing {
-            tracing::info!("Sleep prevention: ON");
-        }
-    } else if *currently_preventing {
-        tracing::info!("Sleep prevention: OFF");
+fn apply_sleep_state(prevent: bool, config: &mut SleepConfig) {
+    if prevent == config.currently_preventing {
+        return;
     }
-    *currently_preventing = prevent;
+    if let Some(ref guard) = config.guard
+        && guard.set(prevent)
+    {
+        config.currently_preventing = prevent;
+        tracing::info!("Sleep prevention: {}", if prevent { "ON" } else { "OFF" });
+    }
+    // send failed or guard is None → currently_preventing unchanged → next evaluation will retry
+    // guard is None → sleep prevention disabled (spawn failed)
 }
 
 #[cfg(not(windows))]
-fn apply_sleep_state(prevent: bool, currently_preventing: &mut bool) {
-    if prevent == *currently_preventing {
+fn apply_sleep_state(prevent: bool, config: &mut SleepConfig) {
+    if prevent == config.currently_preventing {
         return;
     }
-    *currently_preventing = prevent;
+    // No-op on non-Windows: sleep prevention is not implemented.
+    // Placeholder for future systemd-inhibit / caffeinate support.
+    tracing::debug!(
+        "Sleep prevention: {} (non-Windows, no-op)",
+        if prevent { "ON" } else { "OFF" }
+    );
+    config.currently_preventing = prevent;
 }
 
 /// グローバルセッション管理
@@ -222,6 +313,8 @@ impl SessionRegistry {
             timeout_minutes: sleep_timeout,
             currently_preventing: false,
             force_awake: false,
+            #[cfg(windows)]
+            guard: SleepGuardHandle::new(), // None if thread spawn failed
         }));
 
         // Generate random instance ID for self-connection detection
@@ -915,7 +1008,7 @@ impl SessionRegistry {
                 "sleep prevention state changed"
             );
         }
-        apply_sleep_state(should_prevent, &mut config.currently_preventing);
+        apply_sleep_state(should_prevent, &mut config);
     }
 
     /// 設定変更時に呼び出す: SleepConfig を更新して即座に再評価
