@@ -244,7 +244,15 @@ impl SessionRegistry {
                 let session_count = reg.sessions.read().await.len();
                 // log every 10 ticks (~10 min) to confirm the task is alive
                 if tick_count % 10 == 1 {
-                    tracing::info!(tick_count, "sleep prevention periodic task alive");
+                    let config = reg.sleep_config.lock().unwrap_or_else(|e| e.into_inner());
+                    tracing::info!(
+                        tick_count,
+                        preventing = config.currently_preventing,
+                        mode = ?config.mode,
+                        force_awake = config.force_awake,
+                        sessions = session_count,
+                        "sleep prevention periodic task alive"
+                    );
                 }
                 reg.evaluate_sleep_prevention(session_count);
             }

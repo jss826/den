@@ -2,6 +2,8 @@ use den::config::Config;
 use den::pty::registry::SessionRegistry;
 use den::store::Store;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
@@ -17,11 +19,22 @@ async fn main() {
     let port = config.port;
     let ssh_port = config.ssh_port;
 
-    // env-filter 対応の tracing 初期化
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
-        )
+    // tracing 初期化: console + file (data_dir/logs/)
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let console_layer = tracing_subscriber::fmt::layer();
+
+    let log_dir = std::path::Path::new(&config.data_dir).join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "den.log");
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(file_appender);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(console_layer)
+        .with(file_layer)
         .init();
 
     let bind_address = config.bind_address.clone();
