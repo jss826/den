@@ -436,18 +436,10 @@ const FloatTerminal = (() => {
     if (!(await Toast.confirm(`Kill session "${currentSession}"?`))) return;
     const ok = await DenTerminal.destroySession(currentSession);
     if (!ok) { Toast.error('Failed to kill session'); return; }
+    // DenTerminal.refreshSessionList fires den:sessions-changed →
+    // FloatTerminal.refreshSessionList handles session switch / null state
+    currentSession = null;
     await DenTerminal.refreshSessionList();
-    const sessions = (await DenTerminal.fetchSessions()) ?? [];
-    const alive = sessions.filter(s => s.alive);
-    if (alive.length > 0) {
-      currentSession = alive[0].name;
-      if (term) term.clear();
-      if (visible && !minimized) doConnect(0);
-    } else {
-      currentSession = null;
-      disconnect();
-      if (term) term.clear();
-    }
   }
 
   async function refreshSessionList(sessions) {

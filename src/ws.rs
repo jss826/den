@@ -44,7 +44,8 @@ pub async fn ws_handler(
     Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
-    let Some(session_name) = query.session else {
+    let Some(session_name) = query.session.filter(|s| !s.is_empty()) else {
+        tracing::warn!("WebSocket rejected: missing or empty session parameter");
         return (
             StatusCode::BAD_REQUEST,
             "Missing required parameter: session",

@@ -205,18 +205,32 @@ const DenTerminal = (() => {
     doConnect();
   }
 
+  let emptyStateEl = null;
+
   function showEmptyState() {
+    if (emptyStateEl) return;
     const container = document.getElementById('terminal-container');
-    if (!container || container.querySelector('.terminal-empty-state')) return;
-    const el = document.createElement('div');
-    el.className = 'terminal-empty-state';
-    el.textContent = 'No sessions. Press + to create one.';
-    container.appendChild(el);
+    if (!container) return;
+    emptyStateEl = document.createElement('div');
+    emptyStateEl.className = 'terminal-empty-state';
+    emptyStateEl.setAttribute('role', 'status');
+    emptyStateEl.textContent = 'No sessions. Press + to create one.';
+    container.appendChild(emptyStateEl);
   }
 
   function hideEmptyState() {
-    const el = document.querySelector('.terminal-empty-state');
-    if (el) el.remove();
+    if (emptyStateEl) { emptyStateEl.remove(); emptyStateEl = null; }
+  }
+
+  /** Transition to sessionless (null) state */
+  function enterNullState() {
+    currentSession = null;
+    DenSettings.setOscTitle('');
+    DenSettings.setTitleTab('terminal', null);
+    disconnect();
+    if (term) term.clear();
+    showEmptyState();
+    window.DenApp?.updateSessionHash(null);
   }
 
   function disconnect() {
@@ -344,7 +358,7 @@ const DenTerminal = (() => {
 
   /** セッションを切り替え */
   function switchSession(name) {
-    if (name === currentSession) return;
+    if (!name || name === currentSession) return;
     currentSession = name;
     hideEmptyState();
     DenSettings.setOscTitle('');
@@ -569,15 +583,7 @@ const DenTerminal = (() => {
 
     // No sessions: show empty state and disconnect
     if (sessions.length === 0) {
-      if (currentSession !== null) {
-        currentSession = null;
-        DenSettings.setOscTitle('');
-        DenSettings.setTitleTab('terminal', null);
-        disconnect();
-        if (term) term.clear();
-        showEmptyState();
-        window.DenApp?.updateSessionHash(null);
-      }
+      if (currentSession !== null) enterNullState();
     } else if (!currentSession) {
       // Recovery: sessions appeared while in empty state (e.g. startup fetch failed, or external creation)
       const alive = sessions.filter(s => s.alive);
@@ -652,13 +658,7 @@ const DenTerminal = (() => {
             return;
           }
           if (name === currentSession) {
-            currentSession = null;
-            DenSettings.setOscTitle('');
-            DenSettings.setTitleTab('terminal', null);
-            disconnect();
-            if (term) term.clear();
-            showEmptyState();
-            window.DenApp?.updateSessionHash(null);
+            enterNullState();
           }
           lastSessionsKey = ''; // Force refresh
           await refreshSessionList();
