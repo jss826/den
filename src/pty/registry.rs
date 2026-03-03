@@ -627,10 +627,19 @@ impl SessionRegistry {
         // 完全に再送信され、表示崩れ（特に SSH セッション中）を防ぐ。
         // 既存のクライアントにはわずかなフリッカーが発生する可能性があるが、
         // 画面の正確性を優先する。
-        let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
-        if let Some(ref tx) = inner.resize_tx {
-            let _ = tx.send((nudge_cols, rows));
-            let _ = tx.send((cols, rows));
+        // NOTE: 個別クライアントの cols/rows ではなくセッションの last_size を使う。
+        // recalculate_size 後の実際の ConPTY サイズと一致させるため。
+        let (session_cols, session_rows) = inner.last_size;
+        if session_cols > 0 && session_rows > 0 {
+            let nudge_cols = if session_cols > 1 {
+                session_cols - 1
+            } else {
+                session_cols + 1
+            };
+            if let Some(ref tx) = inner.resize_tx {
+                let _ = tx.send((nudge_cols, session_rows));
+                let _ = tx.send((session_cols, session_rows));
+            }
         }
 
         drop(inner);
@@ -992,19 +1001,11 @@ impl SharedSession {
     /// 強制的に再描画させるためのリサイズ通知（nudge）
     pub async fn nudge_resize(&self, client_id: u64) {
         let mut inner = self.inner.lock().await;
-        let mut cols = 0;
-        let mut rows = 0;
-        let mut found = false;
-        
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.last_active = std::time::Instant::now();
-            cols = client.cols;
-            rows = client.rows;
-            found = true;
         }
-        
-        if found {
-            inner.active_client_id = Some(client_id);
+        let (cols, rows) = inner.last_size;
+        if cols > 0 && rows > 0 {
             let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
             if let Some(ref tx) = inner.resize_tx {
                 let _ = tx.send((nudge_cols, rows));

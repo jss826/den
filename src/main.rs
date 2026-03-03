@@ -19,10 +19,12 @@ async fn main() {
     let port = config.port;
     let ssh_port = config.ssh_port;
 
-    // tracing 初期化: console + file (data_dir/logs/)
+    // tracing 初期化: console (stderr) + file (data_dir/logs/)
+    // stdout は ConPTY (OpenConsole.exe) のカーソル制御シーケンスに干渉されるため
+    // stderr に明示的に出力する。
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
-    let console_layer = tracing_subscriber::fmt::layer();
+    let console_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
 
     let log_dir = std::path::Path::new(&config.data_dir).join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
