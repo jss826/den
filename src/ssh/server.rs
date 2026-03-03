@@ -251,6 +251,11 @@ impl DenSshHandler {
         // filter_output_for_ssh does not strip OSC 0/1/2, so replace_osc_title always sees them.
         let osc_replacement: Vec<u8> = format!("\x1b]0;Den SSH [{session_name}]\x07").into_bytes();
 
+        // ターミナル画面をクリアしてカーソルをホームに戻す。
+        // これにより、クライアントの既存の画面内容（ssh コマンド等）と
+        // リプレイバッファの内容が混ざって表示が崩れるのを防ぐ。
+        session.data(channel_id, CryptoVec::from_slice(b"\x1b[2J\x1b[H"))?;
+
         if !replay.is_empty() {
             let filtered_replay = filter_output_for_ssh(&replay);
             let filtered_replay = replace_osc_title(&filtered_replay, &osc_replacement);
@@ -400,6 +405,7 @@ impl DenSshHandler {
     fn format_help() -> &'static str {
         "\r\n\
          \x1b[1m  ~s\x1b[0m  Show status\r\n\
+         \x1b[1m  ~r\x1b[0m  Force screen redraw\r\n\
          \x1b[1m  ~?\x1b[0m  Show help\r\n\
          \x1b[1m  ~~\x1b[0m  Send literal ~\r\n"
     }
@@ -664,11 +670,22 @@ impl Handler for DenSshHandler {
 
         // Inject escape command outputs into SSH channel
         for cmd in &commands {
-            let output = match cmd {
-                EscapeCommand::ShowStatus => self.format_status().await,
-                EscapeCommand::ShowHelp => Self::format_help().to_string(),
-            };
-            session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
+            match cmd {
+                EscapeCommand::ShowStatus => {
+                    let output = self.format_status().await;
+                    session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
+                }
+                EscapeCommand::ShowHelp => {
+                    let output = Self::format_help().to_string();
+                    session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
+                }
+                EscapeCommand::ForceRedraw => {
+                    if let Some(client_id) = self.client_id {
+                        // Force a redraw by sending a nudge resize
+                        shared.nudge_resize(client_id).await;
+                    }
+                }
+            }
         }
 
         // Forward remaining bytes to PTY
@@ -752,6 +769,8 @@ enum EscapeCommand {
     ShowStatus,
     /// `~?` — show help
     ShowHelp,
+    /// `~r` — force redraw (nudge ConPTY)
+    ForceRedraw,
 }
 
 /// Process input bytes through the escape state machine.
@@ -787,6 +806,7 @@ fn process_escape_input(state: &mut EscapeState, data: &[u8]) -> (Vec<u8>, Vec<E
                 match byte {
                     b's' => commands.push(EscapeCommand::ShowStatus),
                     b'?' => commands.push(EscapeCommand::ShowHelp),
+                    b'r' => commands.push(EscapeCommand::ForceRedraw),
                     b'~' => forward.push(b'~'),
                     _ => {
                         forward.push(b'~');

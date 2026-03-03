@@ -622,6 +622,17 @@ impl SessionRegistry {
         // クライアント追加により最適サイズが変わる可能性があるため再計算
         Self::recalculate_size(&mut inner);
 
+        // ConPTY に再描画を強制する（nudge）
+        // これにより、新しくアタッチしたクライアントに対して現在の画面状態が
+        // 完全に再送信され、表示崩れ（特に SSH セッション中）を防ぐ。
+        // 既存のクライアントにはわずかなフリッカーが発生する可能性があるが、
+        // 画面の正確性を優先する。
+        let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
+        if let Some(ref tx) = inner.resize_tx {
+            let _ = tx.send((nudge_cols, rows));
+            let _ = tx.send((cols, rows));
+        }
+
         drop(inner);
 
         tracing::info!("Client {client_id} ({kind:?}) attached to session {name}");
@@ -976,6 +987,30 @@ impl SharedSession {
                 .store(now_epoch_secs(), Ordering::Relaxed);
         }
         SessionRegistry::recalculate_size(&mut inner);
+    }
+
+    /// 強制的に再描画させるためのリサイズ通知（nudge）
+    pub async fn nudge_resize(&self, client_id: u64) {
+        let mut inner = self.inner.lock().await;
+        let mut cols = 0;
+        let mut rows = 0;
+        let mut found = false;
+        
+        if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+            client.last_active = std::time::Instant::now();
+            cols = client.cols;
+            rows = client.rows;
+            found = true;
+        }
+        
+        if found {
+            inner.active_client_id = Some(client_id);
+            let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
+            if let Some(ref tx) = inner.resize_tx {
+                let _ = tx.send((nudge_cols, rows));
+                let _ = tx.send((cols, rows));
+            }
+        }
     }
 
     /// broadcast::Receiver を新たに取得

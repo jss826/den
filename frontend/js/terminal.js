@@ -228,7 +228,7 @@ const DenTerminal = (() => {
     DenSettings.setOscTitle('');
     DenSettings.setTitleTab('terminal', null);
     disconnect();
-    if (term) term.clear();
+    if (term) term.reset();
     showEmptyState();
     window.DenApp?.updateSessionHash(null);
   }
@@ -363,7 +363,7 @@ const DenTerminal = (() => {
     hideEmptyState();
     DenSettings.setOscTitle('');
     DenSettings.setTitleTab('terminal', name);
-    term.clear();
+    term.reset();
     doConnect();
     window.DenApp?.updateSessionHash(name);
   }
