@@ -128,6 +128,13 @@
     <div id="sftp-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="SFTP Connection">
       <div class="modal-content">
         <h3>Remote SFTP Connection</h3>
+        <div class="sftp-bookmark-row">
+          <select id="sftp-bookmark-select" class="settings-input" aria-label="Saved Hosts">
+            <option value="">-- Saved Hosts --</option>
+          </select>
+          <button id="sftp-bookmark-delete" class="modal-btn" type="button" hidden
+            data-tooltip="Delete" aria-label="Delete bookmark">&#x2715;</button>
+        </div>
         <div class="modal-section">
           <label>Host</label>
           <input type="text" id="sftp-host" class="settings-input" placeholder="hostname or IP" autocomplete="off" />
@@ -157,6 +164,7 @@
           <input type="text" id="sftp-key-path" class="settings-input" placeholder="~/.ssh/id_rsa" autocomplete="off" />
         </div>
         <div class="modal-actions">
+          <button id="sftp-bookmark-save" class="modal-btn" type="button">Save Host</button>
           <button id="sftp-connect-cancel" class="modal-btn">Cancel</button>
           <button id="sftp-connect-submit" class="modal-btn primary">Connect</button>
         </div>

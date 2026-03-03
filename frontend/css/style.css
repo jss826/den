@@ -1046,6 +1046,17 @@ html, body {
   margin-top: 4px;
 }
 
+/* SSH Bookmark row */
+.sftp-bookmark-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.sftp-bookmark-row .settings-input {
+  flex: 1;
+}
+
 /* タッチデバイス検出 */
 @media (hover: none) and (pointer: coarse) {
   #main-screen {

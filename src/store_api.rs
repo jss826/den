@@ -69,6 +69,46 @@ pub async fn put_settings(
             }
         }
     }
+    // Validate ssh_bookmarks (auth_type is enum — invalid values rejected by serde)
+    if let Some(ref bookmarks) = settings.ssh_bookmarks {
+        if bookmarks.len() > 50 {
+            tracing::warn!("ssh_bookmarks validation: too many bookmarks");
+            return (StatusCode::UNPROCESSABLE_ENTITY, "too many ssh bookmarks").into_response();
+        }
+        for b in bookmarks {
+            if b.label.trim().is_empty() || b.host.trim().is_empty() || b.username.trim().is_empty()
+            {
+                tracing::warn!("ssh_bookmarks validation: empty required field");
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "bookmark label/host/username required",
+                )
+                    .into_response();
+            }
+            if b.label.chars().count() > 50 {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "bookmark label too long")
+                    .into_response();
+            }
+            if b.host.len() > 255 {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "bookmark host too long")
+                    .into_response();
+            }
+            if b.username.len() > 255 {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "bookmark username too long",
+                )
+                    .into_response();
+            }
+            if b.key_path.as_deref().is_some_and(|p| p.len() > 4096) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "bookmark key_path too long",
+                )
+                    .into_response();
+            }
+        }
+    }
     // sleep_prevention_mode: enum 化により serde が不正値を拒否（422 を返す）
     settings.sleep_prevention_timeout = settings.sleep_prevention_timeout.clamp(1, 480);
 

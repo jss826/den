@@ -406,6 +406,157 @@ async fn settings_put_requires_auth() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
+// --- SSH Bookmarks validation ---
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_roundtrip() {
+    let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
+    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(
+            r#"{"ssh_bookmarks":[{"label":"myserver","host":"example.com","port":22,"username":"user","auth_type":"key","key_path":"~/.ssh/id_rsa"}]}"#,
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let bookmarks = json["ssh_bookmarks"].as_array().unwrap();
+    assert_eq!(bookmarks.len(), 1);
+    assert_eq!(bookmarks[0]["label"], "myserver");
+    assert_eq!(bookmarks[0]["host"], "example.com");
+    assert_eq!(bookmarks[0]["auth_type"], "key");
+    assert_eq!(bookmarks[0]["key_path"], "~/.ssh/id_rsa");
+}
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_too_many() {
+    let app = test_app();
+    let bookmarks: Vec<serde_json::Value> = (0..51)
+        .map(|i| {
+            serde_json::json!({
+                "label": format!("host-{i}"),
+                "host": "example.com",
+                "username": "user",
+                "auth_type": "password"
+            })
+        })
+        .collect();
+    let body = serde_json::json!({ "ssh_bookmarks": bookmarks }).to_string();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_empty_label() {
+    let app = test_app();
+    let body = r#"{"ssh_bookmarks":[{"label":"","host":"example.com","username":"user","auth_type":"password"}]}"#;
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_label_too_long() {
+    let app = test_app();
+    let long_label = "a".repeat(51);
+    let body = serde_json::json!({
+        "ssh_bookmarks": [{"label": long_label, "host": "example.com", "username": "user", "auth_type": "password"}]
+    })
+    .to_string();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_host_too_long() {
+    let app = test_app();
+    let long_host = "a".repeat(256);
+    let body = serde_json::json!({
+        "ssh_bookmarks": [{"label": "test", "host": long_host, "username": "user", "auth_type": "password"}]
+    })
+    .to_string();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_invalid_auth_type() {
+    let app = test_app();
+    let body = r#"{"ssh_bookmarks":[{"label":"test","host":"example.com","username":"user","auth_type":"invalid"}]}"#;
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    // auth_type is now an enum — invalid values are rejected by serde (422)
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn settings_ssh_bookmarks_username_too_long() {
+    let app = test_app();
+    let long_username = "u".repeat(256);
+    let body = serde_json::json!({
+        "ssh_bookmarks": [{"label": "test", "host": "example.com", "username": long_username, "auth_type": "password"}]
+    })
+    .to_string();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 // --- Terminal REST API ---
 
 #[tokio::test]

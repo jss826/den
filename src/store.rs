@@ -58,6 +58,31 @@ pub struct Snippet {
     pub auto_run: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SshAuthType {
+    #[default]
+    Password,
+    Key,
+    Agent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshBookmark {
+    pub label: String,
+    pub host: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub username: String,
+    pub auth_type: SshAuthType,
+    #[serde(default)]
+    pub key_path: Option<String>,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeybarButton {
     #[serde(default)]
@@ -123,6 +148,8 @@ pub struct Settings {
     #[serde(default)]
     pub snippets: Option<Vec<Snippet>>,
     #[serde(default)]
+    pub ssh_bookmarks: Option<Vec<SshBookmark>>,
+    #[serde(default)]
     pub sleep_prevention_mode: SleepPreventionMode,
     #[serde(default = "default_sleep_prevention_timeout")]
     pub sleep_prevention_timeout: u16,
@@ -156,6 +183,7 @@ impl Default for Settings {
             ssh_agent_forwarding: false,
             keybar_position: None,
             snippets: None,
+            ssh_bookmarks: None,
             sleep_prevention_mode: SleepPreventionMode::default(),
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
             version: String::new(),

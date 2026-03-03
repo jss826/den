@@ -77,6 +77,14 @@ const DenFiler = (() => {
     const sftpSubmit = document.getElementById('sftp-connect-submit');
     if (sftpSubmit) sftpSubmit.addEventListener('click', doSftpConnect);
 
+    // SSH Bookmarks
+    const bookmarkSelect = document.getElementById('sftp-bookmark-select');
+    if (bookmarkSelect) bookmarkSelect.addEventListener('change', onBookmarkSelect);
+    const bookmarkSave = document.getElementById('sftp-bookmark-save');
+    if (bookmarkSave) bookmarkSave.addEventListener('click', onBookmarkSave);
+    const bookmarkDelete = document.getElementById('sftp-bookmark-delete');
+    if (bookmarkDelete) bookmarkDelete.addEventListener('click', onBookmarkDelete);
+
     // グローバルクリックでコンテキストメニュー閉じる
     document.addEventListener('click', hideContextMenu);
 
@@ -186,6 +194,113 @@ const DenFiler = (() => {
     }
   }
 
+  // --- SSH Bookmarks ---
+
+  function renderBookmarkSelect(selectedLabel) {
+    const select = document.getElementById('sftp-bookmark-select');
+    const deleteBtn = document.getElementById('sftp-bookmark-delete');
+    if (!select) return;
+    const bookmarks = DenSettings.get('ssh_bookmarks') || [];
+    select.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Saved Hosts --';
+    select.appendChild(placeholder);
+    bookmarks.forEach((b) => {
+      const opt = document.createElement('option');
+      opt.value = b.label;
+      opt.textContent = b.label;
+      if (b.label === selectedLabel) opt.selected = true;
+      select.appendChild(opt);
+    });
+    if (deleteBtn) deleteBtn.hidden = !select.value;
+  }
+
+  function onBookmarkSelect() {
+    const select = document.getElementById('sftp-bookmark-select');
+    const deleteBtn = document.getElementById('sftp-bookmark-delete');
+    const bookmarks = DenSettings.get('ssh_bookmarks') || [];
+    const label = select.value;
+    if (deleteBtn) deleteBtn.hidden = !label;
+    const b = bookmarks.find(bk => bk.label === label);
+    if (!b) return;
+    document.getElementById('sftp-host').value = b.host;
+    document.getElementById('sftp-port').value = String(b.port || 22);
+    document.getElementById('sftp-username').value = b.username;
+    document.getElementById('sftp-auth-type').value = b.auth_type || 'password';
+    document.getElementById('sftp-password').value = '';
+    document.getElementById('sftp-key-path').value = b.key_path || '';
+    updateAuthFields();
+  }
+
+  async function onBookmarkSave() {
+    const host = document.getElementById('sftp-host').value.trim();
+    const username = document.getElementById('sftp-username').value.trim();
+    if (!host || !username) {
+      Toast.error('Host and username are required to save');
+      return;
+    }
+    const port = parseInt(document.getElementById('sftp-port').value, 10) || 22;
+    if (port < 1 || port > 65535) {
+      Toast.error('Port must be 1\u201365535');
+      return;
+    }
+    const defaultLabel = `${username}@${host}`;
+    const rawLabel = await Toast.prompt('Bookmark name:', defaultLabel);
+    if (!rawLabel) return;
+    const label = rawLabel.trim();
+    if (!label) {
+      Toast.error('Bookmark name cannot be empty');
+      return;
+    }
+
+    const entry = {
+      label,
+      host,
+      port,
+      username,
+      auth_type: document.getElementById('sftp-auth-type').value,
+      key_path: document.getElementById('sftp-key-path').value.trim() || null,
+    };
+
+    const bookmarks = (DenSettings.get('ssh_bookmarks') || []).slice();
+    const existIdx = bookmarks.findIndex(b => b.label === label);
+    if (existIdx >= 0) {
+      if (!(await Toast.confirm(`A bookmark named "${label}" already exists. Overwrite?`))) return;
+      bookmarks[existIdx] = entry;
+    } else {
+      if (bookmarks.length >= 50) {
+        Toast.error('Bookmark limit reached (max 50)');
+        return;
+      }
+      bookmarks.push(entry);
+    }
+    const ok = await DenSettings.save({ ssh_bookmarks: bookmarks });
+    if (ok) {
+      Toast.success('Bookmark saved');
+      renderBookmarkSelect(label);
+    } else {
+      Toast.error('Failed to save bookmark');
+    }
+  }
+
+  async function onBookmarkDelete() {
+    const select = document.getElementById('sftp-bookmark-select');
+    const bookmarks = (DenSettings.get('ssh_bookmarks') || []).slice();
+    const label = select.value;
+    const idx = bookmarks.findIndex(b => b.label === label);
+    if (idx < 0) return;
+    if (!(await Toast.confirm(`Delete bookmark "${label}"?`))) return;
+    bookmarks.splice(idx, 1);
+    const ok = await DenSettings.save({ ssh_bookmarks: bookmarks });
+    if (ok) {
+      Toast.success('Bookmark deleted');
+      renderBookmarkSelect(null);
+    } else {
+      Toast.error('Failed to delete bookmark');
+    }
+  }
+
   function showSftpModal() {
     const modal = document.getElementById('sftp-connect-modal');
     if (!modal) return;
@@ -197,6 +312,7 @@ const DenFiler = (() => {
     document.getElementById('sftp-password').value = '';
     document.getElementById('sftp-key-path').value = '';
     updateAuthFields();
+    renderBookmarkSelect(null);
     modal.hidden = false;
     document.getElementById('sftp-host').focus();
   }
