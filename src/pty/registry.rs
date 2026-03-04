@@ -359,6 +359,25 @@ impl SessionRegistry {
         &self.instance_id
     }
 
+    /// Collect child process PIDs from all active sessions.
+    /// Used for self-connection detection via process tree inspection.
+    pub async fn collect_child_pids(&self) -> std::collections::HashSet<u32> {
+        let session_arcs: Vec<_> = self.sessions.read().await.values().cloned().collect();
+        let mut pids = std::collections::HashSet::new();
+        for session in &session_arcs {
+            if !session.is_alive() {
+                continue;
+            }
+            let inner = session.inner.lock().await;
+            if let Some(ref child) = inner.child
+                && let Some(pid) = child.process_id()
+            {
+                pids.insert(pid);
+            }
+        }
+        pids
+    }
+
     /// PTY を spawn し read_task/resize_task を起動する共通ヘルパー
     ///
     /// 戻り値の `broadcast::Receiver` は read_task 開始前に作成されるため、

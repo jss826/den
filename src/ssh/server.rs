@@ -112,6 +112,7 @@ pub async fn run(
         authorized_keys,
         instance_id,
         loopback_count: Arc::new(AtomicUsize::new(0)),
+        ssh_port: port,
     };
 
     let addr = format!("{bind_address}:{port}");
@@ -130,6 +131,7 @@ struct DenSshServer {
     authorized_keys: Arc<HashSet<String>>,
     instance_id: String,
     loopback_count: Arc<AtomicUsize>,
+    ssh_port: u16,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -137,8 +139,8 @@ impl russh::server::Server for DenSshServer {
 
     fn new_client(&mut self, addr: Option<std::net::SocketAddr>) -> DenSshHandler {
         tracing::info!("SSH client connected from {:?}", addr);
-        let is_loopback = addr.is_some_and(|a| a.ip().is_loopback());
-        if is_loopback {
+        let is_local = addr.is_some_and(|a| super::loopback::is_local_address(&a));
+        if is_local {
             self.loopback_count.fetch_add(1, Ordering::Relaxed);
         }
         DenSshHandler {
@@ -146,9 +148,11 @@ impl russh::server::Server for DenSshServer {
             password: self.password.clone(),
             authorized_keys: Arc::clone(&self.authorized_keys),
             instance_id: self.instance_id.clone(),
-            is_loopback,
+            is_loopback: is_local,
             self_connection_detected: false,
             loopback_count: Arc::clone(&self.loopback_count),
+            peer_addr: addr,
+            ssh_port: self.ssh_port,
             session_name: None,
             client_id: None,
             channel_id: None,
@@ -172,6 +176,8 @@ struct DenSshHandler {
     is_loopback: bool,
     self_connection_detected: bool,
     loopback_count: Arc<AtomicUsize>,
+    peer_addr: Option<std::net::SocketAddr>,
+    ssh_port: u16,
     // Per-connection state
     session_name: Option<String>,
     client_id: Option<u64>,
@@ -224,6 +230,39 @@ impl DenSshHandler {
                 session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
                 session.close(channel_id)?;
                 return Ok(());
+            }
+        }
+
+        // Layer 3: Process tree inspection — check if the SSH client process
+        // is a descendant of any Den PTY child process (definitive detection)
+        if let Some(peer) = self.peer_addr
+            && self.is_loopback
+        {
+            let child_pids = self.registry.collect_child_pids().await;
+            if !child_pids.is_empty() {
+                let ssh_port = self.ssh_port;
+                let is_self = tokio::task::spawn_blocking(move || {
+                    super::loopback::is_self_connection(peer, ssh_port, &child_pids)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("is_self_connection task failed: {e}");
+                    false
+                });
+
+                if is_self {
+                    tracing::warn!("SSH self-connection detected via process tree (peer={peer})");
+                    session.data(
+                        channel_id,
+                        CryptoVec::from_slice(
+                            b"Error: Self-connection detected.\r\n\
+                              Connecting to Den from within a Den terminal session \
+                              creates an infinite loop.\r\n",
+                        ),
+                    )?;
+                    session.close(channel_id)?;
+                    return Ok(());
+                }
             }
         }
 
