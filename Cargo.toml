@@ -54,6 +54,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
 ] }
 
+[target."cfg(not(windows))".dependencies]
+arboard = "3.6.1"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

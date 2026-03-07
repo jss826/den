@@ -14,7 +14,7 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **Built-in SSH Server** — russh-based, password + public key auth, session attach/create
 - **12 Themes** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
 - **Snippets** — one-click command input from customizable snippet list
-- **Clipboard History** — automatic clipboard tracking with system clipboard monitoring
+- **Clipboard History** — automatic clipboard tracking with system clipboard monitoring where available
 - **Authentication** — HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
 - **Server-side Persistence** — settings and session history saved to JSON files
 - **Accessibility** — ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion

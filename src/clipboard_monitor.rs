@@ -1,4 +1,4 @@
-//! Windows システムクリップボード監視
+//! System clipboard monitoring
 //!
 //! PTY 内で動作するプログラム（yazi, vim 等）がシステムクリップボード経由で
 //! コピーした場合にも clipboard history に記録する。
@@ -6,6 +6,9 @@
 //! テキスト内容が変更された場合のみ Store に追加する。
 
 use crate::store::Store;
+
+const CLIPBOARD_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const CLIPBOARD_MAX_TEXT_BYTES: usize = 10_240;
 
 #[cfg(windows)]
 mod win32 {
@@ -54,6 +57,53 @@ mod win32 {
     }
 }
 
+#[cfg(not(windows))]
+mod desktop {
+    pub enum ClipboardRead {
+        Text(String),
+        Empty,
+        NonText,
+        Unavailable(String),
+    }
+
+    /// Read text from the desktop clipboard when the platform backend is available.
+    pub fn read_clipboard() -> ClipboardRead {
+        let mut clipboard = match arboard::Clipboard::new() {
+            Ok(clipboard) => clipboard,
+            Err(e) => return ClipboardRead::Unavailable(e.to_string()),
+        };
+
+        match clipboard.get_text() {
+            Ok(text) if text.is_empty() => ClipboardRead::Empty,
+            Ok(text) => ClipboardRead::Text(text),
+            Err(_) => ClipboardRead::NonText,
+        }
+    }
+}
+
+fn should_track_text(text: &str, last_text: &str) -> bool {
+    !text.is_empty() && text != last_text && text.len() <= CLIPBOARD_MAX_TEXT_BYTES
+}
+
+async fn record_clipboard_text(store: &Store, text: String, last_text: &mut String) {
+    if !should_track_text(&text, last_text) {
+        return;
+    }
+    *last_text = text.clone();
+
+    // add_clipboard_entry internally deduplicates via retain, so no pre-check needed
+    let store2 = store.clone();
+    match tokio::task::spawn_blocking(move || {
+        store2.add_clipboard_entry(text, "system".to_string())
+    })
+    .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::warn!("Clipboard monitor: failed to add entry: {e}"),
+        Err(e) => tracing::warn!("Clipboard monitor: task panicked: {e}"),
+    }
+}
+
 /// クリップボード監視を開始（バックグラウンド tokio タスク）
 #[cfg(windows)]
 pub fn start(store: Store) {
@@ -69,7 +119,7 @@ pub fn start(store: Store) {
             last_text = text;
         }
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut interval = tokio::time::interval(CLIPBOARD_POLL_INTERVAL);
         loop {
             interval.tick().await;
             let current_seq = win32::get_sequence_number();
@@ -83,28 +133,71 @@ pub fn start(store: Store) {
                 _ => continue,
             };
 
-            // 前回と同じテキスト、または 10KB 超はスキップ
-            if text == last_text || text.len() > 10_240 {
-                continue;
-            }
-            last_text = text.clone();
-
-            // add_clipboard_entry internally deduplicates via retain, so no pre-check needed
-            let store2 = store.clone();
-            match tokio::task::spawn_blocking(move || {
-                store2.add_clipboard_entry(text, "system".to_string())
-            })
-            .await
-            {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => tracing::warn!("Clipboard monitor: failed to add entry: {e}"),
-                Err(e) => tracing::warn!("Clipboard monitor: task panicked: {e}"),
-            }
+            record_clipboard_text(&store, text, &mut last_text).await;
         }
     });
 }
 
 #[cfg(not(windows))]
-pub fn start(_store: Store) {
-    // 非 Windows 環境ではクリップボード監視は未実装
+pub fn start(store: Store) {
+    tokio::spawn(async move {
+        let mut last_text = String::new();
+        let mut backend_unavailable_logged = false;
+
+        match tokio::task::spawn_blocking(desktop::read_clipboard).await {
+            Ok(desktop::ClipboardRead::Text(text)) => {
+                last_text = text;
+            }
+            Ok(desktop::ClipboardRead::Unavailable(e)) => {
+                tracing::info!("Clipboard monitor unavailable on this environment: {e}");
+                backend_unavailable_logged = true;
+            }
+            Ok(desktop::ClipboardRead::Empty | desktop::ClipboardRead::NonText) => {}
+            Err(e) => tracing::warn!("Clipboard monitor init task panicked: {e}"),
+        }
+
+        let mut interval = tokio::time::interval(CLIPBOARD_POLL_INTERVAL);
+        loop {
+            interval.tick().await;
+            match tokio::task::spawn_blocking(desktop::read_clipboard).await {
+                Ok(desktop::ClipboardRead::Text(text)) => {
+                    record_clipboard_text(&store, text, &mut last_text).await;
+                }
+                Ok(desktop::ClipboardRead::Unavailable(e)) => {
+                    if !backend_unavailable_logged {
+                        tracing::info!("Clipboard monitor unavailable on this environment: {e}");
+                        backend_unavailable_logged = true;
+                    }
+                }
+                Ok(desktop::ClipboardRead::Empty | desktop::ClipboardRead::NonText) => {}
+                Err(e) => tracing::warn!("Clipboard monitor task panicked: {e}"),
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_new_non_empty_text() {
+        assert!(should_track_text("hello", ""));
+    }
+
+    #[test]
+    fn skips_duplicate_text() {
+        assert!(!should_track_text("hello", "hello"));
+    }
+
+    #[test]
+    fn skips_empty_text() {
+        assert!(!should_track_text("", ""));
+    }
+
+    #[test]
+    fn skips_large_text() {
+        let large = "a".repeat(CLIPBOARD_MAX_TEXT_BYTES + 1);
+        assert!(!should_track_text(&large, ""));
+    }
 }

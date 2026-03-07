@@ -33,7 +33,7 @@ pub struct ClipboardEntry {
     pub text: String,
     /// Unix timestamp in milliseconds
     pub timestamp: u64,
-    /// "copy" or "osc52"
+    /// "copy", "osc52", or "system"
     pub source: String,
 }
 

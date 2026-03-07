@@ -14,7 +14,7 @@
 - **SSH サーバー内蔵** — russh ベース、パスワード＋公開鍵認証、セッション attach/create
 - **12 テーマ** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
 - **スニペット** — カスタマイズ可能なリストからワンクリックでコマンド入力
-- **クリップボード履歴** — システムクリップボード監視による自動追跡
+- **クリップボード履歴** — 利用可能な環境ではシステムクリップボード監視による自動追跡
 - **認証** — HttpOnly Cookie (HMAC-SHA256 トークン, 24時間有効期限) + レートリミット + CSP
 - **サーバーサイド永続化** — 設定とセッション履歴を JSON ファイルに保存
 - **アクセシビリティ** — ARIA 属性、focus-visible、キーボードナビゲーション、prefers-reduced-motion
