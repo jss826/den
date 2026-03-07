@@ -29,7 +29,7 @@ const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Maximum concurrent SSH connections from localhost (loopback self-connection guard)
-const MAX_SSH_LOOPBACK: usize = 3;
+const MAX_SSH_LOOPBACK: usize = 10;
 
 /// Escape character state machine for `~` sequences (like OpenSSH).
 /// Detects `Enter → ~ → command` patterns in SSH input.
