@@ -140,6 +140,8 @@ pub struct SearchQuery {
     pub query: String,
     #[serde(default)]
     pub content: bool,
+    #[serde(default)]
+    pub show_hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -255,6 +257,26 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
     data[..check_len].contains(&0)
 }
 
+pub(crate) fn is_hidden_name(name: &str) -> bool {
+    name.starts_with('.') || name.starts_with('$')
+}
+
+#[cfg(windows)]
+fn has_hidden_attribute(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    metadata.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN != 0
+}
+
+#[cfg(not(windows))]
+fn has_hidden_attribute(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn is_hidden_entry(name: &str, metadata: &fs::Metadata) -> bool {
+    is_hidden_name(name) || has_hidden_attribute(metadata)
+}
+
 /// I/O エラーを API エラーに変換（OS エラー詳細はログのみ、クライアントにはジェネリックメッセージ）
 fn io_err(e: io::Error) -> ApiError {
     let (status, msg) = match e.kind() {
@@ -295,10 +317,6 @@ pub async fn list(
             };
             let name = entry.file_name().to_string_lossy().into_owned();
 
-            if !q.show_hidden && (name.starts_with('.') || name.starts_with('$')) {
-                continue;
-            }
-
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(e) => {
@@ -306,6 +324,10 @@ pub async fn list(
                     continue;
                 }
             };
+
+            if !q.show_hidden && is_hidden_entry(&name, &metadata) {
+                continue;
+            }
 
             let modified = metadata.modified().ok().map(|t| {
                 let dt: chrono::DateTime<chrono::Utc> = t.into();
@@ -623,10 +645,18 @@ pub async fn search(
 
     let query_lower = q.query.to_lowercase();
     let content_search = q.content;
+    let show_hidden = q.show_hidden;
 
     let results = tokio::task::spawn_blocking(move || {
         let mut results = Vec::new();
-        search_recursive(&path, &query_lower, content_search, 0, &mut results);
+        search_recursive(
+            &path,
+            &query_lower,
+            content_search,
+            show_hidden,
+            0,
+            &mut results,
+        );
         results
     })
     .await
@@ -639,6 +669,7 @@ fn search_recursive(
     dir: &Path,
     query: &str,
     content_search: bool,
+    show_hidden: bool,
     depth: u32,
     results: &mut Vec<SearchResult>,
 ) {
@@ -668,13 +699,18 @@ fn search_recursive(
 
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-
-        // 隠しファイルをスキップ
-        if name.starts_with('.') || name.starts_with('$') {
+        let metadata = match fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::debug!("filer: search metadata error for {}: {e}", path.display());
+                continue;
+            }
+        };
+        if !show_hidden && is_hidden_entry(&name, &metadata) {
             continue;
         }
 
-        let is_dir = path.is_dir();
+        let is_dir = metadata.is_dir();
         let name_lower = name.to_lowercase();
 
         // ファイル名マッチ
@@ -689,9 +725,8 @@ fn search_recursive(
 
         // 内容検索（テキストファイルのみ）
         if content_search
-            && path.is_file()
+            && !is_dir
             && !name_lower.contains(query)
-            && let Ok(metadata) = fs::metadata(&path)
             && metadata.len() <= MAX_READ_SIZE
             && let Ok(file_content) = fs::read(&path)
             && !is_binary(&file_content)
@@ -721,7 +756,14 @@ fn search_recursive(
 
         // ディレクトリを再帰
         if is_dir {
-            search_recursive(&path, query, content_search, depth + 1, results);
+            search_recursive(
+                &path,
+                query,
+                content_search,
+                show_hidden,
+                depth + 1,
+                results,
+            );
         }
     }
 }
@@ -778,6 +820,21 @@ mod tests {
     #[test]
     fn is_binary_empty() {
         assert!(!is_binary(b""));
+    }
+
+    #[test]
+    fn hidden_name_with_dot() {
+        assert!(is_hidden_name(".gitignore"));
+    }
+
+    #[test]
+    fn hidden_name_with_dollar() {
+        assert!(is_hidden_name("$Recycle.Bin"));
+    }
+
+    #[test]
+    fn hidden_name_visible() {
+        assert!(!is_hidden_name("visible.txt"));
     }
 
     #[test]

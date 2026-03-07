@@ -13,6 +13,7 @@ use crate::AppState;
 use crate::filer::api::{
     DeleteQuery, DownloadQuery, ErrorResponse, FileContent, FilerEntry, FilerListing, MkdirRequest,
     ReadQuery, RenameRequest, SearchQuery, SearchResult, WriteRequest, err, is_binary,
+    is_hidden_name,
 };
 use crate::store::KnownHost;
 
@@ -273,7 +274,7 @@ pub async fn list(
     let mut entries = Vec::new();
     for entry in read_dir {
         let name = entry.file_name();
-        if !q.show_hidden && (name.starts_with('.') || name.starts_with('$')) {
+        if !q.show_hidden && is_hidden_name(&name) {
             continue;
         }
 
@@ -583,6 +584,7 @@ pub async fn search(
     let raw_path = validate_path(&q.path)?;
     let query_lower = q.query.to_lowercase();
     let content_search = q.content;
+    let show_hidden = q.show_hidden;
 
     let guard = state.sftp_manager.get().await.map_err(sftp_err)?;
     let sftp = guard.sftp();
@@ -600,6 +602,7 @@ pub async fn search(
         &canonical,
         &query_lower,
         content_search,
+        show_hidden,
         0,
         &mut results,
     )
@@ -612,6 +615,7 @@ async fn search_recursive(
     dir: &str,
     query: &str,
     content_search: bool,
+    show_hidden: bool,
     depth: u32,
     results: &mut Vec<SearchResult>,
 ) {
@@ -636,7 +640,7 @@ async fn search_recursive(
         if name == "." || name == ".." {
             continue;
         }
-        if name.starts_with('.') || name.starts_with('$') {
+        if !show_hidden && is_hidden_name(&name) {
             continue;
         }
 
@@ -683,6 +687,7 @@ async fn search_recursive(
                 &child_path,
                 query,
                 content_search,
+                show_hidden,
                 depth + 1,
                 results,
             ))

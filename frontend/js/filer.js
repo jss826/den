@@ -4,6 +4,7 @@
 const DenFiler = (() => {
   let currentDir = '~';
   let contextMenu = null;
+  const SHOW_HIDDEN_STORAGE_KEY = 'den:filer:show_hidden';
 
   function init() {
 
@@ -97,11 +98,15 @@ const DenFiler = (() => {
 
   // --- 隠しファイル表示トグル ---
 
+  function isShowHiddenEnabled() {
+    return localStorage.getItem(SHOW_HIDDEN_STORAGE_KEY) === 'true';
+  }
+
   function initHiddenToggle() {
     const btn = document.getElementById('filer-toggle-hidden');
     if (!btn) return;
 
-    let showHidden = localStorage.getItem('den:filer:show_hidden') === 'true';
+    let showHidden = isShowHiddenEnabled();
 
     function update() {
       btn.innerHTML = showHidden ? DenIcons.eye(16) : DenIcons.eyeOff(16);
@@ -112,7 +117,7 @@ const DenFiler = (() => {
     update();
     btn.addEventListener('click', () => {
       showHidden = !showHidden;
-      localStorage.setItem('den:filer:show_hidden', String(showHidden));
+      localStorage.setItem(SHOW_HIDDEN_STORAGE_KEY, String(showHidden));
       update();
       FilerTree.refresh();
     });
@@ -499,7 +504,7 @@ const DenFiler = (() => {
     const match = resolvedPath.match(/^([A-Za-z]:\\)/);
     if (!match) return;
     const driveRoot = match[1];
-    const showHidden = localStorage.getItem('den:filer:show_hidden') === 'true';
+    const showHidden = isShowHiddenEnabled();
     const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(driveRoot)}&show_hidden=${showHidden}`);
     if (data && data.drives) {
       renderDrives(data.drives);
@@ -764,8 +769,11 @@ const DenFiler = (() => {
     // 検索中はモーダルを開いてスピナー表示
     resultsEl.innerHTML = '';
     modal.hidden = false;
+    const showHidden = isShowHiddenEnabled();
     const data = await Spinner.wrap(resultsEl, () =>
-      apiFetch(`${FilerRemote.getApiBase()}/search?path=${enc(currentDir)}&query=${enc(query)}&content=true`)
+      apiFetch(
+        `${FilerRemote.getApiBase()}/search?path=${enc(currentDir)}&query=${enc(query)}&content=true&show_hidden=${showHidden}`
+      )
     );
     if (!data) {
       modal.hidden = true;
@@ -952,8 +960,9 @@ const DenFiler = (() => {
         return;
       }
       debounceTimer = setTimeout(async () => {
+        const showHidden = isShowHiddenEnabled();
         const data = await apiFetch(
-          `${FilerRemote.getApiBase()}/search?path=${enc(currentDir)}&query=${enc(q)}&content=false`
+          `${FilerRemote.getApiBase()}/search?path=${enc(currentDir)}&query=${enc(q)}&content=false&show_hidden=${showHidden}`
         );
         renderResults(data);
       }, 300);

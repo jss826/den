@@ -53,6 +53,26 @@ fn encode_path(path: &std::path::Path) -> String {
     urlencoding::encode(&path.to_string_lossy()).to_string()
 }
 
+#[cfg(windows)]
+fn set_hidden_attribute(path: &std::path::Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::MetadataExt;
+
+    let attrs = std::fs::metadata(path).unwrap().file_attributes();
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::SetFileAttributesW(
+            wide.as_ptr(),
+            attrs | windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN,
+        )
+    };
+    assert_ne!(ok, 0);
+}
+
 // ============================================================
 // GET /api/filer/list
 // ============================================================
@@ -148,6 +168,53 @@ async fn list_hidden_files_included() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let entries = json["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn list_hidden_attribute_files_respect_show_hidden() {
+    let (app, dir) = test_app_with_dir();
+    let hidden = dir.path().join("hidden-attr.txt");
+    std::fs::write(&hidden, "secret").unwrap();
+    set_hidden_attribute(&hidden);
+    std::fs::write(dir.path().join("visible.txt"), "hello").unwrap();
+
+    let path = encode_path(dir.path());
+
+    let hidden_off_req = Request::builder()
+        .uri(format!("/api/filer/list?path={}", path))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_off_resp = app.clone().oneshot(hidden_off_req).await.unwrap();
+    assert_eq!(hidden_off_resp.status(), StatusCode::OK);
+    let hidden_off_body = hidden_off_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_off_json: serde_json::Value = serde_json::from_slice(&hidden_off_body).unwrap();
+    let hidden_off_entries = hidden_off_json["entries"].as_array().unwrap();
+    assert_eq!(hidden_off_entries.len(), 1);
+    assert_eq!(hidden_off_entries[0]["name"], "visible.txt");
+
+    let hidden_on_req = Request::builder()
+        .uri(format!("/api/filer/list?path={}&show_hidden=true", path))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_on_resp = app.oneshot(hidden_on_req).await.unwrap();
+    assert_eq!(hidden_on_resp.status(), StatusCode::OK);
+    let hidden_on_body = hidden_on_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_on_json: serde_json::Value = serde_json::from_slice(&hidden_on_body).unwrap();
+    let hidden_on_entries = hidden_on_json["entries"].as_array().unwrap();
+    assert_eq!(hidden_on_entries.len(), 2);
 }
 
 #[tokio::test]
@@ -610,6 +677,162 @@ async fn search_content() {
     assert_eq!(results.len(), 1);
     assert!(results[0]["line"].is_number());
     assert!(results[0]["context"].as_str().unwrap().contains("quick"));
+}
+
+#[tokio::test]
+async fn search_hidden_files_by_name_respect_show_hidden() {
+    let (app, dir) = test_app_with_dir();
+    std::fs::write(dir.path().join(".hidden-target.txt"), "hello").unwrap();
+
+    let path = encode_path(dir.path());
+
+    let hidden_off_req = Request::builder()
+        .uri(format!("/api/filer/search?path={}&query=target", path))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_off_resp = app.clone().oneshot(hidden_off_req).await.unwrap();
+    assert_eq!(hidden_off_resp.status(), StatusCode::OK);
+    let hidden_off_body = hidden_off_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_off_json: serde_json::Value = serde_json::from_slice(&hidden_off_body).unwrap();
+    assert!(hidden_off_json.as_array().unwrap().is_empty());
+
+    let hidden_on_req = Request::builder()
+        .uri(format!(
+            "/api/filer/search?path={}&query=target&show_hidden=true",
+            path
+        ))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_on_resp = app.oneshot(hidden_on_req).await.unwrap();
+    assert_eq!(hidden_on_resp.status(), StatusCode::OK);
+    let hidden_on_body = hidden_on_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_on_json: serde_json::Value = serde_json::from_slice(&hidden_on_body).unwrap();
+    let hidden_on_results = hidden_on_json.as_array().unwrap();
+    assert_eq!(hidden_on_results.len(), 1);
+    assert!(
+        hidden_on_results[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains(".hidden-target.txt")
+    );
+}
+
+#[tokio::test]
+async fn search_hidden_files_by_content_respect_show_hidden() {
+    let (app, dir) = test_app_with_dir();
+    std::fs::write(dir.path().join(".hidden-note.txt"), "secret needle").unwrap();
+
+    let path = encode_path(dir.path());
+
+    let hidden_off_req = Request::builder()
+        .uri(format!(
+            "/api/filer/search?path={}&query=needle&content=true",
+            path
+        ))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_off_resp = app.clone().oneshot(hidden_off_req).await.unwrap();
+    assert_eq!(hidden_off_resp.status(), StatusCode::OK);
+    let hidden_off_body = hidden_off_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_off_json: serde_json::Value = serde_json::from_slice(&hidden_off_body).unwrap();
+    assert!(hidden_off_json.as_array().unwrap().is_empty());
+
+    let hidden_on_req = Request::builder()
+        .uri(format!(
+            "/api/filer/search?path={}&query=needle&content=true&show_hidden=true",
+            path
+        ))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_on_resp = app.oneshot(hidden_on_req).await.unwrap();
+    assert_eq!(hidden_on_resp.status(), StatusCode::OK);
+    let hidden_on_body = hidden_on_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_on_json: serde_json::Value = serde_json::from_slice(&hidden_on_body).unwrap();
+    let hidden_on_results = hidden_on_json.as_array().unwrap();
+    assert_eq!(hidden_on_results.len(), 1);
+    assert!(
+        hidden_on_results[0]["context"]
+            .as_str()
+            .unwrap()
+            .contains("needle")
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn search_hidden_attribute_files_respect_show_hidden() {
+    let (app, dir) = test_app_with_dir();
+    let hidden = dir.path().join("hidden-attr-target.txt");
+    std::fs::write(&hidden, "hello").unwrap();
+    set_hidden_attribute(&hidden);
+
+    let path = encode_path(dir.path());
+
+    let hidden_off_req = Request::builder()
+        .uri(format!("/api/filer/search?path={}&query=target", path))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_off_resp = app.clone().oneshot(hidden_off_req).await.unwrap();
+    assert_eq!(hidden_off_resp.status(), StatusCode::OK);
+    let hidden_off_body = hidden_off_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_off_json: serde_json::Value = serde_json::from_slice(&hidden_off_body).unwrap();
+    assert!(hidden_off_json.as_array().unwrap().is_empty());
+
+    let hidden_on_req = Request::builder()
+        .uri(format!(
+            "/api/filer/search?path={}&query=target&show_hidden=true",
+            path
+        ))
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let hidden_on_resp = app.oneshot(hidden_on_req).await.unwrap();
+    assert_eq!(hidden_on_resp.status(), StatusCode::OK);
+    let hidden_on_body = hidden_on_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let hidden_on_json: serde_json::Value = serde_json::from_slice(&hidden_on_body).unwrap();
+    let hidden_on_results = hidden_on_json.as_array().unwrap();
+    assert_eq!(hidden_on_results.len(), 1);
+    assert!(
+        hidden_on_results[0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("hidden-attr-target.txt")
+    );
 }
 
 #[tokio::test]

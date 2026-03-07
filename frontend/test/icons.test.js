@@ -56,7 +56,7 @@ describe('DenIcons icon functions', () => {
   const iconFns = [
     'filePlus', 'folderPlus', 'upload', 'refresh', 'gear', 'terminal',
     'chevronLeft', 'chevronRight', 'download',
-    'panelLeft', 'panelRight', 'snippet', 'clipboard',
+    'panelLeft', 'panelRight', 'snippet', 'clipboard', 'coffee', 'eye', 'eyeOff',
     'folder', 'file',
   ];
 

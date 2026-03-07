@@ -73,10 +73,10 @@ export function filerApi(request: APIRequestContext, token: string) {
       return resp;
     },
 
-    async search(path: string, query: string, content = false) {
+    async search(path: string, query: string, content = false, showHidden = false) {
       const resp = await request.get(`${BASE_URL}/api/filer/search`, {
         headers,
-        params: { path, query, content: String(content) },
+        params: { path, query, content: String(content), show_hidden: String(showHidden) },
       });
       return resp;
     },

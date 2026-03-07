@@ -11,9 +11,14 @@ const FilerTree = (() => {
   let onDelete; // callback(path) — Delete キー削除
   let rootPath = '~';
   let visibleItemsCache = null; // getVisibleTreeItems キャッシュ
+  const SHOW_HIDDEN_STORAGE_KEY = 'den:filer:show_hidden';
   // expanded: Set<path> — 展開中ディレクトリのパス
   const expanded = new Set();
   let selectedPath = null;
+
+  function isShowHiddenEnabled() {
+    return localStorage.getItem(SHOW_HIDDEN_STORAGE_KEY) === 'true';
+  }
 
   function init(container, callbacks) {
     treeEl = container;
@@ -39,7 +44,7 @@ const FilerTree = (() => {
     const isRoot = dirPath === rootPath;
     if (isRoot) Spinner.show(treeEl);
     try {
-      const showHidden = localStorage.getItem('den:filer:show_hidden') === 'true';
+      const showHidden = isShowHiddenEnabled();
       const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(dirPath)}&show_hidden=${showHidden}`);
       if (!data) return;
       if (isRoot) {
