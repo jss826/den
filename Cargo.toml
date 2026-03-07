@@ -55,7 +55,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target."cfg(not(windows))".dependencies]
-arboard = "3.6.1"
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

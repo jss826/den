@@ -61,9 +61,19 @@ mod win32 {
 mod desktop {
     pub enum ClipboardRead {
         Text(String),
-        Empty,
-        NonText,
+        NoTextContent,
+        Busy,
         Unavailable(String),
+    }
+
+    fn classify_error(err: arboard::Error) -> ClipboardRead {
+        match err {
+            arboard::Error::ContentNotAvailable | arboard::Error::ConversionFailure => {
+                ClipboardRead::NoTextContent
+            }
+            arboard::Error::ClipboardOccupied => ClipboardRead::Busy,
+            other => ClipboardRead::Unavailable(other.to_string()),
+        }
     }
 
     /// Read text from the desktop clipboard when the platform backend is available.
@@ -74,9 +84,9 @@ mod desktop {
         };
 
         match clipboard.get_text() {
-            Ok(text) if text.is_empty() => ClipboardRead::Empty,
+            Ok(text) if text.is_empty() => ClipboardRead::NoTextContent,
             Ok(text) => ClipboardRead::Text(text),
-            Err(_) => ClipboardRead::NonText,
+            Err(err) => classify_error(err),
         }
     }
 }
@@ -147,12 +157,15 @@ pub fn start(store: Store) {
         match tokio::task::spawn_blocking(desktop::read_clipboard).await {
             Ok(desktop::ClipboardRead::Text(text)) => {
                 last_text = text;
+                backend_unavailable_logged = false;
             }
             Ok(desktop::ClipboardRead::Unavailable(e)) => {
                 tracing::info!("Clipboard monitor unavailable on this environment: {e}");
                 backend_unavailable_logged = true;
             }
-            Ok(desktop::ClipboardRead::Empty | desktop::ClipboardRead::NonText) => {}
+            Ok(desktop::ClipboardRead::NoTextContent | desktop::ClipboardRead::Busy) => {
+                backend_unavailable_logged = false;
+            }
             Err(e) => tracing::warn!("Clipboard monitor init task panicked: {e}"),
         }
 
@@ -161,6 +174,7 @@ pub fn start(store: Store) {
             interval.tick().await;
             match tokio::task::spawn_blocking(desktop::read_clipboard).await {
                 Ok(desktop::ClipboardRead::Text(text)) => {
+                    backend_unavailable_logged = false;
                     record_clipboard_text(&store, text, &mut last_text).await;
                 }
                 Ok(desktop::ClipboardRead::Unavailable(e)) => {
@@ -169,7 +183,9 @@ pub fn start(store: Store) {
                         backend_unavailable_logged = true;
                     }
                 }
-                Ok(desktop::ClipboardRead::Empty | desktop::ClipboardRead::NonText) => {}
+                Ok(desktop::ClipboardRead::NoTextContent | desktop::ClipboardRead::Busy) => {
+                    backend_unavailable_logged = false;
+                }
                 Err(e) => tracing::warn!("Clipboard monitor task panicked: {e}"),
             }
         }
