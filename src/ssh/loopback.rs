@@ -39,7 +39,9 @@ pub fn find_tcp_peer_pid(peer: SocketAddr, local_port: u16) -> Option<u32> {
         IpAddr::V6(v6) => v6.to_ipv4_mapped()?,
     };
     let peer_port = peer.port();
-    let peer_addr_be = u32::from_ne_bytes(peer_ipv4.octets());
+    // dwRemoteAddr stores IPv4 in network byte order; octets() returns the same
+    // order, so from_ne_bytes produces a u32 that matches dwRemoteAddr on all platforms.
+    let peer_addr_ne = u32::from_ne_bytes(peer_ipv4.octets());
 
     let mut buf: Vec<u8> = Vec::new();
     let mut size: u32 = 0;
@@ -87,8 +89,10 @@ pub fn find_tcp_peer_pid(peer: SocketAddr, local_port: u16) -> Option<u32> {
     // Bounds check: verify the buffer is large enough for the reported number of entries.
     // The TCP table can grow between the size-query and fill calls, so dwNumEntries
     // could exceed what the buffer can hold.
-    let header_size = std::mem::size_of::<MIB_TCPTABLE_OWNER_PID>();
+    // MIB_TCPTABLE_OWNER_PID includes table[1] (one row) in its size,
+    // so subtract one row to get the true header-only size.
     let row_size = std::mem::size_of_val(&table.table[0]);
+    let header_size = std::mem::size_of::<MIB_TCPTABLE_OWNER_PID>() - row_size;
     let required = header_size.saturating_add(num_entries.saturating_mul(row_size));
     if (size as usize) < required {
         return None;
@@ -105,7 +109,7 @@ pub fn find_tcp_peer_pid(peer: SocketAddr, local_port: u16) -> Option<u32> {
         // Local = our SSH server side
         let local = (row.dwLocalPort as u16).to_be();
 
-        if remote_addr == peer_addr_be && remote_port == peer_port && local == local_port {
+        if remote_addr == peer_addr_ne && remote_port == peer_port && local == local_port {
             return Some(row.dwOwningPid);
         }
     }

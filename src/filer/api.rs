@@ -699,14 +699,18 @@ fn search_recursive(
 
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let metadata = match fs::metadata(&path) {
+        // Short-circuit: skip by name before paying for metadata syscall
+        if !show_hidden && is_hidden_name(&name) {
+            continue;
+        }
+        let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
                 tracing::debug!("filer: search metadata error for {}: {e}", path.display());
                 continue;
             }
         };
-        if !show_hidden && is_hidden_entry(&name, &metadata) {
+        if !show_hidden && has_hidden_attribute(&metadata) {
             continue;
         }
 

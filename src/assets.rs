@@ -52,6 +52,10 @@ fn sha2_digest(data: &[u8]) -> [u8; 32] {
 
 /// 静的ファイル配信ハンドラ
 pub async fn serve_static(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    // /index.html must return the cache-busted version, same as /
+    if path == "index.html" {
+        return serve_index().await;
+    }
     serve_file(&path)
 }
 
