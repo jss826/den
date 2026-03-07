@@ -16,6 +16,7 @@ const FloatTerminal = (() => {
   let lastSentRows = 0;
 
   // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
+  // eslint-disable-next-line no-control-regex
   const MOUSE_SEQ_RE = /\x1b\[<?\d+;\d+;\d+[Mm]/g;
   function filterMouseSeqs(s) { return s.replace(MOUSE_SEQ_RE, ''); }
   function isX10Mouse(d) {

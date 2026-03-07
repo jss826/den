@@ -34,6 +34,9 @@ const DenFiler = (() => {
     document.getElementById('filer-upload').addEventListener('click', showUploadModal);
     document.getElementById('filer-refresh').addEventListener('click', () => FilerTree.refresh());
 
+    // 隠しファイル表示トグル
+    initHiddenToggle();
+
     // Remote SFTP ボタン
     initRemoteButton();
 
@@ -90,6 +93,29 @@ const DenFiler = (() => {
 
     // ドラッグ&ドロップ アップロード
     initDragDrop();
+  }
+
+  // --- 隠しファイル表示トグル ---
+
+  function initHiddenToggle() {
+    const btn = document.getElementById('filer-toggle-hidden');
+    if (!btn) return;
+
+    let showHidden = localStorage.getItem('den:filer:show_hidden') === 'true';
+
+    function update() {
+      btn.innerHTML = showHidden ? DenIcons.eye(16) : DenIcons.eyeOff(16);
+      btn.setAttribute('data-tooltip', showHidden ? 'Hide Hidden Files' : 'Show Hidden Files');
+      btn.classList.toggle('active', showHidden);
+    }
+
+    update();
+    btn.addEventListener('click', () => {
+      showHidden = !showHidden;
+      localStorage.setItem('den:filer:show_hidden', String(showHidden));
+      update();
+      FilerTree.refresh();
+    });
   }
 
   // --- ツリー表示トグル ---
@@ -473,7 +499,8 @@ const DenFiler = (() => {
     const match = resolvedPath.match(/^([A-Za-z]:\\)/);
     if (!match) return;
     const driveRoot = match[1];
-    const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(driveRoot)}&show_hidden=false`);
+    const showHidden = localStorage.getItem('den:filer:show_hidden') === 'true';
+    const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(driveRoot)}&show_hidden=${showHidden}`);
     if (data && data.drives) {
       renderDrives(data.drives);
     }

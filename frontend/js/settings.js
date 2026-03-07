@@ -100,7 +100,7 @@ const DenSettings = (() => {
   let titleCtx = { tab: 'terminal', session: 'default', oscDisplay: '', remoteHost: '' };
 
   function isWindowsPath(s) {
-    return /^[A-Za-z]:[\\\/]/.test(s);
+    return /^[A-Za-z]:[/\\]/.test(s);
   }
 
   function parseOscTitle(oscTitle) {

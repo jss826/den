@@ -39,7 +39,8 @@ const FilerTree = (() => {
     const isRoot = dirPath === rootPath;
     if (isRoot) Spinner.show(treeEl);
     try {
-      const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(dirPath)}&show_hidden=false`);
+      const showHidden = localStorage.getItem('den:filer:show_hidden') === 'true';
+      const data = await apiFetch(`${FilerRemote.getApiBase()}/list?path=${enc(dirPath)}&show_hidden=${showHidden}`);
       if (!data) return;
       if (isRoot) {
         treeEl.innerHTML = '';

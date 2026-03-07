@@ -177,6 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'filer-new-folder': DenIcons.folderPlus,
       'filer-upload': DenIcons.upload,
       'filer-refresh': DenIcons.refresh,
+      'filer-toggle-hidden': DenIcons.eyeOff,
       'clipboard-history-btn': DenIcons.clipboard,
       'snippet-btn': DenIcons.snippet,
       'float-terminal-btn': DenIcons.terminal,
