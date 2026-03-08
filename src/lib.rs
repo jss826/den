@@ -88,7 +88,10 @@ pub fn create_app_with_secret(
             "/api/terminal/sessions",
             get(ws::list_sessions).post(ws::create_session),
         )
-        .route("/api/terminal/sessions/{name}", delete(ws::destroy_session))
+        .route(
+            "/api/terminal/sessions/{name}",
+            put(ws::rename_session).delete(ws::destroy_session),
+        )
         // Filer API
         .route("/api/filer/list", get(filer::api::list))
         .route("/api/filer/read", get(filer::api::read))

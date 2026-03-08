@@ -635,6 +635,20 @@ const DenTerminal = (() => {
     }
   }
 
+  async function renameSession(oldName, newName) {
+    try {
+      const resp = await fetch(`/api/terminal/sessions/${encodeURIComponent(oldName)}`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      return resp.ok || resp.status === 204;
+    } catch (_) {
+      return false;
+    }
+  }
+
   async function destroySession(name) {
     try {
       const resp = await fetch(`/api/terminal/sessions/${encodeURIComponent(name)}`, {
@@ -751,6 +765,32 @@ const DenTerminal = (() => {
         }
         const tab = e.target.closest('.session-tab');
         if (tab) switchSession(tab.dataset.session);
+      });
+
+      // Rename session on double-click
+      sessionTabsEl.addEventListener('dblclick', async (e) => {
+        const tab = e.target.closest('.session-tab');
+        if (!tab || e.target.closest('.session-tab-close')) return;
+        const oldName = tab.dataset.session;
+        const newName = await Toast.prompt('Rename session:', oldName);
+        if (!newName || !newName.trim() || newName.trim() === oldName) return;
+        const trimmed = newName.trim();
+        const validationError = validateSessionName(trimmed);
+        if (validationError) {
+          Toast.error(validationError);
+          return;
+        }
+        const ok = await renameSession(oldName, trimmed);
+        if (!ok) {
+          Toast.error('Failed to rename session');
+          return;
+        }
+        if (oldName === currentSession) {
+          currentSession = trimmed;
+          window.DenApp?.updateSessionHash(trimmed);
+        }
+        lastSessionsKey = '';
+        await refreshSessionList();
       });
 
       // F001: Keyboard navigation (roving tabindex)

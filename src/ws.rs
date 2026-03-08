@@ -204,6 +204,23 @@ pub async fn create_session(
     }
 }
 
+/// PUT /api/terminal/sessions/{name}
+#[derive(Deserialize)]
+pub struct RenameSessionRequest {
+    pub name: String,
+}
+
+pub async fn rename_session(
+    State(state): State<Arc<AppState>>,
+    Path(old_name): Path<String>,
+    Json(req): Json<RenameSessionRequest>,
+) -> impl IntoResponse {
+    match state.registry.rename(&old_name, &req.name).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
 /// DELETE /api/terminal/sessions/{name}
 pub async fn destroy_session(
     State(state): State<Arc<AppState>>,

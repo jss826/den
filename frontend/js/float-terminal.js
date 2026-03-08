@@ -521,6 +521,14 @@ const FloatTerminal = (() => {
       // Fall through to build the option list below
     }
 
+    // If current session was renamed, follow DenTerminal's active session
+    if (currentSession && sessions.length > 0 && !sessions.find(s => s.name === currentSession)) {
+      const mainSession = DenTerminal.getCurrentSession();
+      if (mainSession && sessions.find(s => s.name === mainSession)) {
+        currentSession = mainSession;
+      }
+    }
+
     if (sessions.length > 0) {
       for (const s of sessions) {
         const opt = document.createElement('option');

@@ -607,6 +607,36 @@ async fn terminal_sessions_destroy_nonexistent() {
 }
 
 #[tokio::test]
+async fn terminal_sessions_rename_invalid_name() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/terminal/sessions/old-name")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"name":"bad name!"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn terminal_sessions_rename_not_found() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/terminal/sessions/nonexistent")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"name":"new-name"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn terminal_sessions_requires_auth() {
     let app = test_app();
     let req = Request::builder()

@@ -771,13 +771,20 @@ impl SessionRegistry {
     /// セッション一覧
     pub async fn list(&self) -> Vec<SessionInfo> {
         // RwLock を即解放してから各セッションの Mutex を取得する
-        let session_arcs: Vec<_> = self.sessions.read().await.values().cloned().collect();
+        // HashMap key を正式名として使用（rename 後も正しい名前を返す）
+        let session_arcs: Vec<_> = self
+            .sessions
+            .read()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::clone(v)))
+            .collect();
 
         let mut result = Vec::with_capacity(session_arcs.len());
-        for session in &session_arcs {
+        for (name, session) in &session_arcs {
             let inner = session.inner.lock().await;
             result.push(SessionInfo {
-                name: session.name.clone(),
+                name: name.clone(),
                 created_at: session.created_at,
                 alive: session.is_alive(),
                 client_count: inner.clients.len(),
@@ -860,6 +867,27 @@ impl SessionRegistry {
         }
 
         tracing::info!("Session destroyed: {name}");
+    }
+
+    /// セッション名を変更
+    pub async fn rename(&self, old_name: &str, new_name: &str) -> Result<(), RegistryError> {
+        if !is_valid_session_name(new_name) {
+            return Err(RegistryError::InvalidName(new_name.to_string()));
+        }
+        let mut sessions = self.sessions.write().await;
+        if !sessions.contains_key(old_name) {
+            return Err(RegistryError::NotFound(old_name.to_string()));
+        }
+        if sessions.contains_key(new_name) {
+            return Err(RegistryError::AlreadyExists(new_name.to_string()));
+        }
+        // HashMap key change only — SharedSession.name is the creation-time name
+        // and is no longer used for lookups (list() uses the HashMap key instead)
+        if let Some(session) = sessions.remove(old_name) {
+            sessions.insert(new_name.to_string(), session);
+        }
+        tracing::info!("Session renamed: {old_name} -> {new_name}");
+        Ok(())
     }
 
     /// セッションが存在するか
@@ -1095,5 +1123,20 @@ mod tests {
         assert!(!is_valid_session_name("test!"));
         assert!(!is_valid_session_name("name.with.dots"));
         assert!(!is_valid_session_name("tab\there"));
+    }
+
+    #[tokio::test]
+    async fn rename_session_not_found() {
+        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0);
+        let err = registry.rename("nonexistent", "new").await.unwrap_err();
+        assert!(matches!(err, RegistryError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn rename_session_invalid_name() {
+        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0);
+        // Not found takes precedence, but invalid name is checked first
+        let err = registry.rename("x", "bad name!").await.unwrap_err();
+        assert!(matches!(err, RegistryError::InvalidName(_)));
     }
 }
