@@ -501,32 +501,60 @@ html, body {
 }
 
 /* Terminal session bar */
+#terminal-pane {
+  --terminal-session-bar-height: 40px;
+  --session-tab-min-height: 32px;
+  --session-close-hit-size: 28px;
+}
+
 .terminal-session-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 4px 8px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  height: 32px;
+  height: var(--terminal-session-bar-height);
 }
 
 .session-tabs {
   display: flex;
+  align-items: center;
   overflow-x: auto;
   flex: 1;
   min-width: 0;
-  gap: 2px;
+  gap: 6px;
+  padding: 2px 0;
   scrollbar-width: none;
+  scroll-padding-inline: 12px;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
 }
 .session-tabs::-webkit-scrollbar { display: none; }
+
+.session-tabs.overflow-left:not(.overflow-right) {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 100%);
+}
+
+.session-tabs.overflow-right:not(.overflow-left) {
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 16px), transparent 100%);
+}
+
+.session-tabs.overflow-left.overflow-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+}
 
 .session-tab {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 4px;
+  gap: 6px;
+  padding: 4px 10px;
+  min-height: var(--session-tab-min-height);
+  border-radius: 6px;
   font-size: 0.8rem;
   color: var(--muted);
   cursor: pointer;
@@ -542,23 +570,56 @@ html, body {
 }
 .session-tab.dead { opacity: 0.5; }
 
+.session-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 18ch;
+}
+
 .session-tab-close {
   background: none;
   border: none;
   color: inherit;
-  font-size: 0.7rem;
-  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--session-close-hit-size);
+  height: var(--session-close-hit-size);
+  font-size: 0.85rem;
+  padding: 0;
   cursor: pointer;
   opacity: 0;
-  border-radius: 2px;
+  border-radius: 4px;
   line-height: 1;
+  flex-shrink: 0;
 }
 .session-tab:hover .session-tab-close { opacity: 0.6; }
 .session-tab-close:hover { opacity: 1; color: var(--error); }
 
+.session-tab:focus-visible,
+.session-bar-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* F009: Touch devices can't hover — always show close button */
 @media (hover: none) and (pointer: coarse) {
-  .session-tab-close { opacity: 0.5; }
+  #terminal-pane {
+    --terminal-session-bar-height: 44px;
+    --session-tab-min-height: 36px;
+    --session-close-hit-size: 32px;
+  }
+
+  .session-tabs {
+    gap: 8px;
+  }
+
+  .session-tab {
+    padding-inline: 12px;
+  }
+
+  .session-tab-close { opacity: 0.65; }
 }
 
 .session-select {
@@ -580,12 +641,18 @@ html, body {
 .session-bar-btn {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--fg);
   font-size: 0.8rem;
-  padding: 2px 8px;
+  min-width: var(--session-tab-min-height);
+  min-height: var(--session-tab-min-height);
+  padding: 0 10px;
   cursor: pointer;
   line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .session-bar-btn:hover {
@@ -605,7 +672,7 @@ html, body {
 
 #terminal-container {
   width: 100%;
-  height: calc(100% - 32px);
+  height: calc(100% - var(--terminal-session-bar-height));
   position: relative;
 }
 

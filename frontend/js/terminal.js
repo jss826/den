@@ -401,6 +401,7 @@ const DenTerminal = (() => {
     hideEmptyState();
     DenSettings.setOscTitle('');
     DenSettings.setTitleTab('terminal', name);
+    scheduleSessionTabsLayout({ scrollActive: true });
     term.reset();
     doConnect();
     window.DenApp?.updateSessionHash(name);
@@ -571,6 +572,42 @@ const DenTerminal = (() => {
   let sessionClientsEl = null;
   // F004: Skip DOM rebuild when sessions unchanged
   let lastSessionsKey = '';
+  let sessionTabsLayoutRafId = null;
+  let shouldScrollActiveSessionTab = false;
+
+  function syncSessionTabSelection() {
+    if (!sessionTabsEl) return;
+    for (const tab of sessionTabsEl.querySelectorAll('.session-tab')) {
+      const isActive = tab.dataset.session === currentSession;
+      tab.classList.toggle('active', isActive);
+      tab.setAttribute('tabindex', isActive ? '0' : '-1');
+      tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
+  }
+
+  function updateSessionTabsOverflow() {
+    if (!sessionTabsEl) return;
+    const maxScrollLeft = Math.max(0, sessionTabsEl.scrollWidth - sessionTabsEl.clientWidth);
+    const scrollLeft = sessionTabsEl.scrollLeft;
+    sessionTabsEl.classList.toggle('overflow-left', scrollLeft > 4);
+    sessionTabsEl.classList.toggle('overflow-right', maxScrollLeft - scrollLeft > 4);
+  }
+
+  function scheduleSessionTabsLayout(options = {}) {
+    if (!sessionTabsEl) return;
+    shouldScrollActiveSessionTab = shouldScrollActiveSessionTab || !!options.scrollActive;
+    if (sessionTabsLayoutRafId != null) return;
+    sessionTabsLayoutRafId = requestAnimationFrame(() => {
+      sessionTabsLayoutRafId = null;
+      syncSessionTabSelection();
+      const activeTab = sessionTabsEl.querySelector('.session-tab.active');
+      if (shouldScrollActiveSessionTab && activeTab) {
+        activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      shouldScrollActiveSessionTab = false;
+      updateSessionTabsOverflow();
+    });
+  }
 
   async function fetchSessions() {
     try {
@@ -647,7 +684,9 @@ const DenTerminal = (() => {
       if (!s.alive) tab.classList.add('dead');
 
       const label = document.createElement('span');
+      label.className = 'session-tab-label';
       label.textContent = s.name;
+      label.title = s.name;
       tab.appendChild(label);
 
       const closeBtn = document.createElement('button');
@@ -671,6 +710,8 @@ const DenTerminal = (() => {
       }
     }
 
+    scheduleSessionTabsLayout({ scrollActive: true });
+
     // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
   }
@@ -682,6 +723,9 @@ const DenTerminal = (() => {
     const newBtn = document.getElementById('session-new-btn');
 
     if (sessionTabsEl) {
+      sessionTabsEl.addEventListener('scroll', updateSessionTabsOverflow, { passive: true });
+      window.addEventListener('resize', () => scheduleSessionTabsLayout());
+
       // Event delegation for session tabs
       sessionTabsEl.addEventListener('click', async (e) => {
         const closeBtn = e.target.closest('.session-tab-close');
