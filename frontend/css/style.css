@@ -528,7 +528,6 @@ html, body {
   scrollbar-width: none;
   scroll-padding-inline: 12px;
   overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
 }
 .session-tabs::-webkit-scrollbar { display: none; }
@@ -572,8 +571,10 @@ html, body {
 
 .session-tab-label {
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
   max-width: 18ch;
+  min-width: 0;
 }
 
 .session-tab-close {

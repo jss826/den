@@ -593,6 +593,8 @@ const DenTerminal = (() => {
     sessionTabsEl.classList.toggle('overflow-right', maxScrollLeft - scrollLeft > 4);
   }
 
+  function onWindowResize() { scheduleSessionTabsLayout(); }
+
   function scheduleSessionTabsLayout(options = {}) {
     if (!sessionTabsEl) return;
     shouldScrollActiveSessionTab = shouldScrollActiveSessionTab || !!options.scrollActive;
@@ -710,7 +712,7 @@ const DenTerminal = (() => {
       }
     }
 
-    scheduleSessionTabsLayout({ scrollActive: true });
+    scheduleSessionTabsLayout();
 
     // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
@@ -724,7 +726,7 @@ const DenTerminal = (() => {
 
     if (sessionTabsEl) {
       sessionTabsEl.addEventListener('scroll', updateSessionTabsOverflow, { passive: true });
-      window.addEventListener('resize', () => scheduleSessionTabsLayout());
+      window.addEventListener('resize', onWindowResize);
 
       // Event delegation for session tabs
       sessionTabsEl.addEventListener('click', async (e) => {

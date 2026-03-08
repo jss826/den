@@ -154,7 +154,7 @@ const FloatTerminal = (() => {
 
   function flushFit({ force = false, refresh = false } = {}) {
     fitRafId = null;
-    if (!term || !fitAddon || !visible) return;
+    if (!term || !fitAddon || !visible) { fitRetryCount = 0; return; }
     const container = term.element?.parentElement;
     const width = container?.clientWidth ?? 0;
     const height = container?.clientHeight ?? 0;
