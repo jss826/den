@@ -172,21 +172,36 @@ const DenTerminal = (() => {
 
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
-      const mods = Keybar.getModifiers();
-      if (!mods.ctrl && !mods.alt && !mods.shift) return true;
       // ハードウェア修飾キー自体や単独の Meta は無視
       if (ev.key === 'Control' || ev.key === 'Alt' || ev.key === 'Shift' || ev.key === 'Meta') return true;
-      // OS 側の修飾が既に押されている場合はキーバー状態をリセットして通過
-      if (ev.ctrlKey || ev.altKey || ev.metaKey) {
-        Keybar.resetModifiers();
+
+      const keybarMods = Keybar.getModifiers();
+      // キーバー修飾 + ハードウェア修飾をマージ
+      const mergedMods = {
+        ctrl: keybarMods.ctrl || ev.ctrlKey,
+        alt: keybarMods.alt || ev.altKey,
+        shift: keybarMods.shift || ev.shiftKey,
+      };
+
+      // 修飾キーなし → xterm に委譲
+      if (!mergedMods.ctrl && !mergedMods.alt && !mergedMods.shift) return true;
+
+      // キーバー修飾が未使用 + 印字文字 → xterm のネイティブ処理に任せる
+      // （Ctrl+C, Alt+D 等は xterm が正しく処理する）
+      if (!keybarMods.ctrl && !keybarMods.alt && !keybarMods.shift && ev.key.length === 1) {
         return true;
       }
 
-      // キーバー修飾 + 物理キーの組み合わせを送信
+      // キーバー修飾が未使用 + Meta キー → ブラウザ/xterm に委譲（Cmd+C=コピー等）
+      if (!keybarMods.ctrl && !keybarMods.alt && !keybarMods.shift && ev.metaKey) {
+        return true;
+      }
+
+      // キーバー修飾 or ハードウェア修飾 + 特殊キーの組み合わせを送信
       const send = ev.key.length === 1 ? ev.key : PHYSICAL_KEY_MAP[ev.key];
       if (send) {
         ev.preventDefault(); // Prevent character insertion into xterm's textarea
-        Keybar.executeKey({ send });
+        Keybar.executeKey({ send }, mergedMods);
         // iPad fallback: soft keyboard may still insert the character via input event
         if (ev.key.length === 1) {
           _suppressLeakedChar = ev.key;

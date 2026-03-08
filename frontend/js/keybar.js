@@ -598,28 +598,31 @@ const Keybar = (() => {
     });
   }
 
-  /** 通常キー送信（修飾キー適用） */
-  function executeNormalKey(key) {
+  /** 通常キー送信（修飾キー適用）
+   *  @param {object} key - { send: string }
+   *  @param {object} [explicitMods] - 明示的な修飾状態。省略時は内部 modifiers を使用 */
+  function executeNormalKey(key, explicitMods) {
     let data = unescapeSend(key.send);
+    const mods = explicitMods || modifiers;
 
     // 修飾パラメータ計算 (xterm: 1=none, 2=Shift, 3=Alt, 5=Ctrl, etc.)
-    const modParam = (modifiers.shift ? 1 : 0)
-      + (modifiers.alt ? 2 : 0)
-      + (modifiers.ctrl ? 4 : 0);
+    const modParam = (mods.shift ? 1 : 0)
+      + (mods.alt ? 2 : 0)
+      + (mods.ctrl ? 4 : 0);
 
     if (modParam > 0 && data.length > 2 && data.startsWith('\x1b[')) {
       data = addCsiModifier(data, modParam + 1);
     } else {
-      if (modifiers.shift && data.length === 1) {
+      if (mods.shift && data.length === 1) {
         data = data.toUpperCase();
       }
-      if (modifiers.ctrl && data.length === 1) {
+      if (mods.ctrl && data.length === 1) {
         const code = data.toUpperCase().charCodeAt(0);
         if (code >= 0x40 && code <= 0x5f) {
           data = String.fromCharCode(code - 0x40);
         }
       }
-      if (modifiers.alt) {
+      if (mods.alt) {
         data = '\x1b' + data;
       }
     }
