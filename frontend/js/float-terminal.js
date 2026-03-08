@@ -146,21 +146,61 @@ const FloatTerminal = (() => {
 
   // --- Fit ---
   let fitRafId = null;
+  let fitRetryCount = 0;
   let resizeObserver = null;
+  let pendingFitOptions = { force: false, refresh: false };
+  let lastFitContainerWidth = 0;
+  let lastFitContainerHeight = 0;
 
-  function fitAndRefresh() {
-    if (!term || !fitAddon || !visible) return;
+  function flushFit({ force = false, refresh = false } = {}) {
     fitRafId = null;
+    if (!term || !fitAddon || !visible) return;
     const container = term.element?.parentElement;
-    if (container && container.clientWidth === 0) return;
+    const width = container?.clientWidth ?? 0;
+    const height = container?.clientHeight ?? 0;
+    if (container && (width === 0 || height === 0)) {
+      if (fitRetryCount < 10) {
+        fitRetryCount++;
+        scheduleFit({ force, refresh });
+      }
+      return;
+    }
+    fitRetryCount = 0;
+
+    const shouldFit = force || width !== lastFitContainerWidth || height !== lastFitContainerHeight;
+    if (!shouldFit) {
+      if (refresh && term.rows > 0) {
+        term.refresh(0, term.rows - 1);
+      }
+      sendResize();
+      return;
+    }
+
+    const prevCols = term.cols;
+    const prevRows = term.rows;
     fitAddon.fit();
-    term.refresh(0, term.rows - 1);
+    lastFitContainerWidth = width;
+    lastFitContainerHeight = height;
+
+    if (term.rows > 0 && (refresh || term.cols !== prevCols || term.rows !== prevRows)) {
+      term.refresh(0, term.rows - 1);
+    }
     sendResize();
   }
 
-  function scheduleFit() {
+  function fitAndRefresh() {
+    scheduleFit({ force: true, refresh: true });
+  }
+
+  function scheduleFit(options = {}) {
+    pendingFitOptions.force = pendingFitOptions.force || !!options.force;
+    pendingFitOptions.refresh = pendingFitOptions.refresh || !!options.refresh;
     if (fitRafId != null) return;
-    fitRafId = requestAnimationFrame(fitAndRefresh);
+    fitRafId = requestAnimationFrame(() => {
+      const currentOptions = pendingFitOptions;
+      pendingFitOptions = { force: false, refresh: false };
+      flushFit(currentOptions);
+    });
   }
 
   function cancelPendingFit() {
@@ -168,11 +208,13 @@ const FloatTerminal = (() => {
       cancelAnimationFrame(fitRafId);
       fitRafId = null;
     }
+    pendingFitOptions = { force: false, refresh: false };
   }
 
   function sendResize() {
     if (ws && ws.readyState === WebSocket.OPEN && term) {
       const { cols, rows } = term;
+      if (cols === 0 || rows === 0) return;
       if (cols === lastSentCols && rows === lastSentRows) return;
       lastSentCols = cols;
       lastSentRows = rows;

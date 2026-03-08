@@ -17,22 +17,62 @@ const DenTerminal = (() => {
     return d.length >= 6 && d.charCodeAt(0) === 0x1b && d.charCodeAt(1) === 0x5b && d.charCodeAt(2) === 0x4d;
   }
 
-  /** fit + refresh + resize 通知をまとめて実行 */
+  /** fit + refresh + resize 通知を 1 フレームに集約する */
   let fitRetryCount = 0;
-  function fitAndRefresh() {
+  let fitRafId = null;
+  let pendingFitOptions = { force: false, refresh: false };
+  let lastFitContainerWidth = 0;
+  let lastFitContainerHeight = 0;
+
+  function flushFit({ force = false, refresh = false } = {}) {
+    fitRafId = null;
     if (!term || !fitAddon) return;
     const container = term.element?.parentElement;
-    if (container && container.clientWidth === 0) {
+    const width = container?.clientWidth ?? 0;
+    const height = container?.clientHeight ?? 0;
+    if (container && (width === 0 || height === 0)) {
       if (fitRetryCount < 10) {
         fitRetryCount++;
-        requestAnimationFrame(() => fitAndRefresh());
+        scheduleFit({ force, refresh });
       }
       return;
     }
     fitRetryCount = 0;
+
+    const shouldFit = force || width !== lastFitContainerWidth || height !== lastFitContainerHeight;
+    if (!shouldFit) {
+      if (refresh && term.rows > 0) {
+        term.refresh(0, term.rows - 1);
+      }
+      sendResize();
+      return;
+    }
+
+    const prevCols = term.cols;
+    const prevRows = term.rows;
     fitAddon.fit();
-    term.refresh(0, term.rows - 1);
+    lastFitContainerWidth = width;
+    lastFitContainerHeight = height;
+
+    if (term.rows > 0 && (refresh || term.cols !== prevCols || term.rows !== prevRows)) {
+      term.refresh(0, term.rows - 1);
+    }
     sendResize();
+  }
+
+  function scheduleFit(options = {}) {
+    pendingFitOptions.force = pendingFitOptions.force || !!options.force;
+    pendingFitOptions.refresh = pendingFitOptions.refresh || !!options.refresh;
+    if (fitRafId != null) return;
+    fitRafId = requestAnimationFrame(() => {
+      const currentOptions = pendingFitOptions;
+      pendingFitOptions = { force: false, refresh: false };
+      flushFit(currentOptions);
+    });
+  }
+
+  function fitAndRefresh() {
+    scheduleFit({ force: true, refresh: true });
   }
 
   // Shared xterm.js theme (Tokyo Night)
@@ -109,16 +149,13 @@ const DenTerminal = (() => {
     term.onTitleChange((title) => { DenSettings.setOscTitle(title); });
 
     fitAndRefresh();
-    requestAnimationFrame(() => fitAndRefresh());
-    setTimeout(() => fitAndRefresh(), 300);
-    setTimeout(() => fitAndRefresh(), 1000);
 
     // フォント読み込み完了後に再 fit
     if (document.fonts?.ready) {
       document.fonts.ready.then(() => fitAndRefresh());
     }
     window.addEventListener('pageshow', () => fitAndRefresh());
-    const resizeObserver = new ResizeObserver(() => fitAndRefresh());
+    const resizeObserver = new ResizeObserver(() => scheduleFit());
     resizeObserver.observe(container);
 
     // キーバー修飾キーが ON のとき、物理キーと組み合わせて修飾付きシーケンスを送信
@@ -372,6 +409,7 @@ const DenTerminal = (() => {
   function sendResize() {
     if (ws && ws.readyState === WebSocket.OPEN && term) {
       const { cols, rows } = term;
+      if (cols === 0 || rows === 0) return;
       if (cols === lastSentCols && rows === lastSentRows) return;
       lastSentCols = cols;
       lastSentRows = rows;
