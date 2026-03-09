@@ -382,8 +382,13 @@ const DenSettings = (() => {
     const snippetAddForm = document.getElementById('snippet-add-form');
     if (snippetAddForm) snippetAddForm.hidden = true;
 
-    const verEl = document.getElementById('settings-version');
-    if (verEl && current.version) verEl.textContent = 'Den v' + current.version;
+    const verText = document.getElementById('settings-version-text');
+    if (verText && current.version) verText.textContent = 'Den v' + current.version;
+    // Reset update UI state
+    const updateStatus = document.getElementById('update-status');
+    const updateApplyBtn = document.getElementById('update-apply-btn');
+    if (updateStatus) { updateStatus.hidden = true; updateStatus.textContent = ''; }
+    if (updateApplyBtn) updateApplyBtn.hidden = true;
 
     modal.hidden = false;
   }
@@ -675,6 +680,73 @@ const DenSettings = (() => {
 
     if (addCancel) addCancel.addEventListener('click', () => {
       addForm.hidden = true;
+    });
+
+    // --- Update ---
+    const updateCheckBtn = document.getElementById('update-check-btn');
+    const updateApplyBtn = document.getElementById('update-apply-btn');
+    const updateStatus = document.getElementById('update-status');
+
+    if (updateCheckBtn) updateCheckBtn.addEventListener('click', async () => {
+      updateCheckBtn.disabled = true;
+      updateCheckBtn.textContent = 'Checking...';
+      updateStatus.hidden = true;
+      updateApplyBtn.hidden = true;
+      try {
+        const resp = await fetch('/api/system/version', { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const info = await resp.json();
+        if (info.update_available && info.latest) {
+          updateStatus.textContent = 'v' + info.latest + ' available';
+          updateStatus.hidden = false;
+          updateStatus.className = 'update-status update-available';
+          updateApplyBtn.hidden = false;
+        } else if (info.latest) {
+          updateStatus.textContent = 'Up to date';
+          updateStatus.hidden = false;
+          updateStatus.className = 'update-status update-current';
+        } else {
+          updateStatus.textContent = 'Could not check';
+          updateStatus.hidden = false;
+          updateStatus.className = 'update-status update-error';
+        }
+      } catch (e) {
+        updateStatus.textContent = 'Check failed';
+        updateStatus.hidden = false;
+        updateStatus.className = 'update-status update-error';
+        console.warn('Update check failed:', e);
+      } finally {
+        updateCheckBtn.disabled = false;
+        updateCheckBtn.textContent = 'Check for Updates';
+      }
+    });
+
+    if (updateApplyBtn) updateApplyBtn.addEventListener('click', async () => {
+      const ok = await Toast.confirm('Download and install update? Den will restart.');
+      if (!ok) return;
+      updateApplyBtn.disabled = true;
+      updateApplyBtn.textContent = 'Updating...';
+      updateStatus.textContent = 'Downloading...';
+      updateStatus.className = 'update-status';
+      try {
+        const resp = await fetch('/api/system/update', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${resp.status}`);
+        }
+        updateStatus.textContent = 'Restarting...';
+        // Server will restart; wait for reconnection
+        setTimeout(() => { location.reload(); }, 3000);
+      } catch (e) {
+        updateStatus.textContent = 'Update failed: ' + e.message;
+        updateStatus.className = 'update-status update-error';
+        updateApplyBtn.disabled = false;
+        updateApplyBtn.textContent = 'Update Now';
+        console.warn('Update failed:', e);
+      }
     });
 
     // --- Snippet editor ---

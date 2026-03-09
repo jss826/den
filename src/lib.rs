@@ -9,6 +9,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod store;
 pub mod store_api;
+pub mod update;
 pub mod ws;
 
 use axum::{
@@ -115,6 +116,9 @@ pub fn create_app_with_secret(
         .route("/api/sftp/download", get(sftp::api::download))
         .route("/api/sftp/upload", post(sftp::api::upload))
         .route("/api/sftp/search", get(sftp::api::search))
+        // System update API
+        .route("/api/system/version", get(update::get_version))
+        .route("/api/system/update", post(update::do_update))
         .route(
             "/api/sftp/known-hosts",
             get(sftp::api::list_known_hosts)

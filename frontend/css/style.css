@@ -1094,6 +1094,28 @@ html, body {
   color: var(--muted);
   font-size: 0.75rem;
   padding: 8px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.update-btn {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+}
+.update-status {
+  font-size: 0.75rem;
+}
+.update-available {
+  color: var(--accent);
+  font-weight: bold;
+}
+.update-current {
+  color: var(--success, #50fa7b);
+}
+.update-error {
+  color: var(--error, #ff5555);
 }
 
 .modal-actions {
