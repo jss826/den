@@ -636,13 +636,15 @@ const DenTerminal = (() => {
     return [];
   }
 
-  async function createSession(name) {
+  async function createSession(name, sshConfig) {
     try {
+      const body = { name };
+      if (sshConfig) body.ssh = sshConfig;
       const resp = await fetch('/api/terminal/sessions', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(body),
       });
       return resp.ok || resp.status === 201;
     } catch (_) {
@@ -838,23 +840,9 @@ const DenTerminal = (() => {
     }
 
     if (newBtn) {
-      newBtn.addEventListener('click', async () => {
-        const name = await Toast.prompt('Session name:');
-        if (!name || !name.trim()) return;
-        const trimmed = name.trim();
-        const validationError = validateSessionName(trimmed);
-        if (validationError) {
-          Toast.error(validationError);
-          return;
-        }
-        const ok = await createSession(trimmed);
-        if (!ok) {
-          Toast.error('Failed to create session');
-          return;
-        }
-        lastSessionsKey = ''; // Force refresh
-        await refreshSessionList();
-        switchSession(trimmed);
+      newBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showNewSessionMenu(newBtn);
       });
     }
 
@@ -870,6 +858,111 @@ const DenTerminal = (() => {
         refreshSessionList();
         sessionRefreshTimer = setInterval(refreshSessionList, 5000);
       }
+    });
+  }
+
+  /** Generate a unique session name from a base, appending -2, -3, etc. if needed. */
+  async function uniqueSessionName(base) {
+    const sessions = await fetchSessions();
+    const names = new Set(sessions.map(s => s.name));
+    if (!names.has(base)) return base;
+    for (let i = 2; i <= 100; i++) {
+      const candidate = `${base}-${i}`;
+      if (!names.has(candidate)) return candidate;
+    }
+    return `${base}-${Date.now()}`;
+  }
+
+  /** Show dropdown menu for new session creation (local + SSH bookmarks). */
+  function showNewSessionMenu(anchorEl) {
+    // Remove existing menu if any
+    const existing = document.getElementById('new-session-menu');
+    if (existing) { existing.remove(); return; }
+
+    const menu = document.createElement('div');
+    menu.id = 'new-session-menu';
+    menu.className = 'new-session-menu';
+
+    // Centralized cleanup: remove menu + all document listeners
+    let closeMenu;
+
+    // Local terminal option
+    const localItem = document.createElement('div');
+    localItem.className = 'new-session-menu-item';
+    localItem.textContent = 'Local Terminal';
+    localItem.addEventListener('click', async () => {
+      closeMenu();
+      const name = await Toast.prompt('Session name:');
+      if (!name || !name.trim()) return;
+      const trimmed = name.trim();
+      const validationError = validateSessionName(trimmed);
+      if (validationError) { Toast.error(validationError); return; }
+      const ok = await createSession(trimmed);
+      if (!ok) { Toast.error('Failed to create session'); return; }
+      lastSessionsKey = '';
+      await refreshSessionList();
+      switchSession(trimmed);
+    });
+    menu.appendChild(localItem);
+
+    // SSH bookmarks
+    const bookmarks = DenSettings.get('ssh_bookmarks') || [];
+    if (bookmarks.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      sep.textContent = 'SSH';
+      menu.appendChild(sep);
+
+      for (const b of bookmarks) {
+        const item = document.createElement('div');
+        item.className = 'new-session-menu-item';
+        item.textContent = b.label;
+        item.title = `${b.username}@${b.host}:${b.port || 22}`;
+        item.addEventListener('click', async () => {
+          closeMenu();
+          const base = `ssh-${b.label}`.replace(/[^a-zA-Z0-9-]/g, '-').replace(/-+/g, '-').substring(0, 60);
+          const sessionName = await uniqueSessionName(base);
+          const sshConfig = {
+            host: b.host,
+            port: b.port || 22,
+            username: b.username,
+            auth_type: b.auth_type || 'password',
+            key_path: b.key_path || null,
+            initial_dir: b.initial_dir || null,
+          };
+          const ok = await createSession(sessionName, sshConfig);
+          if (!ok) { Toast.error('Failed to create SSH session'); return; }
+          lastSessionsKey = '';
+          await refreshSessionList();
+          switchSession(sessionName);
+        });
+        menu.appendChild(item);
+      }
+    }
+
+    // Position menu above the button
+    const rect = anchorEl.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.left = rect.left + 'px';
+    menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    document.body.appendChild(menu);
+
+    const closeHandler = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchorEl) closeMenu();
+    };
+    const escHandler = (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); }
+    };
+    closeMenu = () => {
+      menu.remove();
+      document.removeEventListener('click', closeHandler, true);
+      document.removeEventListener('keydown', escHandler, true);
+    };
+
+    // Delay to avoid immediate close from the same click
+    requestAnimationFrame(() => {
+      document.addEventListener('click', closeHandler, true);
+      document.addEventListener('keydown', escHandler, true);
     });
   }
 

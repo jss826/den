@@ -13,7 +13,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::pty::registry::{ClientKind, RegistryError, SessionInfo};
+use crate::pty::registry::{ClientKind, RegistryError, SessionInfo, SshSessionConfig};
+use crate::store::SshAuthType;
 
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -185,18 +186,143 @@ pub async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<Sessi
     Json(sessions)
 }
 
-/// POST /api/terminal/sessions { "name": "..." }
+/// POST /api/terminal/sessions { "name": "...", "ssh": { ... } }
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {
     pub name: String,
+    pub ssh: Option<CreateSessionSsh>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateSessionSsh {
+    pub host: String,
+    pub port: Option<u16>,
+    pub username: String,
+    pub auth_type: SshAuthType,
+    pub key_path: Option<String>,
+    pub initial_dir: Option<String>,
+}
+
+/// Shell metacharacters that must not appear in SSH command arguments.
+fn contains_shell_meta(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&'
+                | '|'
+                | '$'
+                | '`'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '\''
+                | '"'
+                | '\\'
+                | '\n'
+                | '\r'
+                | '<'
+                | '>'
+                | '!'
+                | '#'
+                | '~'
+                | '*'
+                | '?'
+                | '['
+                | ']'
+        )
+    })
+}
+
+/// Validate SSH config fields for safe shell injection.
+fn validate_ssh_fields(ssh: &SshSessionConfig) -> Result<(), &'static str> {
+    if contains_shell_meta(&ssh.host) || ssh.host.is_empty() {
+        return Err("invalid ssh host");
+    }
+    if contains_shell_meta(&ssh.username) || ssh.username.is_empty() {
+        return Err("invalid ssh username");
+    }
+    if ssh.key_path.as_deref().is_some_and(contains_shell_meta) {
+        return Err("invalid ssh key_path");
+    }
+    if ssh.initial_dir.as_deref().is_some_and(|d| {
+        d.chars()
+            .any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '\n' | '\r'))
+    }) {
+        return Err("invalid ssh initial_dir");
+    }
+    Ok(())
+}
+
+/// Build the SSH command to inject into the PTY.
+/// All fields must be pre-validated via `validate_ssh_fields`.
+fn build_ssh_command(ssh: &SshSessionConfig) -> String {
+    let mut cmd = String::from("ssh");
+    if ssh.port != 22 {
+        cmd.push_str(&format!(" -p {}", ssh.port));
+    }
+    if let Some(ref key_path) = ssh.key_path {
+        cmd.push_str(&format!(" -i {}", key_path));
+    }
+    cmd.push_str(&format!(" {}@{}", ssh.username, ssh.host));
+    cmd
 }
 
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
-    match state.registry.create(&req.name, 80, 24).await {
-        Ok(_session) => StatusCode::CREATED.into_response(),
+    let ssh_config = req.ssh.map(|s| SshSessionConfig {
+        host: s.host,
+        port: s.port.unwrap_or(22),
+        username: s.username,
+        auth_type: s.auth_type,
+        key_path: s.key_path,
+        initial_dir: s.initial_dir,
+    });
+
+    // Validate SSH fields before creating session
+    if let Some(ref ssh) = ssh_config
+        && let Err(msg) = validate_ssh_fields(ssh)
+    {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
+
+    let result = state
+        .registry
+        .create_with_ssh(&req.name, 80, 24, ssh_config.clone())
+        .await;
+
+    match result {
+        Ok((session, _rx)) => {
+            if let Some(ref ssh) = ssh_config {
+                let ssh_cmd = build_ssh_command(ssh);
+                let inject = format!("{}\r", ssh_cmd);
+                if let Err(e) = session.write_input(inject.as_bytes()).await {
+                    tracing::warn!("Failed to inject SSH command: {e}");
+                }
+
+                // For key/agent auth: inject cd after delay.
+                // For password auth: skip cd injection (user must type password first;
+                // a blind delay would inject cd into the password prompt).
+                if ssh.auth_type != SshAuthType::Password
+                    && let Some(ref dir) = ssh.initial_dir
+                {
+                    let dir = dir.clone();
+                    let session = Arc::clone(&session);
+                    tokio::spawn(async move {
+                        // For key/agent auth: inject cd after delay.
+                        // For password auth: skip (user must type password first).
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        let cd_cmd = format!("cd '{}'\r", dir);
+                        if let Err(e) = session.write_input(cd_cmd.as_bytes()).await {
+                            tracing::warn!("Failed to inject cd command: {e}");
+                        }
+                    });
+                }
+            }
+            StatusCode::CREATED.into_response()
+        }
         Err(RegistryError::LimitExceeded) => {
             (StatusCode::TOO_MANY_REQUESTS, "Session limit exceeded").into_response()
         }

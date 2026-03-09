@@ -107,6 +107,13 @@ pub async fn put_settings(
                 )
                     .into_response();
             }
+            if b.initial_dir.as_deref().is_some_and(|d| d.len() > 4096) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "bookmark initial_dir too long",
+                )
+                    .into_response();
+            }
         }
     }
     // sleep_prevention_mode: enum 化により serde が不正値を拒否（422 を返す）

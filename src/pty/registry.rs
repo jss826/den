@@ -5,12 +5,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use portable_pty::PtySize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::manager::PtyManager;
 use super::ring_buffer::RingBuffer;
-use crate::store::SleepPreventionMode;
+use crate::store::{SleepPreventionMode, SshAuthType};
 
 /// SessionRegistry の操作エラー
 #[derive(Debug)]
@@ -224,6 +224,8 @@ pub struct SharedSession {
     pub inner: Mutex<SessionInner>,
     /// ユーザー操作タイムスタンプ（Registry と共有、AtomicU64 で lock-free 更新）
     last_activity: Arc<AtomicU64>,
+    /// SSH connection config (for port forwarding in Phase 2)
+    ssh_config: Option<SshSessionConfig>,
 }
 
 pub struct SessionInner {
@@ -270,6 +272,19 @@ pub enum ClientKind {
     Ssh,
 }
 
+/// SSH session connection config (stored per session for port forwarding in Phase 2)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshSessionConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_type: SshAuthType,
+    #[serde(default)]
+    pub key_path: Option<String>,
+    #[serde(default)]
+    pub initial_dir: Option<String>,
+}
+
 /// UI/API 向けセッション情報
 #[derive(Serialize)]
 pub struct SessionInfo {
@@ -277,6 +292,8 @@ pub struct SessionInfo {
     pub created_at: DateTime<Utc>,
     pub alive: bool,
     pub client_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_host: Option<String>,
 }
 
 /// セッション名バリデーション: 英数字 + ハイフンのみ、最大 64 文字
@@ -382,6 +399,7 @@ impl SessionRegistry {
     ///
     /// 戻り値の `broadcast::Receiver` は read_task 開始前に作成されるため、
     /// ConPTY の初期出力（DSR 等）を確実に捕捉する。
+    #[allow(clippy::too_many_arguments)]
     fn setup_pty_session(
         name: &str,
         pty_reader: Box<dyn std::io::Read + Send>,
@@ -390,6 +408,7 @@ impl SessionRegistry {
         child: Box<dyn portable_pty::Child + Send + Sync>,
         #[cfg(windows)] job: Option<super::job::PtyJobObject>,
         last_activity: Arc<AtomicU64>,
+        ssh_config: Option<SshSessionConfig>,
     ) -> (
         Arc<SharedSession>,
         broadcast::Receiver<Vec<u8>>,
@@ -420,6 +439,7 @@ impl SessionRegistry {
             replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
             output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
             last_activity,
+            ssh_config,
             inner: Mutex::new(SessionInner {
                 pty_writer,
                 resize_tx: Some(resize_tx),
@@ -513,6 +533,17 @@ impl SessionRegistry {
         cols: u16,
         rows: u16,
     ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
+        self.create_with_ssh(name, cols, rows, None).await
+    }
+
+    /// Create a session with optional SSH config for auto-connect
+    pub async fn create_with_ssh(
+        &self,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        ssh_config: Option<SshSessionConfig>,
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
         if !is_valid_session_name(name) {
             return Err(RegistryError::InvalidName(name.to_string()));
         }
@@ -547,6 +578,7 @@ impl SessionRegistry {
             #[cfg(windows)]
             pty.job,
             Arc::clone(&self.last_activity),
+            ssh_config,
         );
         session.inner.lock().await.monitor_handle = Some(monitor_handle);
 
@@ -788,6 +820,7 @@ impl SessionRegistry {
                 created_at: session.created_at,
                 alive: session.is_alive(),
                 client_count: inner.clients.len(),
+                ssh_host: session.ssh_config.as_ref().map(|c| c.host.clone()),
             });
         }
 
@@ -987,6 +1020,11 @@ impl SessionRegistry {
 }
 
 impl SharedSession {
+    /// SSH connection config (if this is an SSH bookmark session)
+    pub fn ssh_config(&self) -> Option<&SshSessionConfig> {
+        self.ssh_config.as_ref()
+    }
+
     /// PTY への入力書き込み
     pub async fn write_input(&self, data: &[u8]) -> Result<(), String> {
         // 楽観的 alive チェック（早期リターン用）: ロック取得までの間に死亡した場合は

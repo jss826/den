@@ -77,6 +77,8 @@ pub struct SshBookmark {
     pub auth_type: SshAuthType,
     #[serde(default)]
     pub key_path: Option<String>,
+    #[serde(default)]
+    pub initial_dir: Option<String>,
 }
 
 fn default_ssh_port() -> u16 {

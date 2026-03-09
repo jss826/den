@@ -261,6 +261,7 @@ const DenFiler = (() => {
     document.getElementById('sftp-auth-type').value = b.auth_type || 'password';
     document.getElementById('sftp-password').value = '';
     document.getElementById('sftp-key-path').value = b.key_path || '';
+    document.getElementById('sftp-initial-dir').value = b.initial_dir || '';
     updateAuthFields();
   }
 
@@ -292,6 +293,7 @@ const DenFiler = (() => {
       username,
       auth_type: document.getElementById('sftp-auth-type').value,
       key_path: document.getElementById('sftp-key-path').value.trim() || null,
+      initial_dir: document.getElementById('sftp-initial-dir').value.trim() || null,
     };
 
     const bookmarks = (DenSettings.get('ssh_bookmarks') || []).slice();
