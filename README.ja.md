@@ -10,6 +10,7 @@
 - **Web ターミナル** — xterm.js v6 + タッチ対応キーバー (Shift, Ctrl, F1–F12 等)
 - **フローティングターミナル** — ドラッグ＆リサイズ可能なオーバーレイターミナル (Ctrl+\` またはタブバーボタン)
 - **ファイルマネージャ** — ツリー表示、CodeMirror 6 エディタ、アップロード/ダウンロード、検索、画像/Markdown プレビュー
+- **SSH ブックマークセッション** — 保存済みブックマークからワンクリックで SSH ターミナル作成＋自動接続
 - **SFTP リモートファイル** — russh-sftp 経由でリモート SSH ホストに接続し、ファイルを閲覧・編集
 - **SSH サーバー内蔵** — russh ベース、パスワード＋公開鍵認証、セッション attach/create
 - **12 テーマ** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
@@ -20,24 +21,34 @@
 - **アクセシビリティ** — ARIA 属性、focus-visible、キーボードナビゲーション、prefers-reduced-motion
 - **モバイル対応** — サイドバートグル、iPad キーボードレイアウト、HTTP LAN 用クリップボードフォールバック
 
-## クイックスタート
+## インストール
 
-### バイナリ単体で起動
+単一バイナリ、依存関係なし。
 
-`den.exe` は単一の自己完結型バイナリです — 外部ファイル不要。
-同じディレクトリに `.env` ファイルを置くだけで設定できます:
+### Windows
 
+```powershell
+# ダウンロード
+curl -Lo den.zip https://github.com/jss826/den/releases/latest/download/den-x86_64-pc-windows-msvc.zip
+Expand-Archive den.zip -DestinationPath . ; Remove-Item den.zip
+
+# 起動
+$env:DEN_PASSWORD="your_password"
+.\den.exe
 ```
-DEN_PASSWORD=your_password
-```
 
-起動:
+### Linux
 
-```sh
-./den
+```bash
+curl -Lo den.tar.gz https://github.com/jss826/den/releases/latest/download/den-x86_64-unknown-linux-gnu.tar.gz
+tar xzf den.tar.gz && rm den.tar.gz && chmod +x den
+
+DEN_PASSWORD=your_password ./den
 ```
 
 ブラウザで `http://localhost:3939` を開いてください。
+
+> **Tip:** 同じディレクトリに `.env` ファイルを作成し `DEN_PASSWORD=your_password` を書いておくと、毎回入力不要になります。
 
 ### 開発（just 使用）
 

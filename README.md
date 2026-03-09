@@ -10,6 +10,7 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **Web Terminal** — xterm.js v6 with touch-friendly keybar (Shift, Ctrl, F1–F12, etc.)
 - **Floating Terminal** — draggable/resizable overlay terminal (Ctrl+\` or tab bar button)
 - **File Manager** — tree view, CodeMirror 6 editor, upload/download, search, image/Markdown preview
+- **SSH Bookmark Sessions** — one-click SSH terminal creation from saved bookmarks with auto-connect
 - **SFTP Remote Files** — connect to remote SSH hosts and browse/edit files via russh-sftp
 - **Built-in SSH Server** — russh-based, password + public key auth, session attach/create
 - **12 Themes** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
@@ -20,24 +21,34 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **Accessibility** — ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion
 - **Mobile Support** — sidebar toggle, iPad keyboard layout, clipboard fallback for HTTP LAN access
 
-## Quick Start
+## Install
 
-### Standalone Binary
+Single binary, no dependencies.
 
-`den.exe` is a single self-contained binary — no external files needed.
-Place a `.env` file in the same directory to configure it:
+### Windows
 
+```powershell
+# Download
+curl -Lo den.zip https://github.com/jss826/den/releases/latest/download/den-x86_64-pc-windows-msvc.zip
+Expand-Archive den.zip -DestinationPath . ; Remove-Item den.zip
+
+# Run
+$env:DEN_PASSWORD="your_password"
+.\den.exe
 ```
-DEN_PASSWORD=your_password
-```
 
-Then just run:
+### Linux
 
-```sh
-./den
+```bash
+curl -Lo den.tar.gz https://github.com/jss826/den/releases/latest/download/den-x86_64-unknown-linux-gnu.tar.gz
+tar xzf den.tar.gz && rm den.tar.gz && chmod +x den
+
+DEN_PASSWORD=your_password ./den
 ```
 
 Open `http://localhost:3939` in your browser.
+
+> **Tip:** Set `DEN_PASSWORD` in a `.env` file in the same directory to avoid typing it every time.
 
 ### Development (with just)
 
