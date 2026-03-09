@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: den.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: den
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.artifact }}" -DestinationPath "den-${{ github.ref_name }}-${{ matrix.target }}.zip"
+
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf "../../../den-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" ${{ matrix.artifact }}
+
+      - name: Upload to release
+        run: gh release upload ${{ github.ref_name }} den-${{ github.ref_name }}-${{ matrix.target }}.* --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
