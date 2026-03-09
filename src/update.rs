@@ -1,8 +1,11 @@
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::AppState;
+
+static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 const GITHUB_REPO: &str = "jss826/den";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -97,6 +100,45 @@ pub async fn get_version(State(_state): State<Arc<AppState>>) -> impl IntoRespon
 
 /// POST /api/system/update — download, replace binary, restart
 pub async fn do_update(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Prevent concurrent updates
+    if UPDATE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "update already in progress" })),
+        )
+            .into_response();
+    }
+
+    // Check if update is actually available before downloading
+    let check = tokio::task::spawn_blocking(fetch_latest_version).await;
+    match &check {
+        Ok(Ok(ver)) if !is_newer(CURRENT_VERSION, ver) => {
+            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": "already up to date" })),
+            )
+                .into_response();
+        }
+        Ok(Err(e)) => {
+            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{e}") })),
+            )
+                .into_response();
+        }
+        _ => {}
+    }
+
     let result = tokio::task::spawn_blocking(perform_update).await;
 
     match result {
@@ -109,6 +151,7 @@ pub async fn do_update(State(_state): State<Arc<AppState>>) -> impl IntoResponse
             Json(serde_json::json!({ "success": true })).into_response()
         }
         Ok(Err(e)) => {
+            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
             tracing::error!("Update failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -117,6 +160,7 @@ pub async fn do_update(State(_state): State<Arc<AppState>>) -> impl IntoResponse
                 .into_response()
         }
         Err(e) => {
+            UPDATE_IN_PROGRESS.store(false, Ordering::SeqCst);
             tracing::error!("Update task panicked: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
