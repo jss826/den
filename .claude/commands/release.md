@@ -5,13 +5,13 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
 バージョンタグを付けて GitHub Release を作成する。
+バイナリビルドは CI（`.github/workflows/release.yml`）が自動で行う。
 
 ## Phase 1: 準備
 
 1. `git status` で未コミットの変更がないか確認（あればユーザーに報告して停止）
-2. タグ確認（ローカル＋リモート両方）:
-   - `git fetch --tags` でリモートタグを同期
-   - `git tag -l --sort=-v:refname` で一覧表示
+2. タグ確認:
+   - `git tag -l --sort=-v:refname` でローカルタグ一覧
 3. 既存リリース確認: `gh release list`
 4. バージョン番号を決定:
    - 引数ありならそれを使用（`v` prefix 付与: `0.2.0` → `v0.2.0`）
@@ -28,15 +28,11 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 1. `Cargo.toml` の `version` フィールドを新バージョン番号に更新（`v` prefix なし）
 2. `cargo generate-lockfile` で Cargo.lock を更新（Cargo.toml の version 変更を反映）
 3. バージョン更新をコミット＆プッシュ: `git add Cargo.toml Cargo.lock && git commit -m "chore: bump version to <version>" && git push`
-4. タグを作成してプッシュ: `git tag <version> && git push origin <version>`
-5. `gh release create <version> --title "<version>" --notes "<リリースノート>"` で GitHub Release を作成
-6. リリースバイナリを添付:
-   - `cargo build --release` で Windows exe をビルド
-   - `Compress-Archive` で zip 化: `den-<version>-x86_64-pc-windows-msvc.zip`（中身は `den.exe`）
-   - `gh release upload <version> <zipファイル>` でアップロード
-   - ローカルの zip ファイルを削除
-7. `git fetch --tags` でリモートタグをローカルに同期
-8. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + 添付バイナリ）
+4. `gh release create <version> --title "<version>" --notes "<リリースノート>"` で GitHub Release を作成（タグも自動作成される）
+5. CI がトリガーされたことを確認: `gh run list --limit 1`
+6. CI 完了を待つ: `gh run watch <run_id>`
+7. リリースにバイナリが添付されたことを確認: `gh release view <version>`
+8. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + CI ステータス）
 
 ## ルール
 
@@ -44,11 +40,11 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 - 既存タグと重複する場合はエラーで止まる
 - リリースノートは英語で書く (Categories: Features / Fixes / Other)
 - `gh` コマンド失敗時はエラー内容を報告して止まる
+- バイナリビルドはローカルで行わない（CI に任せる）
 
 ## 完了条件
 
 - [ ] Cargo.toml の version が更新・コミットされている
 - [ ] GitHub Release が作成された
-- [ ] リリースバイナリ（zip）が添付されている
-- [ ] ローカルタグがリモートと同期されている
+- [ ] CI が成功し、Windows + Linux バイナリが添付されている
 - [ ] リリースURLが報告された
