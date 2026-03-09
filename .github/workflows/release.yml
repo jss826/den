@@ -35,19 +35,15 @@ jobs:
         shell: pwsh
         run: |
           $bin = "target/${{ matrix.target }}/release/${{ matrix.artifact }}"
-          Compress-Archive -Path $bin -DestinationPath "den-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          Copy-Item "den-${{ github.ref_name }}-${{ matrix.target }}.zip" "den-${{ matrix.target }}.zip"
+          Compress-Archive -Path $bin -DestinationPath "den-${{ matrix.target }}.zip"
 
       - name: Package (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf "../../../den-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" ${{ matrix.artifact }}
-          cp "../../../den-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" "../../../den-${{ matrix.target }}.tar.gz"
+          tar czf "../../../den-${{ matrix.target }}.tar.gz" ${{ matrix.artifact }}
 
       - name: Upload to release
-        run: |
-          gh release upload ${{ github.ref_name }} den-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.ext }} --clobber
-          gh release upload ${{ github.ref_name }} den-${{ matrix.target }}.${{ matrix.ext }} --clobber
+        run: gh release upload ${{ github.ref_name }} den-${{ matrix.target }}.${{ matrix.ext }} --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
