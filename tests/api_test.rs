@@ -1840,3 +1840,104 @@ async fn peers_full_pairing_e2e() {
     assert_eq!(a_token.len(), 64);
     assert!(a_token.chars().all(|c| c.is_ascii_hexdigit()));
 }
+
+// --- Peer Terminal Proxy API ---
+
+#[tokio::test]
+async fn proxy_list_sessions_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/unknown/terminal/sessions")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_list_sessions_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/some-peer/terminal/sessions")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn proxy_create_session_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/unknown/terminal/sessions")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"name":"test"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_rename_session_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/peers/unknown/terminal/sessions/test")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"name":"new-name"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_delete_session_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/peers/unknown/terminal/sessions/test")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_ws_relay_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/some-peer/ws?session=test")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn proxy_list_sessions_with_registered_peer_returns_bad_gateway() {
+    // When the peer exists but is unreachable, proxy returns 502
+    let (app, state) = test_app_with_state();
+
+    // Register a fake peer with unreachable URL
+    let peer = den::store::PeerConfig {
+        name: "fake-peer".to_string(),
+        url: "http://127.0.0.1:1".to_string(), // unreachable port
+        token: "fake-token".to_string(),
+    };
+    let mut settings = state.store.load_settings();
+    settings.peers = Some(vec![peer]);
+    state.store.save_settings(&settings).unwrap();
+
+    let req = Request::builder()
+        .uri("/api/peers/fake-peer/terminal/sessions")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}

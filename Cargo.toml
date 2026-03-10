@@ -40,6 +40,7 @@ anyhow = "1"
 dotenvy = "0.15"
 gethostname = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio-tungstenite = "0.26"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

@@ -4,7 +4,13 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
+  let currentPeer = null; // peer name (null for local sessions)
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
+
+  // Peer color palette for remote session tab indicators
+  const PEER_COLORS = ['#7aa2f7','#9ece6a','#e0af68','#bb9af7','#7dcfff','#f7768e','#ff9e64','#73daca'];
+  let peerColorMap = {}; // peer name → color
+  let cachedPeers = []; // last fetched peer list
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
   let lastSentCols = 0;
   let lastSentRows = 0;
@@ -245,8 +251,9 @@ const DenTerminal = (() => {
     return term;
   }
 
-  function connect(sessionName) {
+  function connect(sessionName, peerName) {
     currentSession = sessionName || null;
+    currentPeer = peerName || null;
     if (!currentSession) {
       disconnect();
       showEmptyState();
@@ -254,7 +261,8 @@ const DenTerminal = (() => {
       return;
     }
     hideEmptyState();
-    DenSettings.setTitleTab('terminal', currentSession);
+    const displayName = currentPeer ? `${currentPeer}:${currentSession}` : currentSession;
+    DenSettings.setTitleTab('terminal', displayName);
     doConnect();
   }
 
@@ -278,6 +286,7 @@ const DenTerminal = (() => {
   /** Transition to sessionless (null) state */
   function enterNullState() {
     currentSession = null;
+    currentPeer = null;
     DenSettings.setOscTitle('');
     DenSettings.setTitleTab('terminal', null);
     disconnect();
@@ -305,8 +314,11 @@ const DenTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // 認証は Cookie（HttpOnly）で自動送信 — URL にトークンを含めない
-    const url = `${proto}//${location.host}/api/ws?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
+    // Route WS through peer proxy if remote session
+    const wsPath = currentPeer
+      ? `/api/peers/${encodeURIComponent(currentPeer)}/ws`
+      : '/api/ws';
+    const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
     let retries = 0;
 
@@ -410,16 +422,19 @@ const DenTerminal = (() => {
   }
 
   /** セッションを切り替え */
-  function switchSession(name) {
-    if (!name || name === currentSession) return;
+  function switchSession(name, peer) {
+    peer = peer || null;
+    if (!name || (name === currentSession && peer === currentPeer)) return;
     currentSession = name;
+    currentPeer = peer;
     hideEmptyState();
     DenSettings.setOscTitle('');
-    DenSettings.setTitleTab('terminal', name);
+    const displayName = peer ? `${peer}:${name}` : name;
+    DenSettings.setTitleTab('terminal', displayName);
     scheduleSessionTabsLayout({ scrollActive: true });
     term.reset();
     doConnect();
-    window.DenApp?.updateSessionHash(name);
+    window.DenApp?.updateSessionHash(peer ? `${peer}:${name}` : name);
   }
 
   function sendResize() {
@@ -593,7 +608,8 @@ const DenTerminal = (() => {
   function syncSessionTabSelection() {
     if (!sessionTabsEl) return;
     for (const tab of sessionTabsEl.querySelectorAll('.session-tab')) {
-      const isActive = tab.dataset.session === currentSession;
+      const isActive = tab.dataset.session === currentSession
+        && (tab.dataset.peer || null) === currentPeer;
       tab.classList.toggle('active', isActive);
       tab.setAttribute('tabindex', isActive ? '0' : '-1');
       tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
@@ -636,11 +652,53 @@ const DenTerminal = (() => {
     return [];
   }
 
-  async function createSession(name, sshConfig) {
+  async function fetchPeers() {
+    try {
+      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
+      if (resp.ok) return await resp.json();
+    } catch (_) { /* ignore */ }
+    return [];
+  }
+
+  /** Fetch sessions from local + all connected peers */
+  async function fetchAllSessions() {
+    const [local, peers] = await Promise.all([fetchSessions(), fetchPeers()]);
+    cachedPeers = peers;
+
+    // Update peer color map
+    const connected = peers.filter(p => p.status === 'connected');
+    peerColorMap = {};
+    connected.forEach((p, i) => { peerColorMap[p.name] = PEER_COLORS[i % PEER_COLORS.length]; });
+
+    // Mark local sessions
+    const all = local.map(s => ({ ...s, peer: null }));
+
+    // Fetch remote sessions in parallel
+    const remotes = await Promise.all(connected.map(async (p) => {
+      try {
+        const r = await fetch(`/api/peers/${encodeURIComponent(p.name)}/terminal/sessions`, {
+          credentials: 'same-origin',
+        });
+        if (!r.ok) return [];
+        return (await r.json()).map(s => ({ ...s, peer: p.name }));
+      } catch { return []; }
+    }));
+    for (const rs of remotes) all.push(...rs);
+    return all;
+  }
+
+  /** Get API base path for session operations */
+  function sessionApiBase(peer) {
+    if (!peer) return '';
+    return `/api/peers/${encodeURIComponent(peer)}`;
+  }
+
+  async function createSession(name, sshConfig, peer) {
     try {
       const body = { name };
       if (sshConfig) body.ssh = sshConfig;
-      const resp = await fetch('/api/terminal/sessions', {
+      const base = sessionApiBase(peer);
+      const resp = await fetch(`${base}/api/terminal/sessions`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -652,9 +710,10 @@ const DenTerminal = (() => {
     }
   }
 
-  async function renameSession(oldName, newName) {
+  async function renameSession(oldName, newName, peer) {
     try {
-      const resp = await fetch(`/api/terminal/sessions/${encodeURIComponent(oldName)}`, {
+      const base = sessionApiBase(peer);
+      const resp = await fetch(`${base}/api/terminal/sessions/${encodeURIComponent(oldName)}`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -666,9 +725,10 @@ const DenTerminal = (() => {
     }
   }
 
-  async function destroySession(name) {
+  async function destroySession(name, peer) {
     try {
-      const resp = await fetch(`/api/terminal/sessions/${encodeURIComponent(name)}`, {
+      const base = sessionApiBase(peer);
+      const resp = await fetch(`${base}/api/terminal/sessions/${encodeURIComponent(name)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -678,13 +738,18 @@ const DenTerminal = (() => {
     }
   }
 
+  /** Check if a session matches the current selection */
+  function isCurrentSession(s) {
+    return s.name === currentSession && (s.peer || null) === currentPeer;
+  }
+
   async function refreshSessionList() {
     if (!sessionTabsEl) return;
 
-    const sessions = await fetchSessions();
+    const sessions = await fetchAllSessions();
 
     // F004: Skip DOM rebuild when sessions haven't changed
-    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession;
+    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession + '|' + currentPeer;
     if (sessionsKey === lastSessionsKey) return;
     lastSessionsKey = sessionsKey;
 
@@ -694,40 +759,50 @@ const DenTerminal = (() => {
     if (sessions.length === 0) {
       if (currentSession !== null) enterNullState();
     } else if (!currentSession) {
-      // Recovery: sessions appeared while in empty state (e.g. startup fetch failed, or external creation)
+      // Recovery: sessions appeared while in empty state
       const alive = sessions.filter(s => s.alive);
-      const target = alive.length > 0 ? alive[0].name : sessions[0].name;
-      switchSession(target);
-    } else if (currentSession && !sessions.find(s => s.name === currentSession)) {
+      const target = alive.length > 0 ? alive[0] : sessions[0];
+      switchSession(target.name, target.peer);
+    } else if (currentSession && !sessions.find(s => isCurrentSession(s))) {
       // Current session no longer exists: switch to first alive session
       const alive = sessions.filter(s => s.alive);
-      const target = alive.length > 0 ? alive[0].name : sessions[0].name;
-      switchSession(target);
+      const target = alive.length > 0 ? alive[0] : sessions[0];
+      switchSession(target.name, target.peer);
     }
 
     for (const s of sessions) {
       const tab = document.createElement('div');
       tab.className = 'session-tab';
       tab.dataset.session = s.name;
+      tab.dataset.peer = s.peer || '';
       tab.setAttribute('role', 'tab');
-      // F001: Keyboard-accessible tabs (roving tabindex)
-      tab.setAttribute('tabindex', s.name === currentSession ? '0' : '-1');
-      tab.setAttribute('aria-selected', s.name === currentSession ? 'true' : 'false');
-      if (s.name === currentSession) tab.classList.add('active');
+      const isActive = isCurrentSession(s);
+      tab.setAttribute('tabindex', isActive ? '0' : '-1');
+      tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      if (isActive) tab.classList.add('active');
       if (!s.alive) tab.classList.add('dead');
+
+      // Peer color indicator
+      if (s.peer && peerColorMap[s.peer]) {
+        tab.classList.add('peer-session');
+        tab.style.setProperty('--peer-color', peerColorMap[s.peer]);
+      }
 
       const label = document.createElement('span');
       label.className = 'session-tab-label';
-      label.textContent = s.name;
-      label.title = s.name;
+      const displayName = s.peer ? `${s.peer}:${s.name}` : s.name;
+      label.textContent = displayName;
+      label.title = s.peer
+        ? `${s.peer} — session: ${s.name}`
+        : s.name;
       tab.appendChild(label);
 
       const closeBtn = document.createElement('button');
       closeBtn.className = 'session-tab-close';
-      closeBtn.type = 'button'; // F023
+      closeBtn.type = 'button';
       closeBtn.setAttribute('tabindex', '-1');
       closeBtn.textContent = '\u00d7';
-      closeBtn.setAttribute('aria-label', `Kill session ${s.name}`);
+      closeBtn.setAttribute('aria-label', `Kill session ${displayName}`);
       tab.appendChild(closeBtn);
 
       sessionTabsEl.appendChild(tab);
@@ -735,7 +810,7 @@ const DenTerminal = (() => {
 
     // F015: Null-safe clientsSpan access
     if (sessionClientsEl) {
-      const current = sessions.find(s => s.name === currentSession);
+      const current = sessions.find(s => isCurrentSession(s));
       if (current) {
         sessionClientsEl.textContent = `${current.client_count} client${current.client_count !== 1 ? 's' : ''}`;
       } else {
@@ -766,14 +841,15 @@ const DenTerminal = (() => {
           const tab = closeBtn.closest('.session-tab');
           if (!tab) return; // F008: null guard
           const name = tab.dataset.session;
-          if (!(await Toast.confirm(`Kill session "${name}"?`))) return;
-          // F003: Check destroySession result before changing state
-          const ok = await destroySession(name);
+          const peer = tab.dataset.peer || null;
+          const displayName = peer ? `${peer}:${name}` : name;
+          if (!(await Toast.confirm(`Kill session "${displayName}"?`))) return;
+          const ok = await destroySession(name, peer);
           if (!ok) {
             Toast.error('Failed to kill session');
             return;
           }
-          if (name === currentSession) {
+          if (name === currentSession && peer === currentPeer) {
             enterNullState();
           }
           lastSessionsKey = ''; // Force refresh
@@ -781,7 +857,7 @@ const DenTerminal = (() => {
           return;
         }
         const tab = e.target.closest('.session-tab');
-        if (tab) switchSession(tab.dataset.session);
+        if (tab) switchSession(tab.dataset.session, tab.dataset.peer || null);
       });
 
       // Rename session on double-click
@@ -789,6 +865,7 @@ const DenTerminal = (() => {
         const tab = e.target.closest('.session-tab');
         if (!tab || e.target.closest('.session-tab-close')) return;
         const oldName = tab.dataset.session;
+        const peer = tab.dataset.peer || null;
         const newName = await Toast.prompt('Rename session:', oldName);
         if (!newName || !newName.trim() || newName.trim() === oldName) return;
         const trimmed = newName.trim();
@@ -797,14 +874,15 @@ const DenTerminal = (() => {
           Toast.error(validationError);
           return;
         }
-        const ok = await renameSession(oldName, trimmed);
+        const ok = await renameSession(oldName, trimmed, peer);
         if (!ok) {
           Toast.error('Failed to rename session');
           return;
         }
-        if (oldName === currentSession) {
+        if (oldName === currentSession && peer === currentPeer) {
           currentSession = trimmed;
-          window.DenApp?.updateSessionHash(trimmed);
+          const hash = peer ? `${peer}:${trimmed}` : trimmed;
+          window.DenApp?.updateSessionHash(hash);
         }
         lastSessionsKey = '';
         await refreshSessionList();
@@ -825,7 +903,7 @@ const DenTerminal = (() => {
           target = tabs[(idx - 1 + tabs.length) % tabs.length];
         } else if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          switchSession(tab.dataset.session);
+          switchSession(tab.dataset.session, tab.dataset.peer || null);
           return;
         } else {
           return;
@@ -905,6 +983,39 @@ const DenTerminal = (() => {
     });
     menu.appendChild(localItem);
 
+    // Connected peers
+    const connectedPeers = cachedPeers.filter(p => p.status === 'connected');
+    if (connectedPeers.length > 0) {
+      for (const p of connectedPeers) {
+        const sep = document.createElement('div');
+        sep.className = 'new-session-menu-separator';
+        const dot = document.createElement('span');
+        dot.className = 'peer-color-dot';
+        dot.style.background = peerColorMap[p.name] || PEER_COLORS[0];
+        sep.appendChild(dot);
+        sep.appendChild(document.createTextNode(` ${p.name}`));
+        menu.appendChild(sep);
+
+        const newItem = document.createElement('div');
+        newItem.className = 'new-session-menu-item';
+        newItem.textContent = 'New Terminal';
+        newItem.addEventListener('click', async () => {
+          closeMenu();
+          const name = await Toast.prompt('Session name:');
+          if (!name || !name.trim()) return;
+          const trimmed = name.trim();
+          const validationError = validateSessionName(trimmed);
+          if (validationError) { Toast.error(validationError); return; }
+          const ok = await createSession(trimmed, null, p.name);
+          if (!ok) { Toast.error('Failed to create remote session'); return; }
+          lastSessionsKey = '';
+          await refreshSessionList();
+          switchSession(trimmed, p.name);
+        });
+        menu.appendChild(newItem);
+      }
+    }
+
     // SSH bookmarks
     const bookmarks = DenSettings.get('ssh_bookmarks') || [];
     if (bookmarks.length > 0) {
@@ -977,10 +1088,14 @@ const DenTerminal = (() => {
     return null;
   }
 
+  function getCurrentPeer() {
+    return currentPeer;
+  }
+
   return {
     init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
-    getCurrentSession, switchSession, refreshSessionList, initSessionBar,
-    fetchSessions, createSession, destroySession,
+    getCurrentSession, getCurrentPeer, switchSession, refreshSessionList, initSessionBar,
+    fetchSessions, fetchAllSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,
     validateSessionName,
     getXtermTheme() { return XTERM_THEME; },

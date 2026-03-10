@@ -1,8 +1,11 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{
+        Path, RawQuery, State, WebSocketUpgrade,
+        ws::{Message as AxumWsMessage, WebSocket},
+    },
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -510,4 +513,254 @@ fn save_peer(store: &crate::store::Store, peer: &PeerConfig) -> std::io::Result<
         peers.push(peer.clone());
     }
     store.save_settings(&settings)
+}
+
+// --- Peer Terminal Proxy API ---
+
+/// Look up peer config by name
+fn lookup_peer(state: &AppState, name: &str) -> Result<PeerConfig, StatusCode> {
+    let settings = state.store.load_settings();
+    settings
+        .peers
+        .unwrap_or_default()
+        .into_iter()
+        .find(|p| p.name == name)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Create HTTP client for peer proxy
+fn proxy_client() -> Result<reqwest::Client, StatusCode> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Forward reqwest response as axum response
+async fn proxy_response(resp: reqwest::Response) -> Result<Response, StatusCode> {
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    let body = resp.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let mut response = (status, body).into_response();
+    if let Ok(ct) = content_type.parse() {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_TYPE, ct);
+    }
+    Ok(response)
+}
+
+/// GET /api/peers/{name}/terminal/sessions
+pub async fn proxy_list_sessions(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let client = proxy_client()?;
+    let url = format!("{}/api/terminal/sessions", peer.url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy GET sessions failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
+/// POST /api/peers/{name}/terminal/sessions
+pub async fn proxy_create_session(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let client = proxy_client()?;
+    let url = format!("{}/api/terminal/sessions", peer.url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy POST session failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
+/// PUT /api/peers/{name}/terminal/sessions/{session}
+pub async fn proxy_rename_session(
+    State(state): State<Arc<AppState>>,
+    Path((peer_name, session_name)): Path<(String, String)>,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let client = proxy_client()?;
+    let url = format!(
+        "{}/api/terminal/sessions/{}",
+        peer.url.trim_end_matches('/'),
+        session_name
+    );
+    let resp = client
+        .put(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy PUT session failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
+/// DELETE /api/peers/{name}/terminal/sessions/{session}
+pub async fn proxy_delete_session(
+    State(state): State<Arc<AppState>>,
+    Path((peer_name, session_name)): Path<(String, String)>,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let client = proxy_client()?;
+    let url = format!(
+        "{}/api/terminal/sessions/{}",
+        peer.url.trim_end_matches('/'),
+        session_name
+    );
+    let resp = client
+        .delete(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy DELETE session failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
+/// GET /api/peers/{name}/ws — WebSocket relay to remote peer
+pub async fn ws_relay_handler(
+    ws: WebSocketUpgrade,
+    Path(peer_name): Path<String>,
+    RawQuery(query): RawQuery,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let peer = match lookup_peer(&state, &peer_name) {
+        Ok(p) => p,
+        Err(status) => return status.into_response(),
+    };
+
+    ws.on_upgrade(move |socket| handle_ws_relay(socket, peer, query))
+        .into_response()
+}
+
+async fn handle_ws_relay(local_ws: WebSocket, peer: PeerConfig, query: Option<String>) {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::{Message as TungMessage, client::IntoClientRequest};
+
+    // Build remote WS URL
+    let base = peer.url.trim_end_matches('/');
+    let ws_base = if base.starts_with("https://") {
+        base.replacen("https://", "wss://", 1)
+    } else {
+        base.replacen("http://", "ws://", 1)
+    };
+    let url = match &query {
+        Some(q) => format!("{}/api/ws?{}", ws_base, q),
+        None => format!("{}/api/ws", ws_base),
+    };
+
+    // Build request with auth header
+    let mut request = match url.into_client_request() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("WS relay: invalid URL for {}: {e}", peer.name);
+            return;
+        }
+    };
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", peer.token)
+            .parse()
+            .expect("valid header value"),
+    );
+
+    // Connect to remote WS
+    let (remote_ws, _) = match tokio_tungstenite::connect_async(request).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("WS relay connect failed for {}: {e}", peer.name);
+            // Send error to browser before dropping
+            let (mut tx, _) = local_ws.split();
+            let _ = tx
+                .send(AxumWsMessage::Text(
+                    r#"{"type":"relay_error","message":"Failed to connect to peer"}"#.into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    tracing::debug!("WS relay established for peer {}", peer.name);
+
+    let (mut local_tx, mut local_rx) = local_ws.split();
+    let (mut remote_tx, mut remote_rx) = remote_ws.split();
+
+    // local → remote
+    let local_to_remote = async {
+        while let Some(Ok(msg)) = local_rx.next().await {
+            let remote_msg = match msg {
+                AxumWsMessage::Text(t) => TungMessage::Text(t.to_string().into()),
+                AxumWsMessage::Binary(b) => TungMessage::Binary(b.to_vec().into()),
+                AxumWsMessage::Ping(b) => TungMessage::Ping(b.to_vec().into()),
+                AxumWsMessage::Pong(b) => TungMessage::Pong(b.to_vec().into()),
+                AxumWsMessage::Close(_) => {
+                    let _ = remote_tx.close().await;
+                    break;
+                }
+            };
+            if remote_tx.send(remote_msg).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    // remote → local
+    let remote_to_local = async {
+        while let Some(Ok(msg)) = remote_rx.next().await {
+            let local_msg = match msg {
+                TungMessage::Text(t) => AxumWsMessage::Text(t.to_string().into()),
+                TungMessage::Binary(b) => AxumWsMessage::Binary(b.to_vec().into()),
+                TungMessage::Ping(b) => AxumWsMessage::Ping(b.to_vec().into()),
+                TungMessage::Pong(b) => AxumWsMessage::Pong(b.to_vec().into()),
+                TungMessage::Close(_) => {
+                    let _ = local_tx.close().await;
+                    break;
+                }
+                TungMessage::Frame(_) => continue,
+            };
+            if local_tx.send(local_msg).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = local_to_remote => {},
+        _ = remote_to_local => {},
+    }
+
+    tracing::debug!("WS relay ended for peer {}", peer.name);
 }

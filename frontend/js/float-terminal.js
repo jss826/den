@@ -10,6 +10,7 @@ const FloatTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
+  let currentPeer = null; // peer name (null for local sessions)
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
   let lastSentCols = 0;
@@ -239,8 +240,11 @@ const FloatTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // 認証は Cookie（HttpOnly）で自動送信 — URL にトークンを含めない
-    const url = `${proto}//${location.host}/api/ws?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
+    // Route WS through peer proxy if remote session
+    const wsPath = currentPeer
+      ? `/api/peers/${encodeURIComponent(currentPeer)}/ws`
+      : '/api/ws';
+    const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
     let stallTimer = null;
 
@@ -386,12 +390,12 @@ const FloatTerminal = (() => {
 
     // If no session selected, pick the first available one
     if (!currentSession) {
-      const sessions = await DenTerminal.fetchSessions();
+      const sessions = await DenTerminal.fetchAllSessions();
       const alive = sessions.filter(s => s.alive);
-      if (alive.length > 0) {
-        currentSession = alive[0].name;
-      } else if (sessions.length > 0) {
-        currentSession = sessions[0].name;
+      const target = alive.length > 0 ? alive[0] : (sessions.length > 0 ? sessions[0] : null);
+      if (target) {
+        currentSession = target.name;
+        currentPeer = target.peer || null;
       }
     }
 
@@ -452,9 +456,21 @@ const FloatTerminal = (() => {
   }
 
   // --- Session management ---
-  function switchSession(name) {
-    if (!name || name === currentSession) return;
+  function switchSession(value) {
+    if (!value) return;
+    // Parse "peer:session" or "session" format
+    let name, peer;
+    const idx = value.indexOf(':');
+    if (idx > 0 && value.substring(0, idx).match(/^[a-zA-Z0-9_-]+$/)) {
+      peer = value.substring(0, idx);
+      name = value.substring(idx + 1);
+    } else {
+      peer = null;
+      name = value;
+    }
+    if (name === currentSession && peer === currentPeer) return;
     currentSession = name;
+    currentPeer = peer;
     if (term) term.clear();
     if (visible && !minimized) doConnect(0);
   }
@@ -476,13 +492,22 @@ const FloatTerminal = (() => {
 
   async function onKillSession() {
     if (!currentSession) return;
-    if (!(await Toast.confirm(`Kill session "${currentSession}"?`))) return;
-    const ok = await DenTerminal.destroySession(currentSession);
+    const displayName = currentPeer ? `${currentPeer}:${currentSession}` : currentSession;
+    if (!(await Toast.confirm(`Kill session "${displayName}"?`))) return;
+    const ok = await DenTerminal.destroySession(currentSession, currentPeer);
     if (!ok) { Toast.error('Failed to kill session'); return; }
-    // DenTerminal.refreshSessionList fires den:sessions-changed →
-    // FloatTerminal.refreshSessionList handles session switch / null state
     currentSession = null;
+    currentPeer = null;
     await DenTerminal.refreshSessionList();
+  }
+
+  /** Build a composite key for session identity */
+  function sessionKey(s) {
+    return s.peer ? `${s.peer}:${s.name}` : s.name;
+  }
+
+  function isCurrentSession(s) {
+    return s.name === currentSession && (s.peer || null) === currentPeer;
   }
 
   async function refreshSessionList(sessions) {
@@ -490,7 +515,7 @@ const FloatTerminal = (() => {
     const gen = ++refreshGeneration;
     if (!sessions) {
       try {
-        sessions = (await DenTerminal.fetchSessions()) ?? [];
+        sessions = (await DenTerminal.fetchAllSessions()) ?? [];
       } catch {
         console.error('[FloatTerminal] Failed to fetch sessions');
         return;
@@ -508,41 +533,45 @@ const FloatTerminal = (() => {
       sessionSelect.appendChild(opt);
       if (currentSession !== null) {
         currentSession = null;
+        currentPeer = null;
         disconnect();
         if (term) term.clear();
       }
     } else if (!currentSession) {
       // Recovery: sessions appeared while disconnected — auto-connect to first alive
       const alive = sessions.filter(s => s.alive);
-      const target = alive.length > 0 ? alive[0].name : sessions[0].name;
-      currentSession = target;
+      const target = alive.length > 0 ? alive[0] : sessions[0];
+      currentSession = target.name;
+      currentPeer = target.peer || null;
       if (term) term.clear();
       if (visible && !minimized) doConnect(0);
-      // Fall through to build the option list below
     }
 
     // If current session was renamed, follow DenTerminal's active session
-    if (currentSession && sessions.length > 0 && !sessions.find(s => s.name === currentSession)) {
+    if (currentSession && sessions.length > 0 && !sessions.find(s => isCurrentSession(s))) {
       const mainSession = DenTerminal.getCurrentSession();
-      if (mainSession && sessions.find(s => s.name === mainSession)) {
+      const mainPeer = DenTerminal.getCurrentPeer();
+      if (mainSession && sessions.find(s => s.name === mainSession && (s.peer || null) === mainPeer)) {
         currentSession = mainSession;
+        currentPeer = mainPeer;
       }
     }
 
     if (sessions.length > 0) {
       for (const s of sessions) {
         const opt = document.createElement('option');
-        opt.value = s.name;
+        const key = sessionKey(s);
+        opt.value = key;
         const status = s.alive ? '' : ' (dead)';
-        opt.textContent = `${s.name}${status}`;
-        if (s.name === currentSession) opt.selected = true;
+        opt.textContent = `${key}${status}`;
+        if (isCurrentSession(s)) opt.selected = true;
         sessionSelect.appendChild(opt);
       }
     }
 
     // Update client count
     if (clientsSpan) {
-      const current = sessions.find(s => s.name === currentSession);
+      const current = sessions.find(s => isCurrentSession(s));
       if (current) {
         clientsSpan.textContent = `${current.client_count} client${current.client_count !== 1 ? 's' : ''}`;
       } else {

@@ -137,6 +137,16 @@ pub fn create_app_with_secret(
         .route("/api/peers/join", post(peer::join))
         .route("/api/peers", get(peer::list_peers))
         .route("/api/peers/{name}", delete(peer::delete_peer))
+        // Peer terminal proxy API
+        .route(
+            "/api/peers/{name}/terminal/sessions",
+            get(peer::proxy_list_sessions).post(peer::proxy_create_session),
+        )
+        .route(
+            "/api/peers/{name}/terminal/sessions/{session}",
+            put(peer::proxy_rename_session).delete(peer::proxy_delete_session),
+        )
+        .route("/api/peers/{name}/ws", get(peer::ws_relay_handler))
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

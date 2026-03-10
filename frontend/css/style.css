@@ -569,6 +569,20 @@ html, body {
 }
 .session-tab.dead { opacity: 0.5; }
 
+/* Peer session color indicator */
+.session-tab.peer-session {
+  border-bottom: 2px solid var(--peer-color, var(--accent));
+  border-radius: 6px 6px 0 0;
+}
+
+.peer-color-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
 .session-tab-label {
   overflow: hidden;
   white-space: nowrap;
