@@ -90,7 +90,10 @@ async fn main() {
 
     // HTTP サーバー（メイン）+ graceful shutdown
     let shutdown_registry = Arc::clone(&registry);
-    let app = den::create_app(config, registry, store);
+    let (app, app_state) = den::create_app(config, registry, store);
+
+    // Start peer health check background task
+    den::peer::spawn_health_check(Arc::clone(&app_state));
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_address, port))
         .await

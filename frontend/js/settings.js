@@ -382,6 +382,15 @@ const DenSettings = (() => {
     const snippetAddForm = document.getElementById('snippet-add-form');
     if (snippetAddForm) snippetAddForm.hidden = true;
 
+    // Peers settings
+    const peerNameInput = document.getElementById('setting-peer-name');
+    if (peerNameInput) peerNameInput.value = current.peer_name || '';
+    const peerInviteDisplay = document.getElementById('peer-invite-display');
+    if (peerInviteDisplay) peerInviteDisplay.hidden = true;
+    const peerJoinForm = document.getElementById('peer-join-form');
+    if (peerJoinForm) peerJoinForm.hidden = true;
+    loadPeerList();
+
     const verText = document.getElementById('settings-version-text');
     if (verText && current.version) verText.textContent = 'Den v' + current.version;
     // Reset update UI state
@@ -440,6 +449,9 @@ const DenSettings = (() => {
       const sleepTimeoutEl = document.getElementById('setting-sleep-timeout');
       const sleepTimeout = sleepTimeoutEl ? Math.max(1, Math.min(480, parseInt(sleepTimeoutEl.value, 10) || 30)) : 30;
 
+      const peerNameEl = document.getElementById('setting-peer-name');
+      const peerName = peerNameEl ? (peerNameEl.value.trim() || null) : null;
+
       const ok = await save({
         font_size: Math.max(8, Math.min(32, fontSize)),
         terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
@@ -450,6 +462,7 @@ const DenSettings = (() => {
         snippets: snippets,
         sleep_prevention_mode: sleepMode,
         sleep_prevention_timeout: sleepTimeout,
+        peer_name: peerName,
       });
       if (!ok) return;
       apply();
@@ -783,6 +796,165 @@ const DenSettings = (() => {
 
     if (snippetAddCancel) snippetAddCancel.addEventListener('click', () => {
       snippetAddForm.hidden = true;
+    });
+
+    // --- Peer management ---
+    bindPeerUI();
+  }
+
+  // --- Peer management functions ---
+
+  let peerInviteTimer = null;
+
+  async function loadPeerList() {
+    const list = document.getElementById('peer-list');
+    if (!list) return;
+    list.innerHTML = '';
+    try {
+      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
+      if (!resp.ok) return;
+      const peers = await resp.json();
+      if (peers.length === 0) {
+        list.innerHTML = '<div class="peer-empty">No peers registered</div>';
+        return;
+      }
+      for (const peer of peers) {
+        const row = document.createElement('div');
+        row.className = 'peer-row';
+        const statusClass = peer.status === 'connected' ? 'peer-status-connected'
+          : peer.status === 'connecting' ? 'peer-status-connecting'
+          : 'peer-status-disconnected';
+        const statusLabel = peer.status === 'connected' ? 'Connected'
+          : peer.status === 'connecting' ? 'Connecting'
+          : 'Disconnected';
+        const versionText = peer.version ? ` v${peer.version}` : '';
+        const latencyText = peer.latency_ms != null ? ` ${peer.latency_ms}ms` : '';
+        row.innerHTML = `
+          <span class="peer-status ${statusClass}" title="${statusLabel}"></span>
+          <span class="peer-info">
+            <strong>${escHtml(peer.name)}</strong>
+            <small>${escHtml(peer.url)}${versionText}${latencyText}</small>
+          </span>
+          <button class="peer-delete-btn modal-btn" data-peer="${escHtml(peer.name)}" title="Remove peer">×</button>
+        `;
+        list.appendChild(row);
+      }
+      list.querySelectorAll('.peer-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const name = btn.dataset.peer;
+          if (!confirm(`Remove peer "${name}"?`)) return;
+          try {
+            await fetch(`/api/peers/${encodeURIComponent(name)}`, {
+              method: 'DELETE',
+              credentials: 'same-origin',
+            });
+            loadPeerList();
+          } catch (e) {
+            Toast.error('Failed to remove peer');
+          }
+        });
+      });
+    } catch (e) {
+      list.innerHTML = '<div class="peer-empty">Failed to load peers</div>';
+    }
+  }
+
+  function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function bindPeerUI() {
+    const inviteBtn = document.getElementById('peer-invite-btn');
+    const joinBtn = document.getElementById('peer-join-btn');
+    const joinForm = document.getElementById('peer-join-form');
+    const joinConfirm = document.getElementById('peer-join-confirm');
+    const joinCancel = document.getElementById('peer-join-cancel');
+    const inviteCopy = document.getElementById('peer-invite-copy');
+
+    if (inviteBtn) inviteBtn.addEventListener('click', async () => {
+      try {
+        const resp = await fetch('/api/peers/invite', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const display = document.getElementById('peer-invite-display');
+        const codeEl = document.getElementById('peer-invite-code');
+        const ttlEl = document.getElementById('peer-invite-ttl');
+        if (display && codeEl && ttlEl) {
+          codeEl.textContent = data.code;
+          display.hidden = false;
+          // TTL countdown
+          if (peerInviteTimer) clearInterval(peerInviteTimer);
+          let remaining = data.expires_in_secs;
+          ttlEl.textContent = `${remaining}s`;
+          peerInviteTimer = setInterval(() => {
+            remaining--;
+            if (remaining <= 0) {
+              clearInterval(peerInviteTimer);
+              peerInviteTimer = null;
+              display.hidden = true;
+            } else {
+              ttlEl.textContent = `${remaining}s`;
+            }
+          }, 1000);
+        }
+      } catch (e) {
+        Toast.error('Failed to generate invite code');
+      }
+    });
+
+    if (inviteCopy) inviteCopy.addEventListener('click', () => {
+      const code = document.getElementById('peer-invite-code');
+      if (code) navigator.clipboard.writeText(code.textContent);
+    });
+
+    if (joinBtn) joinBtn.addEventListener('click', () => {
+      if (joinForm) {
+        joinForm.hidden = !joinForm.hidden;
+        if (!joinForm.hidden) {
+          document.getElementById('peer-join-url').value = '';
+          document.getElementById('peer-join-code').value = '';
+          document.getElementById('peer-join-url').focus();
+        }
+      }
+    });
+
+    if (joinConfirm) joinConfirm.addEventListener('click', async () => {
+      const url = document.getElementById('peer-join-url').value.trim();
+      const code = document.getElementById('peer-join-code').value.trim();
+      if (!url || !code) return;
+      joinConfirm.disabled = true;
+      try {
+        const resp = await fetch('/api/peers/join', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, peer_url: url }),
+        });
+        if (!resp.ok) {
+          const status = resp.status;
+          if (status === 403) Toast.error('Invalid or expired invite code');
+          else if (status === 502) Toast.error('Could not connect to peer');
+          else Toast.error(`Failed to join: HTTP ${status}`);
+          return;
+        }
+        const data = await resp.json();
+        Toast.success(`Paired with ${data.peer_name}`);
+        joinForm.hidden = true;
+        loadPeerList();
+      } catch (e) {
+        Toast.error('Failed to join peer');
+      } finally {
+        joinConfirm.disabled = false;
+      }
+    });
+
+    if (joinCancel) joinCancel.addEventListener('click', () => {
+      if (joinForm) joinForm.hidden = true;
     });
   }
 

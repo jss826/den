@@ -29,6 +29,10 @@ fn test_config() -> Config {
 }
 
 fn test_app() -> axum::Router {
+    test_app_with_state().0
+}
+
+fn test_app_with_state() -> (axum::Router, std::sync::Arc<den::AppState>) {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new(
@@ -313,7 +317,8 @@ async fn settings_put_and_get() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT
     let req = Request::builder()
@@ -387,7 +392,8 @@ async fn settings_put_partial_json() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT with only some fields — serde should use defaults for missing fields
     let req = Request::builder()
@@ -433,7 +439,8 @@ async fn settings_ssh_bookmarks_roundtrip() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     let req = Request::builder()
         .method("PUT")
@@ -1096,7 +1103,8 @@ async fn clipboard_history_post_and_get() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // POST
     let req = Request::builder()
@@ -1142,7 +1150,8 @@ async fn clipboard_history_dedup() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // Add two entries
     for text in ["first", "second"] {
@@ -1189,7 +1198,8 @@ async fn clipboard_history_delete() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // Add an entry
     let req = Request::builder()
@@ -1340,7 +1350,8 @@ async fn keep_awake_put_and_get() {
         30,
         None,
     );
-    let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT true — response body should confirm the state
     let req = Request::builder()
@@ -1415,4 +1426,417 @@ async fn keep_awake_requires_auth() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- Peer API tests ---
+
+#[tokio::test]
+async fn peers_requires_auth() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .uri("/api/peers")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/invite")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/join")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"code":"abc","peer_url":"http://x"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn peers_invite_generates_code() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/invite")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let code = json["code"].as_str().unwrap();
+    assert_eq!(code.len(), 6);
+    assert!(code.chars().all(|c| c.is_ascii_alphanumeric()));
+    assert_eq!(json["expires_in_secs"], 300);
+}
+
+#[tokio::test]
+async fn peers_pair_invalid_code_rejected() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            r#"{"code":"badcode","name":"test-peer","url":"http://peer:8080","token":"tok123"}"#,
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn peers_pair_valid_code_succeeds() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+
+    let body = serde_json::json!({
+        "code": code,
+        "name": "remote-den",
+        "url": "http://192.168.1.10:8080",
+        "token": "remote-token-abc"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp_body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+    assert!(json["name"].as_str().is_some());
+    let token_str = json["token"].as_str().unwrap();
+    assert!(!token_str.is_empty());
+
+    let settings = state.store.load_settings();
+    let peers = settings.peers.unwrap();
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0].name, "remote-den");
+    assert_eq!(peers[0].url, "http://192.168.1.10:8080");
+    assert_eq!(peers[0].token, "remote-token-abc");
+}
+
+#[tokio::test]
+async fn peers_pair_code_consumed_once() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+
+    let body = serde_json::json!({
+        "code": code,
+        "name": "peer-a",
+        "url": "http://a:8080",
+        "token": "tok-a"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = serde_json::json!({
+        "code": code,
+        "name": "peer-b",
+        "url": "http://b:8080",
+        "token": "tok-b"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn peers_list_empty() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .uri("/api/peers")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn peers_list_after_pair() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+    let body = serde_json::json!({
+        "code": code,
+        "name": "my-peer",
+        "url": "http://peer:8080",
+        "token": "peer-tok"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .uri("/api/peers")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let peers = json.as_array().unwrap();
+    assert_eq!(peers.len(), 1);
+    assert_eq!(peers[0]["name"], "my-peer");
+    assert_eq!(peers[0]["url"], "http://peer:8080");
+    assert!(peers[0]["status"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn peers_delete() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+    let body = serde_json::json!({
+        "code": code,
+        "name": "del-peer",
+        "url": "http://peer:8080",
+        "token": "peer-tok"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/peers/del-peer")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let settings = state.store.load_settings();
+    let peers = settings.peers.unwrap_or_default();
+    assert!(peers.is_empty());
+}
+
+#[tokio::test]
+async fn peers_delete_nonexistent() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/peers/no-such-peer")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn peers_pair_invalid_name_rejected() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+
+    let body = serde_json::json!({
+        "code": code,
+        "name": "invalid name!",
+        "url": "http://peer:8080",
+        "token": "tok"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn peer_token_authenticates_to_protected_routes() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+    let body = serde_json::json!({
+        "code": code,
+        "name": "auth-peer",
+        "url": "http://peer:8080",
+        "token": "my-secret-peer-token"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .uri("/api/system/version")
+        .header(header::AUTHORIZATION, "Bearer my-secret-peer-token")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn peer_token_invalid_rejected() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .uri("/api/system/version")
+        .header(header::AUTHORIZATION, "Bearer not-a-valid-peer-token")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn peers_join_bad_url_returns_bad_gateway() {
+    let app = test_app();
+
+    let body = serde_json::json!({
+        "code": "abc123",
+        "peer_url": "http://127.0.0.1:1"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/join")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn settings_peer_name_roundtrip() {
+    let config = test_config();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::from(r#"{"peer_name":"my-den"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["peer_name"], "my-den");
+}
+
+#[tokio::test]
+async fn peers_full_pairing_e2e() {
+    let (app_a, state_a) = test_app_with_state();
+
+    // Step 1: Den A generates invite
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/invite")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app_a.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let invite: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let code = invite["code"].as_str().unwrap().to_string();
+
+    // Step 2: Den B pairs via /api/peers/pair
+    let body = serde_json::json!({
+        "code": code,
+        "name": "den-b",
+        "url": "http://den-b:8080",
+        "token": "b-token-for-a"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app_a.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let pair_resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let a_name = pair_resp["name"].as_str().unwrap();
+    let a_token = pair_resp["token"].as_str().unwrap();
+    assert!(!a_name.is_empty());
+    assert!(!a_token.is_empty());
+
+    // Step 3: Den A has Den B in peers
+    let settings_a = state_a.store.load_settings();
+    let peers_a = settings_a.peers.unwrap();
+    assert_eq!(peers_a.len(), 1);
+    assert_eq!(peers_a[0].name, "den-b");
+    assert_eq!(peers_a[0].token, "b-token-for-a");
+
+    // Step 4: Den B's token authenticates to Den A
+    let req = Request::builder()
+        .uri("/api/system/version")
+        .header(header::AUTHORIZATION, "Bearer b-token-for-a")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app_a.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Step 5: Token Den A returned is valid hex (32 bytes = 64 hex chars)
+    assert_eq!(a_token.len(), 64);
+    assert!(a_token.chars().all(|c| c.is_ascii_hexdigit()));
 }

@@ -85,6 +85,15 @@ fn default_ssh_port() -> u16 {
     22
 }
 
+/// Registered peer configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerConfig {
+    pub name: String,
+    pub url: String,
+    /// Token that the remote peer uses to authenticate to us
+    pub token: String,
+}
+
 /// Persisted session record for restart recovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -163,6 +172,12 @@ pub struct Settings {
     pub sleep_prevention_mode: SleepPreventionMode,
     #[serde(default = "default_sleep_prevention_timeout")]
     pub sleep_prevention_timeout: u16,
+    /// Display name for this Den instance in peer networking
+    #[serde(default)]
+    pub peer_name: Option<String>,
+    /// Registered peers
+    #[serde(default)]
+    pub peers: Option<Vec<PeerConfig>>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -196,6 +211,8 @@ impl Default for Settings {
             ssh_bookmarks: None,
             sleep_prevention_mode: SleepPreventionMode::default(),
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
+            peer_name: None,
+            peers: None,
             version: String::new(),
             hostname: String::new(),
         }

@@ -254,6 +254,49 @@ pub async fn auth_middleware(
     }
 }
 
+/// Auth middleware that accepts both user tokens and peer tokens.
+/// Used for endpoints that peers need access to (e.g. health check).
+pub async fn peer_or_user_auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+
+    let token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| extract_cookie(req.headers(), TOKEN_COOKIE));
+
+    match token {
+        Some(t) if validate_token(&t, &state.config.password, &state.hmac_secret) => {
+            next.run(req).await
+        }
+        Some(t) if validate_peer_token(&t, &state.store) => next.run(req).await,
+        _ => {
+            tracing::debug!("Auth rejected (peer_or_user): {path}");
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+}
+
+/// Validate a peer token against registered peers in settings.
+/// Peer tokens are stored as-is in PeerConfig.token (opaque strings).
+fn validate_peer_token(token: &str, store: &crate::store::Store) -> bool {
+    let settings = store.load_settings();
+    if let Some(peers) = &settings.peers {
+        for peer in peers {
+            if constant_time_eq(token, &peer.token) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Content-Security-Policy ミドルウェア
 /// script-src 'self' で外部スクリプト注入を防止し、XSS リスクを軽減する。
 pub async fn csp_middleware(req: Request<axum::body::Body>, next: Next) -> Response {

@@ -4,6 +4,7 @@ pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
+pub mod peer;
 pub mod pty;
 pub mod sftp;
 pub mod ssh;
@@ -28,10 +29,15 @@ pub struct AppState {
     pub hmac_secret: Vec<u8>,
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
+    pub peer_registry: peer::PeerRegistry,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
-pub fn create_app(config: Config, registry: Arc<SessionRegistry>, store: Store) -> Router {
+pub fn create_app(
+    config: Config,
+    registry: Arc<SessionRegistry>,
+    store: Store,
+) -> (Router, Arc<AppState>) {
     // 起動ごとにランダムな HMAC シークレットを生成
     // 再起動で全トークンが無効化される（セキュリティ上望ましい）
     let hmac_secret: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
@@ -44,12 +50,19 @@ pub fn create_app_with_secret(
     registry: Arc<SessionRegistry>,
     hmac_secret: Vec<u8>,
     store: Store,
-) -> Router {
+) -> (Router, Arc<AppState>) {
     // NOTE: 永続化状態を追加する場合は、ここでスタートアップ時の整合性チェックを実装すること。
     // 例: 前回の異常終了で中断状態のままのリソースをリセットする（orphaned state cleanup）。
     // 以前はセッション永続化に対して store.cleanup_stale_running_sessions() を呼んでいた。
 
     let sftp_manager = sftp::client::SftpManager::new(store.clone());
+    let peer_registry = peer::PeerRegistry::new();
+
+    // Initialize health states for existing peers
+    let settings = store.load_settings();
+    if let Some(peers) = &settings.peers {
+        peer_registry.init_health_states(peers);
+    }
 
     let state = Arc::new(AppState {
         config,
@@ -58,12 +71,15 @@ pub fn create_app_with_secret(
         hmac_secret,
         rate_limiter: auth::LoginRateLimiter::new(),
         sftp_manager,
+        peer_registry,
     });
 
     // 認証不要のルート
     let public_routes = Router::new()
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
+        // Peer pairing endpoint: authenticated by invite code, not user token
+        .route("/api/peers/pair", post(peer::pair))
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
@@ -116,8 +132,12 @@ pub fn create_app_with_secret(
         .route("/api/sftp/download", get(sftp::api::download))
         .route("/api/sftp/upload", post(sftp::api::upload))
         .route("/api/sftp/search", get(sftp::api::search))
-        // System update API
-        .route("/api/system/version", get(update::get_version))
+        // Peer management API
+        .route("/api/peers/invite", post(peer::create_invite))
+        .route("/api/peers/join", post(peer::join))
+        .route("/api/peers", get(peer::list_peers))
+        .route("/api/peers/{name}", delete(peer::delete_peer))
+        // System update API (user-only)
         .route("/api/system/update", post(update::do_update))
         .route(
             "/api/sftp/known-hosts",
@@ -130,10 +150,21 @@ pub fn create_app_with_secret(
             auth::auth_middleware,
         ));
 
-    Router::new()
+    // Routes accessible by both user tokens and peer tokens (health check)
+    let peer_accessible_routes = Router::new()
+        .route("/api/system/version", get(update::get_version))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::peer_or_user_auth_middleware,
+        ));
+
+    let router = Router::new()
         .merge(protected_routes)
+        .merge(peer_accessible_routes)
         .merge(public_routes)
         // CSP ヘッダーを全レスポンスに付与（XSS 防止）
         .layer(middleware::from_fn(auth::csp_middleware))
-        .with_state(state)
+        .with_state(Arc::clone(&state));
+
+    (router, state)
 }
