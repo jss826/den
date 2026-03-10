@@ -1,26 +1,52 @@
-// Den - SFTP リモート接続管理
+// Den - Remote file source management (SFTP + Peer)
 // eslint-disable-next-line no-unused-vars
 const FilerRemote = (() => {
-  let connected = false;
-  let hostInfo = null; // { host, username }
+  // mode: 'local' | 'sftp' | 'peer'
+  let mode = 'local';
+  let hostInfo = null; // { host, username } for SFTP
+  let peerName = null; // peer name when mode === 'peer'
 
-  /** 現在の API ベースパスを返す */
+  /** Current API base path */
   function getApiBase() {
-    return connected ? '/api/sftp' : '/api/filer';
+    if (mode === 'peer') return `/api/peers/${encodeURIComponent(peerName)}/filer`;
+    if (mode === 'sftp') return '/api/sftp';
+    return '/api/filer';
   }
 
-  /** リモート接続中かどうか */
+  /** Whether browsing a remote source */
   function isRemote() {
-    return connected;
+    return mode !== 'local';
   }
 
-  /** 接続先情報を返す */
+  /** Current connection info */
   function getInfo() {
-    return { connected, host: hostInfo?.host || null, username: hostInfo?.username || null };
+    if (mode === 'peer') {
+      return { connected: true, mode: 'peer', peerName, host: null, username: null };
+    }
+    if (mode === 'sftp') {
+      return { connected: true, mode: 'sftp', peerName: null, host: hostInfo?.host || null, username: hostInfo?.username || null };
+    }
+    return { connected: false, mode: 'local', peerName: null, host: null, username: null };
   }
 
-  /** SFTP 接続 */
+  /** Connect to a peer's file system */
+  async function connectPeer(name) {
+    if (mode === 'sftp') await disconnectSftpSilent();
+    mode = 'peer';
+    peerName = name;
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'peer', peerName: name } }));
+  }
+
+  /** Disconnect from peer (back to local) */
+  function disconnectPeer() {
+    mode = 'local';
+    peerName = null;
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
+  }
+
+  /** SFTP connect */
   async function connect(host, port, username, authType, password, keyPath) {
+    if (mode === 'peer') disconnectPeer();
     const body = { host, port: port || 22, username, auth_type: authType };
     if (authType === 'password') body.password = password;
     if (authType === 'key') body.key_path = keyPath;
@@ -58,9 +84,9 @@ const FilerRemote = (() => {
           throw new Error(retryErr.error || 'Connection failed');
         }
         const data = await retryResp.json();
-        connected = data.connected;
+        mode = 'sftp';
         hostInfo = { host: data.host, username: data.username };
-        document.dispatchEvent(new CustomEvent('den:sftp-changed', { detail: { connected: true } }));
+        document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'sftp' } }));
         return data;
       }
       throw new Error(errData.error || 'Connection failed');
@@ -72,9 +98,9 @@ const FilerRemote = (() => {
     }
 
     const data = await resp.json();
-    connected = data.connected;
+    mode = 'sftp';
     hostInfo = { host: data.host, username: data.username };
-    document.dispatchEvent(new CustomEvent('den:sftp-changed', { detail: { connected: true } }));
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'sftp' } }));
     return data;
   }
 
@@ -138,7 +164,14 @@ const FilerRemote = (() => {
     });
   }
 
-  /** SFTP 切断 */
+  /** Disconnect SFTP silently (no event, used internally) */
+  async function disconnectSftpSilent() {
+    await fetch('/api/sftp/disconnect', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+    mode = 'local';
+    hostInfo = null;
+  }
+
+  /** SFTP disconnect */
   async function disconnect() {
     try {
       await fetch('/api/sftp/disconnect', {
@@ -146,24 +179,24 @@ const FilerRemote = (() => {
         credentials: 'same-origin',
       });
     } catch { /* ignore */ }
-    connected = false;
+    mode = 'local';
     hostInfo = null;
-    document.dispatchEvent(new CustomEvent('den:sftp-changed', { detail: { connected: false } }));
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
-  /** ページロード時に既存接続を復元 */
+  /** Restore SFTP connection on page load */
   async function checkStatus() {
     try {
       const resp = await fetch('/api/sftp/status', { credentials: 'same-origin' });
       if (!resp.ok) return;
       const data = await resp.json();
       if (data.connected) {
-        connected = true;
+        mode = 'sftp';
         hostInfo = { host: data.host, username: data.username };
-        document.dispatchEvent(new CustomEvent('den:sftp-changed', { detail: { connected: true } }));
+        document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'sftp' } }));
       }
     } catch { /* ignore */ }
   }
 
-  return { getApiBase, isRemote, getInfo, connect, disconnect, checkStatus };
+  return { getApiBase, isRemote, getInfo, connect, disconnect, connectPeer, disconnectPeer, checkStatus };
 })();

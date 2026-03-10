@@ -170,34 +170,37 @@ const DenFiler = (() => {
     }
   }
 
-  // --- Remote SFTP 接続 ---
+  // --- Remote source selector (SFTP + Peers) ---
+
+  let remoteDropdown = null;
 
   function initRemoteButton() {
     const btn = document.getElementById('filer-remote-btn');
     if (!btn) return;
 
-    btn.addEventListener('click', () => {
-      if (FilerRemote.isRemote()) {
-        // 切断確認
-        doDisconnect();
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (remoteDropdown) {
+        closeRemoteDropdown();
       } else {
-        showSftpModal();
+        showRemoteDropdown(btn);
       }
     });
 
-    // 接続/切断イベント
-    document.addEventListener('den:sftp-changed', (e) => {
-      const { connected } = e.detail;
+    // Close dropdown on outside click
+    document.addEventListener('click', () => closeRemoteDropdown());
+
+    // Remote source changed event
+    document.addEventListener('den:remote-changed', (e) => {
+      const { mode } = e.detail;
       updateRemoteButton();
       const drives = document.getElementById('filer-drives');
-      if (connected) {
-        // リモートルートでツリー再読込
+      if (mode !== 'local') {
         if (drives) drives.hidden = true;
         closeAllTabs();
         FilerTree.setRoot('/');
         currentDir = '/';
       } else {
-        // ローカルに戻す
         if (drives) drives.hidden = false;
         drivesLoaded = false;
         closeAllTabs();
@@ -206,23 +209,108 @@ const DenFiler = (() => {
       }
     });
 
-    // 初期状態更新
     updateRemoteButton();
   }
 
   function updateRemoteButton() {
     const btn = document.getElementById('filer-remote-btn');
     if (!btn) return;
-    if (FilerRemote.isRemote()) {
-      const info = FilerRemote.getInfo();
+    const info = FilerRemote.getInfo();
+    if (info.mode === 'peer') {
+      btn.textContent = info.peerName;
+      btn.classList.add('active');
+      btn.setAttribute('data-tooltip', 'Connected to peer');
+    } else if (info.mode === 'sftp') {
       btn.textContent = `${info.username}@${info.host}`;
       btn.classList.add('active');
-      btn.setAttribute('data-tooltip', 'Disconnect SFTP');
+      btn.setAttribute('data-tooltip', 'Connected via SFTP');
     } else {
       btn.textContent = 'Remote';
       btn.classList.remove('active');
-      btn.setAttribute('data-tooltip', 'Connect to remote SFTP');
+      btn.setAttribute('data-tooltip', 'Connect to remote file system');
     }
+  }
+
+  function closeRemoteDropdown() {
+    if (remoteDropdown) {
+      remoteDropdown.remove();
+      remoteDropdown = null;
+    }
+  }
+
+  async function showRemoteDropdown(anchorBtn) {
+    closeRemoteDropdown();
+    const menu = document.createElement('div');
+    menu.className = 'new-session-menu';
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    // Disconnect option if connected
+    if (FilerRemote.isRemote()) {
+      const info = FilerRemote.getInfo();
+      const label = info.mode === 'peer' ? info.peerName : `${info.username}@${info.host}`;
+      const disconnItem = document.createElement('div');
+      disconnItem.className = 'new-session-menu-item disconnect';
+      disconnItem.textContent = `Disconnect ${label}`;
+      disconnItem.addEventListener('click', () => {
+        closeRemoteDropdown();
+        if (info.mode === 'sftp') {
+          doDisconnect();
+        } else {
+          FilerRemote.disconnectPeer();
+        }
+      });
+      menu.appendChild(disconnItem);
+
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      menu.appendChild(sep);
+    }
+
+    // SFTP Connect
+    const sftpItem = document.createElement('div');
+    sftpItem.className = 'new-session-menu-item';
+    sftpItem.textContent = 'SFTP Connect\u2026';
+    sftpItem.addEventListener('click', () => {
+      closeRemoteDropdown();
+      showSftpModal();
+    });
+    menu.appendChild(sftpItem);
+
+    // Position and attach the dropdown before async fetch
+    const rect = anchorBtn.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = `${rect.bottom + 2}px`;
+    menu.style.left = `${rect.left}px`;
+    menu.style.zIndex = '1000';
+    document.body.appendChild(menu);
+    remoteDropdown = menu;
+
+    // Fetch connected peers (async — append after DOM attach)
+    try {
+      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
+      if (remoteDropdown !== menu) return; // closed during fetch
+      if (resp.ok) {
+        const peers = await resp.json();
+        const connected = peers.filter((p) => p.status === 'connected');
+        if (connected.length > 0) {
+          const header = document.createElement('div');
+          header.className = 'new-session-menu-separator';
+          header.textContent = 'Peers';
+          menu.appendChild(header);
+
+          for (const p of connected) {
+            const item = document.createElement('div');
+            item.className = 'new-session-menu-item';
+            item.textContent = p.name;
+            item.addEventListener('click', () => {
+              closeRemoteDropdown();
+              FilerRemote.connectPeer(p.name);
+            });
+            menu.appendChild(item);
+          }
+        }
+      }
+    } catch { /* ignore */ }
   }
 
   // --- SSH Bookmarks ---

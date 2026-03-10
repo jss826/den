@@ -1987,3 +1987,155 @@ async fn proxy_list_sessions_with_registered_peer_returns_bad_gateway() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
 }
+
+// --- Peer filer proxy tests ---
+
+#[tokio::test]
+async fn proxy_filer_list_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/some-peer/filer/list?path=/")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn proxy_filer_list_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/unknown/filer/list?path=/")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_read_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/unknown/filer/read?path=/etc/hosts")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_write_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/peers/unknown/filer/write")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"path":"/tmp/test","content":"hello"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_mkdir_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/unknown/filer/mkdir")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"path":"/tmp/testdir"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_delete_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/api/peers/unknown/filer/delete?path=/tmp/test")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_search_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/unknown/filer/search?path=/&query=test")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_upload_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/unknown/filer/upload")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "multipart/form-data; boundary=test")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_download_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/unknown/filer/download?path=/tmp/test")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_rename_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/unknown/filer/rename")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"from":"/tmp/a","to":"/tmp/b"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_filer_with_registered_peer_returns_bad_gateway() {
+    let (app, state) = test_app_with_state();
+
+    let peer = den::store::PeerConfig {
+        name: "fake-peer".to_string(),
+        url: "http://127.0.0.1:1".to_string(),
+        token: "fake-token".to_string(),
+    };
+    let mut settings = state.store.load_settings();
+    settings.peers = Some(vec![peer]);
+    state.store.save_settings(&settings).unwrap();
+
+    let req = Request::builder()
+        .uri("/api/peers/fake-peer/filer/list?path=/")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}

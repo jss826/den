@@ -142,6 +142,37 @@ pub fn create_app_with_secret(
             put(peer::proxy_rename_session).delete(peer::proxy_delete_session),
         )
         .route("/api/peers/{name}/ws", get(peer::ws_relay_handler))
+        // Peer filer proxy API
+        .route("/api/peers/{name}/filer/list", get(peer::proxy_filer_list))
+        .route("/api/peers/{name}/filer/read", get(peer::proxy_filer_read))
+        .route(
+            "/api/peers/{name}/filer/write",
+            put(peer::proxy_filer_write),
+        )
+        .route(
+            "/api/peers/{name}/filer/upload",
+            post(peer::proxy_filer_upload),
+        )
+        .route(
+            "/api/peers/{name}/filer/download",
+            get(peer::proxy_filer_download),
+        )
+        .route(
+            "/api/peers/{name}/filer/mkdir",
+            post(peer::proxy_filer_mkdir),
+        )
+        .route(
+            "/api/peers/{name}/filer/rename",
+            post(peer::proxy_filer_rename),
+        )
+        .route(
+            "/api/peers/{name}/filer/delete",
+            delete(peer::proxy_filer_delete),
+        )
+        .route(
+            "/api/peers/{name}/filer/search",
+            get(peer::proxy_filer_search),
+        )
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

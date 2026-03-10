@@ -4,7 +4,7 @@ use axum::{
         Path, RawQuery, State, WebSocketUpgrade,
         ws::{Message as AxumWsMessage, WebSocket},
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use rand::Rng;
@@ -763,4 +763,232 @@ async fn handle_ws_relay(local_ws: WebSocket, peer: PeerConfig, query: Option<St
     }
 
     tracing::debug!("WS relay ended for peer {}", peer.name);
+}
+
+// --- Peer Filer Proxy API ---
+
+/// Generic filer proxy: forwards request to remote peer's /api/filer/* endpoint
+async fn proxy_filer(
+    state: &AppState,
+    peer_name: &str,
+    method: reqwest::Method,
+    subpath: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(state, peer_name)?;
+    let client = proxy_client()?;
+    let base = peer.url.trim_end_matches('/');
+    let url = match query {
+        Some(q) => format!("{}/api/filer/{}?{}", base, subpath, q),
+        None => format!("{}/api/filer/{}", base, subpath),
+    };
+    let method_str = method.as_str().to_owned();
+    let mut req = client
+        .request(method, &url)
+        .header("Authorization", format!("Bearer {}", peer.token));
+
+    // Forward Content-Type (important for multipart upload)
+    if let Some(ct) = headers.get("content-type") {
+        req = req.header("Content-Type", ct.clone());
+    }
+
+    if !body.is_empty() {
+        req = req.body(body);
+    }
+
+    let resp = req.send().await.map_err(|e| {
+        tracing::error!(
+            "Proxy {} filer/{} failed for {}: {e}",
+            method_str,
+            subpath,
+            peer.name
+        );
+        StatusCode::BAD_GATEWAY
+    })?;
+    proxy_response(resp).await
+}
+
+/// GET /api/peers/{name}/filer/list
+pub async fn proxy_filer_list(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, StatusCode> {
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::GET,
+        "list",
+        query.as_deref(),
+        &HeaderMap::new(),
+        Default::default(),
+    )
+    .await
+}
+
+/// GET /api/peers/{name}/filer/read
+pub async fn proxy_filer_read(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, StatusCode> {
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::GET,
+        "read",
+        query.as_deref(),
+        &HeaderMap::new(),
+        Default::default(),
+    )
+    .await
+}
+
+/// GET /api/peers/{name}/filer/download
+pub async fn proxy_filer_download(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, StatusCode> {
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::GET,
+        "download",
+        query.as_deref(),
+        &HeaderMap::new(),
+        Default::default(),
+    )
+    .await
+}
+
+/// GET /api/peers/{name}/filer/search
+pub async fn proxy_filer_search(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, StatusCode> {
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::GET,
+        "search",
+        query.as_deref(),
+        &HeaderMap::new(),
+        Default::default(),
+    )
+    .await
+}
+
+/// PUT /api/peers/{name}/filer/write
+pub async fn proxy_filer_write(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::PUT,
+        "write",
+        None,
+        &headers,
+        body,
+    )
+    .await
+}
+
+/// POST /api/peers/{name}/filer/mkdir
+pub async fn proxy_filer_mkdir(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::POST,
+        "mkdir",
+        None,
+        &headers,
+        body,
+    )
+    .await
+}
+
+/// POST /api/peers/{name}/filer/rename
+pub async fn proxy_filer_rename(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::POST,
+        "rename",
+        None,
+        &headers,
+        body,
+    )
+    .await
+}
+
+/// POST /api/peers/{name}/filer/upload
+pub async fn proxy_filer_upload(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    // Only forward Content-Type (needed for multipart boundary), not the full incoming header map
+    let mut fwd_headers = HeaderMap::new();
+    if let Some(ct) = headers.get("content-type") {
+        fwd_headers.insert("content-type", ct.clone());
+    }
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::POST,
+        "upload",
+        None,
+        &fwd_headers,
+        body,
+    )
+    .await
+}
+
+/// DELETE /api/peers/{name}/filer/delete
+pub async fn proxy_filer_delete(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, StatusCode> {
+    proxy_filer(
+        &state,
+        &peer_name,
+        reqwest::Method::DELETE,
+        "delete",
+        query.as_deref(),
+        &HeaderMap::new(),
+        Default::default(),
+    )
+    .await
 }
