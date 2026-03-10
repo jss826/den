@@ -7,7 +7,12 @@ use den::pty::registry::{ClientKind, RegistryError, SessionRegistry, SharedSessi
 use den::store::SleepPreventionMode;
 
 fn new_registry() -> Arc<SessionRegistry> {
-    SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30)
+    SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    )
 }
 
 fn session_name(test: &str) -> String {

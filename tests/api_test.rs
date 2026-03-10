@@ -31,7 +31,12 @@ fn test_config() -> Config {
 fn test_app() -> axum::Router {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store)
 }
 
@@ -302,7 +307,12 @@ async fn settings_get_default() {
 async fn settings_put_and_get() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT
@@ -371,7 +381,12 @@ async fn settings_put_invalid_json() {
 async fn settings_put_partial_json() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT with only some fields — serde should use defaults for missing fields
@@ -412,7 +427,12 @@ async fn settings_put_requires_auth() {
 async fn settings_ssh_bookmarks_roundtrip() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     let req = Request::builder()
@@ -1070,7 +1090,12 @@ async fn clipboard_history_get_empty() {
 async fn clipboard_history_post_and_get() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // POST
@@ -1111,7 +1136,12 @@ async fn clipboard_history_post_and_get() {
 async fn clipboard_history_dedup() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // Add two entries
@@ -1153,7 +1183,12 @@ async fn clipboard_history_dedup() {
 async fn clipboard_history_delete() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // Add an entry
@@ -1299,7 +1334,12 @@ async fn keep_awake_get_default() {
 async fn keep_awake_put_and_get() {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
 
     // PUT true — response body should confirm the state

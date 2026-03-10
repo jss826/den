@@ -208,6 +208,8 @@ pub struct SessionRegistry {
     last_activity: Arc<AtomicU64>,
     /// Instance ID for self-connection detection (set in DEN_INSTANCE env var)
     instance_id: String,
+    /// Store for session persistence
+    store: Option<crate::store::Store>,
 }
 
 /// 1 つの名前付き PTY セッション
@@ -312,7 +314,12 @@ fn now_epoch_secs() -> u64 {
 }
 
 impl SessionRegistry {
-    pub fn new(shell: String, sleep_mode: SleepPreventionMode, sleep_timeout: u16) -> Arc<Self> {
+    pub fn new(
+        shell: String,
+        sleep_mode: SleepPreventionMode,
+        sleep_timeout: u16,
+        store: Option<crate::store::Store>,
+    ) -> Arc<Self> {
         let last_activity = Arc::new(AtomicU64::new(now_epoch_secs()));
         let sleep_config = Arc::new(std::sync::Mutex::new(SleepConfig {
             mode: sleep_mode,
@@ -337,6 +344,7 @@ impl SessionRegistry {
             sleep_config,
             last_activity,
             instance_id,
+            store,
         });
 
         // always モードなら即座に ON
@@ -622,6 +630,7 @@ impl SessionRegistry {
 
         self.evaluate_sleep_prevention(session_count);
         tracing::info!("Session created: {name}");
+        self.persist_sessions().await;
         Ok((session, first_rx))
     }
 
@@ -900,6 +909,7 @@ impl SessionRegistry {
         }
 
         tracing::info!("Session destroyed: {name}");
+        self.persist_sessions().await;
     }
 
     /// セッション名を変更
@@ -920,7 +930,32 @@ impl SessionRegistry {
             sessions.insert(new_name.to_string(), session);
         }
         tracing::info!("Session renamed: {old_name} -> {new_name}");
+        drop(sessions);
+        self.persist_sessions().await;
         Ok(())
+    }
+
+    /// Persist current session list to disk (best-effort).
+    pub async fn persist_sessions(&self) {
+        let Some(ref store) = self.store else {
+            return;
+        };
+        let sessions = self.sessions.read().await;
+        let records: Vec<crate::store::SessionRecord> = sessions
+            .iter()
+            .map(|(name, session)| crate::store::SessionRecord {
+                name: name.clone(),
+                ssh: session.ssh_config.clone(),
+            })
+            .collect();
+        drop(sessions);
+        let store = store.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = store.save_sessions(&records) {
+                tracing::warn!("Failed to persist sessions: {e}");
+            }
+        })
+        .await;
     }
 
     /// セッションが存在するか
@@ -1165,14 +1200,14 @@ mod tests {
 
     #[tokio::test]
     async fn rename_session_not_found() {
-        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0);
+        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0, None);
         let err = registry.rename("nonexistent", "new").await.unwrap_err();
         assert!(matches!(err, RegistryError::NotFound(_)));
     }
 
     #[tokio::test]
     async fn rename_session_invalid_name() {
-        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0);
+        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0, None);
         // Not found takes precedence, but invalid name is checked first
         let err = registry.rename("x", "bad name!").await.unwrap_err();
         assert!(matches!(err, RegistryError::InvalidName(_)));

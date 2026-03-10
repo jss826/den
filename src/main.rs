@@ -1,6 +1,7 @@
 use den::config::Config;
 use den::pty::registry::SessionRegistry;
 use den::store::Store;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -62,14 +63,18 @@ async fn main() {
         config.shell.clone(),
         settings.sleep_prevention_mode,
         settings.sleep_prevention_timeout,
+        Some(store.clone()),
     );
+
+    // Restore sessions from previous run
+    restore_sessions(&registry, &store).await;
 
     // クリップボード監視（Windows: システムクリップボード変更を検知）
     den::clipboard_monitor::start(store.clone());
 
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
     if let Some(ssh_port) = ssh_port {
-        let ssh_registry = std::sync::Arc::clone(&registry);
+        let ssh_registry = Arc::clone(&registry);
         let ssh_password = config.password.clone();
         let ssh_data_dir = config.data_dir.clone();
         let ssh_bind = config.bind_address.clone();
@@ -83,7 +88,8 @@ async fn main() {
         });
     }
 
-    // HTTP サーバー（メイン）
+    // HTTP サーバー（メイン）+ graceful shutdown
+    let shutdown_registry = Arc::clone(&registry);
     let app = den::create_app(config, registry, store);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_address, port))
@@ -92,5 +98,76 @@ async fn main() {
 
     tracing::info!("Listening on http://{}:{}", bind_address, port);
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shutdown_registry))
+        .await
+        .unwrap();
+}
+
+/// Restore sessions from sessions.json on startup.
+async fn restore_sessions(registry: &Arc<SessionRegistry>, store: &Store) {
+    let records = store.load_sessions();
+    if records.is_empty() {
+        return;
+    }
+
+    tracing::info!("Restoring {} session(s) from previous run", records.len());
+
+    for record in records {
+        let ssh_config = record.ssh.clone();
+
+        // Validate SSH fields if present
+        if let Some(ref ssh) = ssh_config
+            && let Err(msg) = den::ws::validate_ssh_fields(ssh)
+        {
+            tracing::warn!("Skipping session '{}': {msg}", record.name);
+            continue;
+        }
+
+        match registry
+            .create_with_ssh(&record.name, 80, 24, ssh_config.clone())
+            .await
+        {
+            Ok((session, _rx)) => {
+                // Inject SSH command if configured
+                if let Some(ref ssh) = ssh_config {
+                    let ssh_cmd = den::ws::build_ssh_command(ssh);
+                    let inject = format!("{}\r", ssh_cmd);
+                    if let Err(e) = session.write_input(inject.as_bytes()).await {
+                        tracing::warn!(
+                            "Failed to inject SSH command for session '{}': {e}",
+                            record.name
+                        );
+                    }
+
+                    // For key/agent auth: inject cd after delay
+                    if ssh.auth_type != den::store::SshAuthType::Password
+                        && let Some(ref dir) = ssh.initial_dir
+                    {
+                        let dir = dir.clone();
+                        let session = Arc::clone(&session);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            let cd_cmd = format!("cd '{}'\r", dir);
+                            if let Err(e) = session.write_input(cd_cmd.as_bytes()).await {
+                                tracing::warn!("Failed to inject cd command: {e}");
+                            }
+                        });
+                    }
+                }
+                tracing::info!("Restored session: {}", record.name);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to restore session '{}': {e}", record.name);
+            }
+        }
+    }
+}
+
+/// Wait for shutdown signal (Ctrl+C) and persist sessions.
+async fn shutdown_signal(registry: Arc<SessionRegistry>) {
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("Shutdown signal received, persisting sessions...");
+    registry.persist_sessions().await;
+    tracing::info!("Sessions persisted. Shutting down.");
 }

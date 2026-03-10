@@ -235,7 +235,7 @@ fn contains_shell_meta(s: &str) -> bool {
 }
 
 /// Validate SSH config fields for safe shell injection.
-fn validate_ssh_fields(ssh: &SshSessionConfig) -> Result<(), &'static str> {
+pub fn validate_ssh_fields(ssh: &SshSessionConfig) -> Result<(), &'static str> {
     if contains_shell_meta(&ssh.host) || ssh.host.is_empty() {
         return Err("invalid ssh host");
     }
@@ -256,7 +256,7 @@ fn validate_ssh_fields(ssh: &SshSessionConfig) -> Result<(), &'static str> {
 
 /// Build the SSH command to inject into the PTY.
 /// All fields must be pre-validated via `validate_ssh_fields`.
-fn build_ssh_command(ssh: &SshSessionConfig) -> String {
+pub fn build_ssh_command(ssh: &SshSessionConfig) -> String {
     let mut cmd = String::from("ssh");
     if ssh.port != 22 {
         cmd.push_str(&format!(" -p {}", ssh.port));

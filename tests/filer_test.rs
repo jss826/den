@@ -31,7 +31,12 @@ fn test_config() -> Config {
 fn test_app() -> axum::Router {
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store)
 }
 
@@ -44,7 +49,12 @@ fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::TempDir::new().unwrap();
     let config = test_config();
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
-    let registry = SessionRegistry::new("powershell.exe".to_string(), SleepPreventionMode::Off, 30);
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
     let app = den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
     (app, dir)
 }

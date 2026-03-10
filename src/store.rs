@@ -85,6 +85,14 @@ fn default_ssh_port() -> u16 {
     22
 }
 
+/// Persisted session record for restart recovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<crate::pty::registry::SshSessionConfig>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeybarButton {
     #[serde(default)]
@@ -331,6 +339,29 @@ impl Store {
         fs::write(path, json)?;
         *cache = Some(Vec::new());
         Ok(())
+    }
+
+    // --- Session Records ---
+
+    pub fn load_sessions(&self) -> Vec<SessionRecord> {
+        let path = self.root.join("sessions.json");
+        match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Corrupt sessions.json, using empty: {e}");
+                Vec::new()
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                tracing::warn!("Failed to read sessions.json: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn save_sessions(&self, sessions: &[SessionRecord]) -> std::io::Result<()> {
+        let path = self.root.join("sessions.json");
+        let json = serde_json::to_string_pretty(sessions).map_err(std::io::Error::other)?;
+        fs::write(path, json)
     }
 
     // --- SSH Known Hosts ---
