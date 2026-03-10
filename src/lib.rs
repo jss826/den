@@ -83,7 +83,7 @@ pub fn create_app_with_secret(
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
-    // 認証必要のルート（Cookie / Authorization ヘッダーで認証）
+    // 認証必要のルート（Cookie / Authorization ヘッダー / peer token で認証）
     let protected_routes = Router::new()
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
@@ -137,7 +137,8 @@ pub fn create_app_with_secret(
         .route("/api/peers/join", post(peer::join))
         .route("/api/peers", get(peer::list_peers))
         .route("/api/peers/{name}", delete(peer::delete_peer))
-        // System update API (user-only)
+        // System update API
+        .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))
         .route(
             "/api/sftp/known-hosts",
@@ -150,17 +151,8 @@ pub fn create_app_with_secret(
             auth::auth_middleware,
         ));
 
-    // Routes accessible by both user tokens and peer tokens (health check)
-    let peer_accessible_routes = Router::new()
-        .route("/api/system/version", get(update::get_version))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            auth::peer_or_user_auth_middleware,
-        ));
-
     let router = Router::new()
         .merge(protected_routes)
-        .merge(peer_accessible_routes)
         .merge(public_routes)
         // CSP ヘッダーを全レスポンスに付与（XSS 防止）
         .layer(middleware::from_fn(auth::csp_middleware))
