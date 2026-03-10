@@ -9,7 +9,9 @@ use russh::{ChannelId, CryptoVec, Pty};
 use tokio::net::TcpListener;
 
 use crate::auth::constant_time_eq;
+use crate::peer::{PeerRegistry, PeerStatus};
 use crate::pty::registry::{ClientKind, SessionRegistry, SharedSession};
+use crate::store::{PeerConfig, Store};
 
 /// SSH セッション非アクティブタイムアウト（1時間）
 /// `claude -p` 等の長時間コマンドでも切断されないよう余裕を持たせる。
@@ -85,6 +87,8 @@ pub async fn run(
     port: u16,
     data_dir: String,
     bind_address: String,
+    store: Store,
+    peer_registry: Arc<PeerRegistry>,
 ) -> anyhow::Result<()> {
     // ホストキー読み込み/生成
     let host_key = super::keys::load_or_generate_host_key(std::path::Path::new(&data_dir))?;
@@ -113,6 +117,8 @@ pub async fn run(
         instance_id,
         loopback_count: Arc::new(AtomicUsize::new(0)),
         ssh_port: port,
+        store,
+        peer_registry,
     };
 
     let addr = format!("{bind_address}:{port}");
@@ -132,6 +138,8 @@ struct DenSshServer {
     instance_id: String,
     loopback_count: Arc<AtomicUsize>,
     ssh_port: u16,
+    store: Store,
+    peer_registry: Arc<PeerRegistry>,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -153,6 +161,8 @@ impl russh::server::Server for DenSshServer {
             loopback_count: Arc::clone(&self.loopback_count),
             peer_addr: addr,
             ssh_port: self.ssh_port,
+            store: self.store.clone(),
+            peer_registry: Arc::clone(&self.peer_registry),
             session_name: None,
             client_id: None,
             channel_id: None,
@@ -163,6 +173,8 @@ impl russh::server::Server for DenSshServer {
             pty_requested: false,
             escape_state: EscapeState::default(),
             connected_at: None,
+            is_remote: false,
+            remote_ws_tx: None,
         }
     }
 }
@@ -178,6 +190,9 @@ struct DenSshHandler {
     loopback_count: Arc<AtomicUsize>,
     peer_addr: Option<std::net::SocketAddr>,
     ssh_port: u16,
+    // Peer networking
+    store: Store,
+    peer_registry: Arc<PeerRegistry>,
     // Per-connection state
     session_name: Option<String>,
     client_id: Option<u64>,
@@ -189,7 +204,22 @@ struct DenSshHandler {
     pty_requested: bool,
     escape_state: EscapeState,
     connected_at: Option<std::time::Instant>,
+    /// Whether the current session is a remote peer session
+    is_remote: bool,
+    /// WebSocket sender for remote peer sessions (SSH → remote WS)
+    remote_ws_tx: Option<RemoteWsTx>,
 }
+
+type RemoteWsTx = Arc<
+    tokio::sync::Mutex<
+        futures::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            tokio_tungstenite::tungstenite::Message,
+        >,
+    >,
+>;
 
 impl DenSshHandler {
     /// セッションに attach して I/O ブリッジを開始
@@ -374,6 +404,228 @@ impl DenSshHandler {
         Ok(())
     }
 
+    /// Look up a connected peer by name
+    fn lookup_connected_peer(&self, peer_name: &str) -> Option<PeerConfig> {
+        let settings = self.store.load_settings();
+        let peers = settings.peers.unwrap_or_default();
+        let peer = peers.into_iter().find(|p| p.name == peer_name)?;
+
+        // Only allow connected peers
+        let (status, _, _) = self.peer_registry.get_health(&peer.name).unwrap_or((
+            PeerStatus::Disconnected,
+            None,
+            None,
+        ));
+        if status != PeerStatus::Connected {
+            return None;
+        }
+        Some(peer)
+    }
+
+    /// Start a remote bridge: SSH channel ↔ WebSocket relay to a peer
+    async fn start_remote_bridge(
+        &mut self,
+        peer: &PeerConfig,
+        session_name: &str,
+        session: &mut Session,
+    ) -> Result<(), anyhow::Error> {
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::{Message as TungMessage, client::IntoClientRequest};
+
+        let channel_id = self
+            .channel_id
+            .ok_or_else(|| anyhow::anyhow!("No channel"))?;
+
+        let display_name = format!("{}:{}", peer.name, session_name);
+
+        // Build remote WS URL
+        let base = peer.url.trim_end_matches('/');
+        let ws_base = if base.starts_with("https://") {
+            base.replacen("https://", "wss://", 1)
+        } else {
+            base.replacen("http://", "ws://", 1)
+        };
+        let cols = self.pty_cols;
+        let rows = self.pty_rows;
+        let url = format!(
+            "{}/api/ws?session={}&cols={}&rows={}",
+            ws_base, session_name, cols, rows
+        );
+
+        // Build request with auth header
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| anyhow::anyhow!("Invalid WS URL: {e}"))?;
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", peer.token)
+                .parse()
+                .expect("valid header value"),
+        );
+
+        // Connect to remote WS
+        let (remote_ws, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to peer {}: {e}", peer.name))?;
+
+        tracing::info!(
+            "SSH remote bridge established: {} → {}",
+            display_name,
+            peer.name
+        );
+
+        self.session_name = Some(display_name.clone());
+        self.connected_at = Some(std::time::Instant::now());
+        self.escape_state = EscapeState::AfterNewline;
+        self.is_remote = true;
+
+        // Clear screen and set title
+        let osc_title: Vec<u8> = format!("\x1b]0;Den SSH [{display_name}]\x07").into_bytes();
+        session.data(channel_id, CryptoVec::from_slice(b"\x1b[2J\x1b[H"))?;
+        session.data(channel_id, CryptoVec::from_slice(&osc_title))?;
+
+        // Split WS
+        let (remote_tx, mut remote_rx) = remote_ws.split();
+        let remote_tx = Arc::new(tokio::sync::Mutex::new(remote_tx));
+
+        // Store remote_tx for input forwarding
+        let remote_tx_for_input = Arc::clone(&remote_tx);
+
+        // Output: remote WS → SSH channel
+        let handle = session.handle();
+        self.output_task = Some(tokio::spawn(async move {
+            while let Some(msg) = remote_rx.next().await {
+                match msg {
+                    Ok(TungMessage::Binary(data)) => {
+                        let filtered = filter_output_for_ssh(&data);
+                        let filtered = replace_osc_title(&filtered, &osc_title);
+                        if filtered.is_empty() {
+                            continue;
+                        }
+                        if handle
+                            .data(channel_id, CryptoVec::from_slice(&filtered))
+                            .await
+                            .is_err()
+                        {
+                            tracing::debug!(
+                                "SSH remote output: handle.data() failed for {display_name}"
+                            );
+                            break;
+                        }
+                    }
+                    Ok(TungMessage::Text(text)) => {
+                        // Check for session_ended from remote
+                        if text.contains("session_ended") {
+                            let _ = handle.exit_status_request(channel_id, 0).await;
+                            let _ = handle.eof(channel_id).await;
+                            let _ = handle.close(channel_id).await;
+                            break;
+                        }
+                    }
+                    Ok(TungMessage::Close(_)) | Err(_) => {
+                        let _ = handle.exit_status_request(channel_id, 0).await;
+                        let _ = handle.eof(channel_id).await;
+                        let _ = handle.close(channel_id).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            // Close remote WS
+            let mut tx = remote_tx.lock().await;
+            let _ = tx.close().await;
+            tracing::debug!("SSH remote output ended for {display_name}");
+        }));
+
+        // Store the remote_tx for use in data() handler
+        self.shared_session = None;
+        self.client_id = None;
+        // We use a separate channel to pass remote_tx to the data handler.
+        // Since russh Handler methods take &mut self, we store it directly.
+        self.remote_ws_tx = Some(remote_tx_for_input);
+
+        Ok(())
+    }
+
+    /// Parse `peer:session` format and route to local or remote bridge
+    async fn attach_or_remote(
+        &mut self,
+        name: &str,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), anyhow::Error> {
+        if let Some((peer_name, session_name)) = name.split_once(':') {
+            // Remote peer session
+            let peer = match self.lookup_connected_peer(peer_name) {
+                Some(p) => p,
+                None => {
+                    let msg = format!("Peer not found or not connected: {peer_name}\r\n");
+                    session.data(channel, CryptoVec::from_slice(msg.as_bytes()))?;
+                    session.close(channel)?;
+                    return Ok(());
+                }
+            };
+            if session_name.is_empty() {
+                session.data(
+                    channel,
+                    CryptoVec::from_slice(b"Missing session name after ':'\r\n"),
+                )?;
+                session.close(channel)?;
+                return Ok(());
+            }
+            self.start_remote_bridge(&peer, session_name, session)
+                .await?;
+        } else {
+            self.start_bridge(name, session).await?;
+        }
+        Ok(())
+    }
+
+    /// Fetch session lists from all connected peers
+    async fn fetch_remote_sessions(&self) -> Vec<(String, Vec<serde_json::Value>)> {
+        let settings = self.store.load_settings();
+        let peers = settings.peers.unwrap_or_default();
+
+        let mut results = Vec::new();
+        for peer in &peers {
+            let (status, _, _) = self.peer_registry.get_health(&peer.name).unwrap_or((
+                PeerStatus::Disconnected,
+                None,
+                None,
+            ));
+            if status != PeerStatus::Connected {
+                continue;
+            }
+
+            let client = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .danger_accept_invalid_certs(true)
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let url = format!("{}/api/terminal/sessions", peer.url.trim_end_matches('/'));
+            match client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", peer.token))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(sessions) = resp.json::<Vec<serde_json::Value>>().await
+                        && !sessions.is_empty()
+                    {
+                        results.push((peer.name.clone(), sessions));
+                    }
+                }
+                _ => {}
+            }
+        }
+        results
+    }
+
     /// Filter and forward buffered bytes to the PTY.
     async fn flush_to_pty(
         shared: &SharedSession,
@@ -451,10 +703,21 @@ impl DenSshHandler {
 
     /// cleanup: detach + output_task abort
     async fn cleanup(&mut self) {
-        if let (Some(name), Some(client_id)) = (self.session_name.take(), self.client_id.take()) {
-            self.registry.detach(&name, client_id).await;
+        if !self.is_remote {
+            if let (Some(name), Some(client_id)) = (self.session_name.take(), self.client_id.take())
+            {
+                self.registry.detach(&name, client_id).await;
+            }
+        } else {
+            self.session_name.take();
         }
         self.shared_session.take();
+        // Close remote WS if present
+        if let Some(remote_tx) = self.remote_ws_tx.take() {
+            use futures::SinkExt;
+            let mut tx = remote_tx.lock().await;
+            let _ = tx.close().await;
+        }
         if let Some(task) = self.output_task.take() {
             task.abort();
         }
@@ -594,13 +857,15 @@ impl Handler for DenSshHandler {
 
         match parts.first().copied() {
             Some("list") => {
-                // セッション一覧をテキストで返す
+                // セッション一覧をテキストで返す（ローカル + リモートピア）
                 session.channel_success(channel)?;
                 let sessions = self.registry.list().await;
                 let mut output = String::new();
-                if sessions.is_empty() {
-                    output.push_str("No active sessions\r\n");
-                } else {
+                let mut has_any = false;
+
+                // Local sessions
+                if !sessions.is_empty() {
+                    has_any = true;
                     output.push_str("Sessions:\r\n");
                     for s in &sessions {
                         let status = if s.alive { "alive" } else { "dead" };
@@ -610,6 +875,23 @@ impl Handler for DenSshHandler {
                         ));
                     }
                 }
+
+                // Remote peer sessions
+                let remote = self.fetch_remote_sessions().await;
+                if !remote.is_empty() {
+                    has_any = true;
+                    for (peer_name, peer_sessions) in &remote {
+                        for s in peer_sessions {
+                            let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                            output.push_str(&format!("  {}:{} (peer)\r\n", peer_name, name));
+                        }
+                    }
+                }
+
+                if !has_any {
+                    output.push_str("No active sessions\r\n");
+                }
+
                 session.data(channel, CryptoVec::from_slice(output.as_bytes()))?;
                 session.close(channel)?;
                 Ok(())
@@ -636,7 +918,7 @@ impl Handler for DenSshHandler {
                     session.close(channel)?;
                     return Ok(());
                 }
-                self.start_bridge(name, session).await?;
+                self.attach_or_remote(name, channel, session).await?;
                 Ok(())
             }
 
@@ -697,9 +979,6 @@ impl Handler for DenSshHandler {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let Some(ref shared) = self.shared_session else {
-            return Ok(());
-        };
         let channel_id = match self.channel_id {
             Some(ch) => ch,
             None => return Ok(()),
@@ -719,22 +998,38 @@ impl Handler for DenSshHandler {
                     session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
                 }
                 EscapeCommand::ForceRedraw => {
-                    if let Some(client_id) = self.client_id {
-                        // Force a redraw by sending a nudge resize
+                    if !self.is_remote
+                        && let (Some(shared), Some(client_id)) =
+                            (&self.shared_session, self.client_id)
+                    {
                         shared.nudge_resize(client_id).await;
                     }
                 }
             }
         }
 
-        // Forward remaining bytes to PTY
-        Self::flush_to_pty(
-            shared,
-            self.client_id,
-            self.session_name.as_deref(),
-            &forward,
-        )
-        .await;
+        if forward.is_empty() {
+            return Ok(());
+        }
+
+        if self.is_remote {
+            // Forward to remote peer via WebSocket
+            if let Some(ref remote_tx) = self.remote_ws_tx {
+                use futures::SinkExt;
+                use tokio_tungstenite::tungstenite::Message as TungMessage;
+                let mut tx = remote_tx.lock().await;
+                let _ = tx.send(TungMessage::Binary(forward.into())).await;
+            }
+        } else if let Some(ref shared) = self.shared_session {
+            // Forward to local PTY
+            Self::flush_to_pty(
+                shared,
+                self.client_id,
+                self.session_name.as_deref(),
+                &forward,
+            )
+            .await;
+        }
 
         Ok(())
     }
@@ -751,7 +1046,19 @@ impl Handler for DenSshHandler {
         self.pty_cols = col_width as u16;
         self.pty_rows = row_height as u16;
 
-        if let (Some(session), Some(client_id)) = (&self.shared_session, self.client_id) {
+        if self.is_remote {
+            // Send resize command to remote peer via WebSocket
+            if let Some(ref remote_tx) = self.remote_ws_tx {
+                use futures::SinkExt;
+                use tokio_tungstenite::tungstenite::Message as TungMessage;
+                let json = format!(
+                    r#"{{"type":"resize","cols":{},"rows":{}}}"#,
+                    col_width, row_height
+                );
+                let mut tx = remote_tx.lock().await;
+                let _ = tx.send(TungMessage::Text(json.into())).await;
+            }
+        } else if let (Some(session), Some(client_id)) = (&self.shared_session, self.client_id) {
             session
                 .resize(client_id, col_width as u16, row_height as u16)
                 .await;
@@ -785,13 +1092,24 @@ impl Drop for DenSshHandler {
         }
 
         // Drop 時に cleanup できない（async）のでタスクを spawn
-        let session_name = self.session_name.take();
-        let client_id = self.client_id.take();
-        let registry = Arc::clone(&self.registry);
+        if !self.is_remote {
+            let session_name = self.session_name.take();
+            let client_id = self.client_id.take();
+            let registry = Arc::clone(&self.registry);
 
-        if let (Some(name), Some(id)) = (session_name, client_id) {
+            if let (Some(name), Some(id)) = (session_name, client_id) {
+                tokio::spawn(async move {
+                    registry.detach(&name, id).await;
+                });
+            }
+        }
+
+        // Close remote WS sender
+        if let Some(remote_tx) = self.remote_ws_tx.take() {
             tokio::spawn(async move {
-                registry.detach(&name, id).await;
+                use futures::SinkExt;
+                let mut tx = remote_tx.lock().await;
+                let _ = tx.close().await;
             });
         }
 

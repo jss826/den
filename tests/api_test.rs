@@ -41,7 +41,13 @@ fn test_app_with_state() -> (axum::Router, std::sync::Arc<den::AppState>) {
         30,
         None,
     );
-    den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store)
+    den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    )
 }
 
 fn auth_header() -> String {
@@ -317,8 +323,13 @@ async fn settings_put_and_get() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     // PUT
     let req = Request::builder()
@@ -392,8 +403,13 @@ async fn settings_put_partial_json() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     // PUT with only some fields — serde should use defaults for missing fields
     let req = Request::builder()
@@ -439,8 +455,13 @@ async fn settings_ssh_bookmarks_roundtrip() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     let req = Request::builder()
         .method("PUT")
@@ -1103,8 +1124,13 @@ async fn clipboard_history_post_and_get() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     // POST
     let req = Request::builder()
@@ -1150,8 +1176,13 @@ async fn clipboard_history_dedup() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     // Add two entries
     for text in ["first", "second"] {
@@ -1198,8 +1229,13 @@ async fn clipboard_history_delete() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     // Add an entry
     let req = Request::builder()
@@ -1350,8 +1386,13 @@ async fn keep_awake_put_and_get() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     // PUT true — response body should confirm the state
     let req = Request::builder()
@@ -1756,8 +1797,13 @@ async fn settings_peer_name_roundtrip() {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
 
     let req = Request::builder()
         .method("PUT")

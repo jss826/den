@@ -37,7 +37,14 @@ fn test_app() -> axum::Router {
         30,
         None,
     );
-    den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store).0
+    den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    )
+    .0
 }
 
 fn auth_header() -> String {
@@ -55,8 +62,13 @@ fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
         30,
         None,
     );
-    let (app, _state) =
-        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store);
+    let (app, _state) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+    );
     (app, dir)
 }
 

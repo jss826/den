@@ -123,7 +123,7 @@ impl PeerRegistry {
     }
 
     /// Get health state for a peer
-    fn get_health(&self, name: &str) -> Option<(PeerStatus, Option<String>, Option<u64>)> {
+    pub fn get_health(&self, name: &str) -> Option<(PeerStatus, Option<String>, Option<u64>)> {
         let states = self.health_states.lock().unwrap();
         states
             .get(name)

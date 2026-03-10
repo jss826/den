@@ -72,16 +72,34 @@ async fn main() {
     // クリップボード監視（Windows: システムクリップボード変更を検知）
     den::clipboard_monitor::start(store.clone());
 
+    // PeerRegistry を先に作成（SSH サーバーと HTTP サーバーで共有）
+    let peer_registry = Arc::new(den::peer::PeerRegistry::new());
+    {
+        let settings = store.load_settings();
+        if let Some(peers) = &settings.peers {
+            peer_registry.init_health_states(peers);
+        }
+    }
+
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
     if let Some(ssh_port) = ssh_port {
         let ssh_registry = Arc::clone(&registry);
         let ssh_password = config.password.clone();
         let ssh_data_dir = config.data_dir.clone();
         let ssh_bind = config.bind_address.clone();
+        let ssh_store = store.clone();
+        let ssh_peer_registry = Arc::clone(&peer_registry);
         tokio::spawn(async move {
-            if let Err(e) =
-                den::ssh::server::run(ssh_registry, ssh_password, ssh_port, ssh_data_dir, ssh_bind)
-                    .await
+            if let Err(e) = den::ssh::server::run(
+                ssh_registry,
+                ssh_password,
+                ssh_port,
+                ssh_data_dir,
+                ssh_bind,
+                ssh_store,
+                ssh_peer_registry,
+            )
+            .await
             {
                 tracing::error!("SSH server error: {e}");
             }
@@ -90,7 +108,7 @@ async fn main() {
 
     // HTTP サーバー（メイン）+ graceful shutdown
     let shutdown_registry = Arc::clone(&registry);
-    let (app, app_state) = den::create_app(config, registry, store);
+    let (app, app_state) = den::create_app(config, registry, store, peer_registry);
 
     // Start peer health check background task
     den::peer::spawn_health_check(Arc::clone(&app_state));

@@ -29,7 +29,7 @@ pub struct AppState {
     pub hmac_secret: Vec<u8>,
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
-    pub peer_registry: peer::PeerRegistry,
+    pub peer_registry: Arc<peer::PeerRegistry>,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -37,11 +37,12 @@ pub fn create_app(
     config: Config,
     registry: Arc<SessionRegistry>,
     store: Store,
+    peer_registry: Arc<peer::PeerRegistry>,
 ) -> (Router, Arc<AppState>) {
     // 起動ごとにランダムな HMAC シークレットを生成
     // 再起動で全トークンが無効化される（セキュリティ上望ましい）
     let hmac_secret: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
-    create_app_with_secret(config, registry, hmac_secret, store)
+    create_app_with_secret(config, registry, hmac_secret, store, peer_registry)
 }
 
 /// テスト用: 固定シークレットで Router を構築
@@ -50,19 +51,13 @@ pub fn create_app_with_secret(
     registry: Arc<SessionRegistry>,
     hmac_secret: Vec<u8>,
     store: Store,
+    peer_registry: Arc<peer::PeerRegistry>,
 ) -> (Router, Arc<AppState>) {
     // NOTE: 永続化状態を追加する場合は、ここでスタートアップ時の整合性チェックを実装すること。
     // 例: 前回の異常終了で中断状態のままのリソースをリセットする（orphaned state cleanup）。
     // 以前はセッション永続化に対して store.cleanup_stale_running_sessions() を呼んでいた。
 
     let sftp_manager = sftp::client::SftpManager::new(store.clone());
-    let peer_registry = peer::PeerRegistry::new();
-
-    // Initialize health states for existing peers
-    let settings = store.load_settings();
-    if let Some(peers) = &settings.peers {
-        peer_registry.init_health_states(peers);
-    }
 
     let state = Arc::new(AppState {
         config,
