@@ -17,6 +17,8 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **Snippets** — one-click command input from customizable snippet list
 - **Clipboard History** — automatic clipboard tracking with system clipboard monitoring where available
 - **Authentication** — HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
+- **Self-Update** — check for updates and apply from the Settings panel (downloads from GitHub Releases)
+- **Session Persistence** — terminal sessions survive restarts; SSH bookmark sessions auto-reconnect
 - **Server-side Persistence** — settings and session history saved to JSON files
 - **Accessibility** — ARIA attributes, focus-visible, keyboard navigation, prefers-reduced-motion
 - **Mobile Support** — sidebar toggle, iPad keyboard layout, clipboard fallback for HTTP LAN access
