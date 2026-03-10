@@ -447,7 +447,7 @@ pub fn spawn_health_check(state: Arc<AppState>) {
                     Ok(resp) if resp.status().is_success() => {
                         let latency = start.elapsed().as_millis() as u64;
                         let version = resp.json::<serde_json::Value>().await.ok().and_then(|v| {
-                            v.get("version").and_then(|v| v.as_str()).map(String::from)
+                            v.get("current").and_then(|v| v.as_str()).map(String::from)
                         });
                         state
                             .peer_registry
