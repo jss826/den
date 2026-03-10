@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::port_forward::PortInfo;
 use crate::pty::registry::{ClientKind, RegistryError, SessionInfo, SshSessionConfig};
 use crate::store::SshAuthType;
 
@@ -354,6 +355,85 @@ pub async fn destroy_session(
 ) -> StatusCode {
     state.registry.destroy(&name).await;
     StatusCode::NO_CONTENT
+}
+
+// --- Port forwarding API ---
+
+/// GET /api/terminal/sessions/{name}/ports
+pub async fn list_ports(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let Some(session) = state.registry.get(&name).await else {
+        return (StatusCode::NOT_FOUND, "Session not found").into_response();
+    };
+
+    let ports = session
+        .detected_ports
+        .lock()
+        .map(|ports| {
+            let forwarder = session.port_forwarder.try_lock();
+            ports
+                .iter()
+                .map(|p| PortInfo {
+                    port: p.port,
+                    source: p.source.clone(),
+                    forwarded: forwarder
+                        .as_ref()
+                        .map(|f| f.has_tunnel(p.port))
+                        .unwrap_or(false),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Json(ports).into_response()
+}
+
+/// POST /api/terminal/sessions/{name}/ports/{port}/forward
+pub async fn start_forward(
+    State(state): State<Arc<AppState>>,
+    Path((name, port)): Path<(String, u16)>,
+) -> impl IntoResponse {
+    let Some(session) = state.registry.get(&name).await else {
+        return (StatusCode::NOT_FOUND, "Session not found").into_response();
+    };
+
+    // Verify port is detected
+    let is_detected = session
+        .detected_ports
+        .lock()
+        .map(|ports| ports.iter().any(|p| p.port == port))
+        .unwrap_or(false);
+    if !is_detected {
+        return (StatusCode::NOT_FOUND, "Port not detected in this session").into_response();
+    }
+
+    // For SSH sessions, create a tunnel
+    if let Some(ref ssh_config) = session.ssh_config {
+        let mut forwarder = session.port_forwarder.lock().await;
+        if let Err(e) = forwarder.start_tunnel(port, &name, ssh_config).await {
+            return (StatusCode::BAD_REQUEST, e).into_response();
+        }
+    }
+    // For local sessions, no tunnel needed — /fwd/{port}/ proxies directly
+
+    StatusCode::CREATED.into_response()
+}
+
+/// DELETE /api/terminal/sessions/{name}/ports/{port}/forward
+pub async fn stop_forward(
+    State(state): State<Arc<AppState>>,
+    Path((name, port)): Path<(String, u16)>,
+) -> impl IntoResponse {
+    let Some(session) = state.registry.get(&name).await else {
+        return (StatusCode::NOT_FOUND, "Session not found").into_response();
+    };
+
+    let mut forwarder = session.port_forwarder.lock().await;
+    forwarder.stop_tunnel(port).await;
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// Strip mouse sequences from input (defense-in-depth; frontend filters first).

@@ -10,6 +10,8 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::manager::PtyManager;
 use super::ring_buffer::RingBuffer;
+use crate::port_detection::DetectedPort;
+use crate::port_forward::PortForwarder;
 use crate::store::{SleepPreventionMode, SshAuthType};
 
 /// SessionRegistry の操作エラー
@@ -226,8 +228,12 @@ pub struct SharedSession {
     pub inner: Mutex<SessionInner>,
     /// ユーザー操作タイムスタンプ（Registry と共有、AtomicU64 で lock-free 更新）
     last_activity: Arc<AtomicU64>,
-    /// SSH connection config (for port forwarding in Phase 2)
-    ssh_config: Option<SshSessionConfig>,
+    /// SSH connection config (for port forwarding)
+    pub ssh_config: Option<SshSessionConfig>,
+    /// Ports detected from PTY output
+    pub detected_ports: Arc<std::sync::Mutex<Vec<DetectedPort>>>,
+    /// SSH tunnel manager for port forwarding
+    pub port_forwarder: Arc<Mutex<PortForwarder>>,
 }
 
 pub struct SessionInner {
@@ -296,6 +302,15 @@ pub struct SessionInfo {
     pub client_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_host: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub detected_ports: Vec<PortInfoCompact>,
+}
+
+/// Compact port info for session list.
+#[derive(Serialize)]
+pub struct PortInfoCompact {
+    pub port: u16,
+    pub forwarded: bool,
 }
 
 /// セッション名バリデーション: 英数字 + ハイフンのみ、最大 64 文字
@@ -440,6 +455,9 @@ impl SessionRegistry {
             // master はここで drop → ClosePseudoConsole → OpenConsole.exe 終了
         });
 
+        let detected_ports = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let port_forwarder = Arc::new(Mutex::new(PortForwarder::new()));
+
         let session = Arc::new(SharedSession {
             name: name.to_string(),
             created_at: Utc::now(),
@@ -448,6 +466,8 @@ impl SessionRegistry {
             output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
             last_activity,
             ssh_config,
+            detected_ports: Arc::clone(&detected_ports),
+            port_forwarder,
             inner: Mutex::new(SessionInner {
                 pty_writer,
                 resize_tx: Some(resize_tx),
@@ -461,6 +481,9 @@ impl SessionRegistry {
                 child: Some(child),
             }),
         });
+
+        // Subscribe for port detection before moving output_tx into read_task
+        let port_detect_rx = output_tx.subscribe();
 
         // PTY read_task: 出力を replay buffer + broadcast に流す
         let session_for_read = Arc::clone(&session);
@@ -527,6 +550,13 @@ impl SessionRegistry {
                 .store(false, std::sync::atomic::Ordering::Release);
             session_for_monitor.output_tx.lock().unwrap().take();
         });
+
+        // Port detection task: scan PTY output for port patterns
+        let _port_detect_handle = crate::port_detection::spawn_detection_task(
+            name.to_string(),
+            port_detect_rx,
+            detected_ports,
+        );
 
         (session, first_rx, monitor_handle)
     }
@@ -824,17 +854,40 @@ impl SessionRegistry {
         let mut result = Vec::with_capacity(session_arcs.len());
         for (name, session) in &session_arcs {
             let inner = session.inner.lock().await;
+            let port_infos = session
+                .detected_ports
+                .lock()
+                .map(|ports| {
+                    let forwarder = session.port_forwarder.try_lock();
+                    ports
+                        .iter()
+                        .map(|p| PortInfoCompact {
+                            port: p.port,
+                            forwarded: forwarder
+                                .as_ref()
+                                .map(|f| f.has_tunnel(p.port))
+                                .unwrap_or(false),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             result.push(SessionInfo {
                 name: name.clone(),
                 created_at: session.created_at,
                 alive: session.is_alive(),
                 client_count: inner.clients.len(),
                 ssh_host: session.ssh_config.as_ref().map(|c| c.host.clone()),
+                detected_ports: port_infos,
             });
         }
 
         result.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         result
+    }
+
+    /// Return raw session Arcs (for port_forward proxy to check detected ports).
+    pub async fn list_sessions_raw(&self) -> Vec<Arc<SharedSession>> {
+        self.sessions.read().await.values().cloned().collect()
     }
 
     /// セッション破棄
@@ -851,6 +904,9 @@ impl SessionRegistry {
         };
 
         self.evaluate_sleep_prevention(session_count);
+
+        // Stop all SSH tunnels for this session
+        session.port_forwarder.lock().await.stop_all().await;
 
         session.alive.store(false, Ordering::Release);
 

@@ -14,6 +14,7 @@ const DenTerminal = (() => {
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
   let lastSentCols = 0;
   let lastSentRows = 0;
+  let lastKnownPorts = {}; // session key → Set of port numbers (for toast dedup)
 
   // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
   // eslint-disable-next-line no-control-regex
@@ -820,8 +821,83 @@ const DenTerminal = (() => {
 
     scheduleSessionTabsLayout();
 
+    // Update port bar with detected ports from sessions
+    updatePortBar(sessions);
+
     // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
+  }
+
+  function updatePortBar(sessions) {
+    const portBar = document.getElementById('port-bar');
+    if (!portBar) return;
+
+    // Collect all detected ports from all sessions
+    const allPorts = [];
+    for (const s of sessions) {
+      if (!s.detected_ports || s.detected_ports.length === 0) continue;
+      const sessionKey = s.peer ? `${s.peer}:${s.name}` : s.name;
+      for (const p of s.detected_ports) {
+        allPorts.push({ ...p, session: s.name, peer: s.peer, sessionKey });
+      }
+    }
+
+    if (allPorts.length === 0) {
+      portBar.hidden = true;
+      return;
+    }
+
+    // Show toast for newly detected ports
+    for (const p of allPorts) {
+      if (!lastKnownPorts[p.sessionKey]) lastKnownPorts[p.sessionKey] = new Set();
+      if (!lastKnownPorts[p.sessionKey].has(p.port)) {
+        lastKnownPorts[p.sessionKey].add(p.port);
+        const label = p.peer ? `${p.peer}:${p.session}` : p.session;
+        Toast.info(`Port ${p.port} detected in ${label}`);
+      }
+    }
+
+    portBar.hidden = false;
+    portBar.innerHTML = '';
+
+    for (const p of allPorts) {
+      const badge = document.createElement('span');
+      badge.className = 'port-badge';
+      badge.title = `${p.source || 'Port ' + p.port} (${p.sessionKey})`;
+
+      const dot = document.createElement('span');
+      dot.className = 'port-dot' + (p.forwarded ? ' forwarded' : '');
+      badge.appendChild(dot);
+
+      const text = document.createTextNode(String(p.port));
+      badge.appendChild(text);
+
+      badge.addEventListener('click', () => onPortClick(p));
+      portBar.appendChild(badge);
+    }
+  }
+
+  async function onPortClick(portInfo) {
+    // For SSH sessions that aren't forwarded yet, start forwarding first
+    if (!portInfo.forwarded && portInfo.peer === null) {
+      // Local session — check if SSH session needs tunnel
+      try {
+        const resp = await fetch(
+          `/api/terminal/sessions/${encodeURIComponent(portInfo.session)}/ports/${portInfo.port}/forward`,
+          { method: 'POST', credentials: 'same-origin' }
+        );
+        if (!resp.ok && resp.status !== 201) {
+          const msg = await resp.text();
+          if (msg && !msg.includes('Password auth')) {
+            Toast.error(`Forward failed: ${msg}`);
+            return;
+          }
+        }
+      } catch { /* ignore — will open directly */ }
+    }
+
+    // Open the forwarded port in a new tab
+    window.open(`/fwd/${portInfo.port}/`, '_blank');
   }
 
   function initSessionBar() {

@@ -517,6 +517,41 @@ html, body {
   height: var(--terminal-session-bar-height);
 }
 
+/* Port bar — detected ports below session bar */
+.port-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  overflow-x: auto;
+}
+.port-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.port-badge:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+.port-badge .port-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9ece6a;
+}
+.port-badge .port-dot.forwarded { background: #7aa2f7; }
+
 .session-tabs {
   display: flex;
   align-items: center;

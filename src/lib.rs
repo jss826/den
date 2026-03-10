@@ -5,6 +5,8 @@ pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
 pub mod peer;
+pub mod port_detection;
+pub mod port_forward;
 pub mod pty;
 pub mod sftp;
 pub mod ssh;
@@ -173,6 +175,32 @@ pub fn create_app_with_secret(
             "/api/peers/{name}/filer/search",
             get(peer::proxy_filer_search),
         )
+        // Port forwarding API
+        .route("/api/terminal/sessions/{name}/ports", get(ws::list_ports))
+        .route(
+            "/api/terminal/sessions/{name}/ports/{port}/forward",
+            post(ws::start_forward).delete(ws::stop_forward),
+        )
+        // HTTP reverse proxy for forwarded ports (all methods)
+        .route(
+            "/fwd/{port}",
+            get(port_forward::fwd_proxy_root)
+                .post(port_forward::fwd_proxy_root)
+                .put(port_forward::fwd_proxy_root)
+                .delete(port_forward::fwd_proxy_root)
+                .patch(port_forward::fwd_proxy_root),
+        )
+        .route(
+            "/fwd/{port}/{*path}",
+            get(port_forward::fwd_proxy)
+                .post(port_forward::fwd_proxy)
+                .put(port_forward::fwd_proxy)
+                .delete(port_forward::fwd_proxy)
+                .patch(port_forward::fwd_proxy),
+        )
+        // WebSocket proxy for forwarded ports
+        .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
+        .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))
