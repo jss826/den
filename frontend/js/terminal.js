@@ -829,14 +829,13 @@ const DenTerminal = (() => {
   }
 
   async function updatePortBar(sessions) {
-    const portBar = document.getElementById('port-bar');
-    if (!portBar) return;
-
-    // Collect all detected ports from all sessions (PTY detection)
+    // Collect SSH session ports (local non-SSH ports are accessible directly)
     const allPorts = [];
     const seenPorts = new Set();
     for (const s of sessions) {
       if (!s.detected_ports || s.detected_ports.length === 0) continue;
+      // Only show ports from SSH sessions (local ports are directly accessible)
+      if (!s.ssh_host && !s.peer) continue;
       const sessionKey = s.peer ? `${s.peer}:${s.name}` : s.name;
       for (const p of s.detected_ports) {
         const key = `${s.peer || ''}:${p.port}`;
@@ -846,21 +845,6 @@ const DenTerminal = (() => {
         }
       }
     }
-
-    // Fetch system-monitored ports (local) and merge
-    try {
-      const resp = await fetch('/api/ports', { credentials: 'same-origin' });
-      if (resp.ok) {
-        const systemPorts = await resp.json();
-        for (const sp of systemPorts) {
-          const key = `:${sp.port}`;
-          if (!seenPorts.has(key) && sp.source === 'system') {
-            seenPorts.add(key);
-            allPorts.push({ port: sp.port, forwarded: false, session: null, peer: null, sessionKey: 'system', source: 'system' });
-          }
-        }
-      }
-    } catch { /* ignore */ }
 
     // Fetch remote peer ports
     for (const peer of (cachedPeers || []).filter(p => p.status === 'connected')) {
@@ -879,46 +863,23 @@ const DenTerminal = (() => {
       } catch { /* ignore */ }
     }
 
-    if (allPorts.length === 0) {
-      portBar.hidden = true;
-      return;
-    }
-
-    // Show toast for newly detected ports
+    // Show clickable toast for newly detected ports
     for (const p of allPorts) {
       if (!lastKnownPorts[p.sessionKey]) lastKnownPorts[p.sessionKey] = new Set();
       if (!lastKnownPorts[p.sessionKey].has(p.port)) {
         lastKnownPorts[p.sessionKey].add(p.port);
         const label = p.peer ? `${p.peer}:${p.port}` : `Port ${p.port}`;
-        Toast.info(`${label} detected`);
+        const portInfo = p;
+        Toast.show(`${label} detected — click to open`, 'info', 5000, {
+          onClick: () => openPort(portInfo),
+        });
       }
-    }
-
-    portBar.hidden = false;
-    portBar.innerHTML = '';
-
-    for (const p of allPorts) {
-      const badge = document.createElement('span');
-      badge.className = 'port-badge';
-      badge.title = `${p.source || 'Port ' + p.port} (${p.sessionKey})`;
-
-      const dot = document.createElement('span');
-      dot.className = 'port-dot' + (p.forwarded ? ' forwarded' : '');
-      badge.appendChild(dot);
-
-      const label = p.peer ? `${p.peer}:${p.port}` : String(p.port);
-      const text = document.createTextNode(label);
-      badge.appendChild(text);
-
-      badge.addEventListener('click', () => onPortClick(p));
-      portBar.appendChild(badge);
     }
   }
 
-  async function onPortClick(portInfo) {
-    // For SSH sessions that aren't forwarded yet, start forwarding first
-    if (!portInfo.forwarded && portInfo.peer === null) {
-      // Local session — check if SSH session needs tunnel
+  async function openPort(portInfo) {
+    // For SSH sessions, start tunnel first
+    if (!portInfo.forwarded && portInfo.peer === null && portInfo.session) {
       try {
         const resp = await fetch(
           `/api/terminal/sessions/${encodeURIComponent(portInfo.session)}/ports/${portInfo.port}/forward`,
@@ -934,7 +895,6 @@ const DenTerminal = (() => {
       } catch { /* ignore — will open directly */ }
     }
 
-    // Open the forwarded port: remote peer → /fwd/{peer}/{port}/, local → /fwd/{port}/
     if (portInfo.peer) {
       window.open(`/fwd/peer/${encodeURIComponent(portInfo.peer)}/${portInfo.port}/`, '_blank');
     } else {
