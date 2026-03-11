@@ -13,6 +13,16 @@ const FloatTerminal = (() => {
   let currentPeer = null; // peer name (null for local sessions)
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
+
+  /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
+  function mergeChunks(chunks) {
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+    return merged;
+  }
   let lastSentCols = 0;
   let lastSentRows = 0;
 
@@ -261,6 +271,13 @@ const FloatTerminal = (() => {
       ws.binaryType = 'arraybuffer';
       let sessionEnded = false;
 
+      // rAF batching: buffer incoming WS binary data and flush once per frame.
+      // null sentinel is used instead of 0 because requestAnimationFrame() is
+      // specified to return a positive integer, but null unambiguously means
+      // "no pending rAF".
+      let writeBuf = [];
+      let writeRaf = null;
+
       ws.onopen = () => {
         if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
         term.focus();
@@ -269,6 +286,8 @@ const FloatTerminal = (() => {
 
       ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
+          // Text branch carries only JSON control messages (e.g. session_ended);
+          // written immediately since batching is not needed here.
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'session_ended') {
@@ -280,12 +299,43 @@ const FloatTerminal = (() => {
           } catch (_) { /* text data */ }
           term.write(event.data);
         } else if (event.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(event.data));
+          writeBuf.push(new Uint8Array(event.data));
+          if (writeRaf === null) {
+            // When the tab is hidden, rAF callbacks are suspended by the browser,
+            // which would cause writeBuf to grow without bound. Fall back to
+            // direct write so data is consumed immediately.
+            if (document.hidden) {
+              const chunks = writeBuf;
+              writeBuf = [];
+              if (chunks.length === 1) {
+                term.write(chunks[0]);
+              } else {
+                const merged = mergeChunks(chunks);
+                term.write(merged);
+              }
+            } else {
+              writeRaf = requestAnimationFrame(() => {
+                const chunks = writeBuf;
+                writeBuf = [];
+                writeRaf = null;
+                if (chunks.length === 1) {
+                  term.write(chunks[0]);
+                } else {
+                  const merged = mergeChunks(chunks);
+                  term.write(merged);
+                }
+              });
+            }
+          }
         }
       };
 
       ws.onclose = () => {
         if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+        // Cancel any pending rAF to prevent stale data from a closed connection
+        // being written to the terminal after reconnect.
+        if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
+        writeBuf = [];
         if (generation !== connectGeneration) return;
         if (sessionEnded) return;
         // Only reconnect if still visible

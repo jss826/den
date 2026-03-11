@@ -20,6 +20,10 @@ use crate::store::SshAuthType;
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Maximum bytes to coalesce before flushing to WebSocket.
+/// Prevents the drain loop from buffering unboundedly under high throughput.
+const MAX_COALESCE_BYTES: usize = 256 * 1024; // 256 KiB
+
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub cols: Option<u16>,
@@ -92,16 +96,33 @@ async fn handle_socket(
         return;
     }
 
-    // broadcast → WS 転送
+    // broadcast → WS 転送（coalescing: burst データを単一 WS メッセージに結合）
     let session_for_output = Arc::clone(&session);
     let name_for_output = session_name.clone();
     let pty_to_ws = async {
+        let mut buf: Vec<u8> = Vec::new();
         loop {
             // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
             // 閉じないため、定期的に alive を確認する
             match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
                 Ok(Ok(data)) => {
-                    if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                    buf.extend_from_slice(&data);
+                    // Non-blocking drain: キューに溜まった追加データを結合（上限あり）
+                    while buf.len() < MAX_COALESCE_BYTES {
+                        match output_rx.try_recv() {
+                            Ok(more) => buf.extend_from_slice(&more),
+                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                                tracing::warn!(
+                                    "WS client burst-drain lagged {n} messages on session {name_for_output}"
+                                );
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                        }
+                    }
+                    let coalesced = std::mem::take(&mut buf);
+                    if ws_tx.send(Message::Binary(coalesced.into())).await.is_err() {
                         break;
                     }
                 }

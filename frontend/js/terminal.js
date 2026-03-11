@@ -12,6 +12,16 @@ const DenTerminal = (() => {
   let peerColorMap = {}; // peer name → color
   let cachedPeers = []; // last fetched peer list
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
+
+  /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
+  function mergeChunks(chunks) {
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+    return merged;
+  }
   let lastSentCols = 0;
   let lastSentRows = 0;
   let lastKnownPorts = {}; // session key → Set of port numbers (for toast dedup)
@@ -337,6 +347,13 @@ const DenTerminal = (() => {
       ws.binaryType = 'arraybuffer';
       let sessionEnded = false;
 
+      // rAF batching: buffer incoming WS binary data and flush once per frame.
+      // null sentinel is used instead of 0 because requestAnimationFrame() is
+      // specified to return a positive integer, but null unambiguously means
+      // "no pending rAF".
+      let writeBuf = [];
+      let writeRaf = null;
+
       ws.onopen = () => {
         retries = 0;
         term.focus();
@@ -345,7 +362,8 @@ const DenTerminal = (() => {
 
       ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
-          // JSON メッセージ
+          // Text branch carries only JSON control messages (e.g. session_ended);
+          // written immediately since batching is not needed here.
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'session_ended') {
@@ -359,11 +377,42 @@ const DenTerminal = (() => {
           }
           term.write(event.data);
         } else if (event.data instanceof ArrayBuffer) {
-          term.write(new Uint8Array(event.data));
+          writeBuf.push(new Uint8Array(event.data));
+          if (writeRaf === null) {
+            // When the tab is hidden, rAF callbacks are suspended by the browser,
+            // which would cause writeBuf to grow without bound. Fall back to
+            // direct write so data is consumed immediately.
+            if (document.hidden) {
+              const chunks = writeBuf;
+              writeBuf = [];
+              if (chunks.length === 1) {
+                term.write(chunks[0]);
+              } else {
+                const merged = mergeChunks(chunks);
+                term.write(merged);
+              }
+            } else {
+              writeRaf = requestAnimationFrame(() => {
+                const chunks = writeBuf;
+                writeBuf = [];
+                writeRaf = null;
+                if (chunks.length === 1) {
+                  term.write(chunks[0]);
+                } else {
+                  const merged = mergeChunks(chunks);
+                  term.write(merged);
+                }
+              });
+            }
+          }
         }
       };
 
       ws.onclose = () => {
+        // Cancel any pending rAF to prevent stale data from a closed connection
+        // being written to the terminal after reconnect.
+        if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
+        writeBuf = [];
         if (generation !== connectGeneration) return;
         // session_ended 後の切断は再接続不要
         if (sessionEnded) return;
