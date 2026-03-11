@@ -81,6 +81,7 @@ fn key_identity(openssh_line: &str) -> String {
 }
 
 /// SSH サーバーを起動
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     registry: Arc<SessionRegistry>,
     password: String,
@@ -89,6 +90,7 @@ pub async fn run(
     bind_address: String,
     store: Store,
     peer_registry: Arc<PeerRegistry>,
+    http_client: reqwest::Client,
 ) -> anyhow::Result<()> {
     // ホストキー読み込み/生成
     let host_key = super::keys::load_or_generate_host_key(std::path::Path::new(&data_dir))?;
@@ -119,6 +121,7 @@ pub async fn run(
         ssh_port: port,
         store,
         peer_registry,
+        http_client,
     };
 
     let addr = format!("{bind_address}:{port}");
@@ -140,6 +143,7 @@ struct DenSshServer {
     ssh_port: u16,
     store: Store,
     peer_registry: Arc<PeerRegistry>,
+    http_client: reqwest::Client,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -163,6 +167,7 @@ impl russh::server::Server for DenSshServer {
             ssh_port: self.ssh_port,
             store: self.store.clone(),
             peer_registry: Arc::clone(&self.peer_registry),
+            http_client: self.http_client.clone(),
             session_name: None,
             client_id: None,
             channel_id: None,
@@ -194,6 +199,7 @@ struct DenSshHandler {
     // Peer networking
     store: Store,
     peer_registry: Arc<PeerRegistry>,
+    http_client: reqwest::Client,
     // Per-connection state
     session_name: Option<String>,
     client_id: Option<u64>,
@@ -655,17 +661,11 @@ impl DenSshHandler {
                 Err(_) => continue,
             };
 
-            let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
             let url = format!("{}/api/peer-rpc", peer.url.trim_end_matches('/'));
-            let resp = match client
+            let resp = match self
+                .http_client
                 .post(&url)
+                .timeout(std::time::Duration::from_secs(5))
                 .header("Content-Type", "application/octet-stream")
                 .header("X-Peer-Name", &my_name)
                 .body(encrypted)

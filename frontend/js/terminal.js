@@ -654,11 +654,7 @@ const DenTerminal = (() => {
   }
 
   async function fetchPeers() {
-    try {
-      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
-      if (resp.ok) return await resp.json();
-    } catch (_) { /* ignore */ }
-    return [];
+    return PeerCache.get();
   }
 
   /** Fetch sessions from local + all connected peers */

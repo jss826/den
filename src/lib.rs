@@ -24,6 +24,7 @@ use axum::{
 use config::Config;
 use pty::registry::SessionRegistry;
 use std::sync::Arc;
+use std::time::Duration;
 use store::Store;
 
 pub struct AppState {
@@ -35,6 +36,10 @@ pub struct AppState {
     pub sftp_manager: sftp::client::SftpManager,
     pub peer_registry: Arc<peer::PeerRegistry>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
+    /// Shared HTTP client for peer RPC (30s default timeout, connection pooling)
+    pub http_client: reqwest::Client,
+    /// HTTP client for loopback dispatch (60s timeout)
+    pub http_client_loopback: reqwest::Client,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -71,6 +76,17 @@ pub fn create_app_with_secret(
     }
     port_monitor.start(exclude_ports);
 
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .pool_max_idle_per_host(4)
+        .build()
+        .expect("Failed to build HTTP client");
+
+    let http_client_loopback = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("Failed to build loopback HTTP client");
+
     let state = Arc::new(AppState {
         config,
         store,
@@ -80,6 +96,8 @@ pub fn create_app_with_secret(
         sftp_manager,
         peer_registry,
         port_monitor,
+        http_client,
+        http_client_loopback,
     });
 
     // 認証不要のルート

@@ -286,31 +286,26 @@ const DenFiler = (() => {
     remoteDropdown = menu;
 
     // Fetch connected peers (async — append after DOM attach)
-    try {
-      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
-      if (remoteDropdown !== menu) return; // closed during fetch
-      if (resp.ok) {
-        const peers = await resp.json();
-        const connected = peers.filter((p) => p.status === 'connected');
-        if (connected.length > 0) {
-          const header = document.createElement('div');
-          header.className = 'new-session-menu-separator';
-          header.textContent = 'Peers';
-          menu.appendChild(header);
+    const peers = await PeerCache.get();
+    if (remoteDropdown !== menu) return; // closed during fetch
+    const connected = peers.filter((p) => p.status === 'connected');
+    if (connected.length > 0) {
+      const header = document.createElement('div');
+      header.className = 'new-session-menu-separator';
+      header.textContent = 'Peers';
+      menu.appendChild(header);
 
-          for (const p of connected) {
-            const item = document.createElement('div');
-            item.className = 'new-session-menu-item';
-            item.textContent = p.name;
-            item.addEventListener('click', () => {
-              closeRemoteDropdown();
-              FilerRemote.connectPeer(p.name);
-            });
-            menu.appendChild(item);
-          }
-        }
+      for (const p of connected) {
+        const item = document.createElement('div');
+        item.className = 'new-session-menu-item';
+        item.textContent = p.name;
+        item.addEventListener('click', () => {
+          closeRemoteDropdown();
+          FilerRemote.connectPeer(p.name);
+        });
+        menu.appendChild(item);
       }
-    } catch { /* ignore */ }
+    }
   }
 
   // --- SSH Bookmarks ---

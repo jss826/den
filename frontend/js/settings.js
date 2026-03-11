@@ -988,6 +988,7 @@ const DenSettings = (() => {
               method: 'DELETE',
               credentials: 'same-origin',
             });
+            PeerCache.invalidate();
             loadPeerList();
           } catch (e) {
             Toast.error('Failed to remove peer');
@@ -1085,6 +1086,7 @@ const DenSettings = (() => {
         const data = await resp.json();
         Toast.success(`Paired with ${data.peer_name}`);
         joinForm.hidden = true;
+        PeerCache.invalidate();
         loadPeerList();
       } catch (e) {
         Toast.error('Failed to join peer');

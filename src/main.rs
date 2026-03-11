@@ -81,6 +81,13 @@ async fn main() {
         }
     }
 
+    // Shared HTTP client for peer RPC (reused across SSH and HTTP servers)
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .pool_max_idle_per_host(4)
+        .build()
+        .expect("Failed to build HTTP client");
+
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
     if let Some(ssh_port) = ssh_port {
         let ssh_registry = Arc::clone(&registry);
@@ -89,6 +96,7 @@ async fn main() {
         let ssh_bind = config.bind_address.clone();
         let ssh_store = store.clone();
         let ssh_peer_registry = Arc::clone(&peer_registry);
+        let ssh_http_client = http_client.clone();
         tokio::spawn(async move {
             if let Err(e) = den::ssh::server::run(
                 ssh_registry,
@@ -98,6 +106,7 @@ async fn main() {
                 ssh_bind,
                 ssh_store,
                 ssh_peer_registry,
+                ssh_http_client,
             )
             .await
             {

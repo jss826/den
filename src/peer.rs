@@ -570,25 +570,25 @@ pub async fn send_encrypted_rpc(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let client = reqwest::Client::builder()
-        .timeout(timeout.unwrap_or(Duration::from_secs(30)))
-        .build()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     let my_name = get_peer_name(state);
     let url = format!("{}/api/peer-rpc", peer.url.trim_end_matches('/'));
 
-    let resp = client
+    let mut req_builder = state
+        .http_client
         .post(&url)
         .header("Content-Type", "application/octet-stream")
         .header("X-Peer-Name", &my_name)
-        .body(encrypted)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!("RPC send to {} failed: {e}", peer.name);
-            StatusCode::BAD_GATEWAY
-        })?;
+        .body(encrypted);
+
+    // Override per-request timeout if specified (e.g. long-running update operations)
+    if let Some(t) = timeout {
+        req_builder = req_builder.timeout(t);
+    }
+
+    let resp = req_builder.send().await.map_err(|e| {
+        tracing::error!("RPC send to {} failed: {e}", peer.name);
+        StatusCode::BAD_GATEWAY
+    })?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -608,6 +608,19 @@ pub async fn send_encrypted_rpc(
     })?;
 
     let status = StatusCode::from_u16(rpc_resp.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+    if status.is_success() {
+        tracing::debug!(
+            peer = %peer.name, method, path, status = rpc_resp.status,
+            "proxy RPC success"
+        );
+    } else {
+        tracing::warn!(
+            peer = %peer.name, method, path, status = rpc_resp.status,
+            "proxy RPC upstream error"
+        );
+    }
+
     let mut response = (status, rpc_resp.body).into_response();
     for (k, v) in &rpc_resp.headers {
         if let (Ok(name), Ok(val)) = (
@@ -703,17 +716,13 @@ pub async fn peer_rpc(
             .unwrap_or_default()
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
     let method: reqwest::Method = rpc_req
         .method
         .parse()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let mut req = client
+    let mut req = state
+        .http_client_loopback
         .request(method, &local_url)
         .header("Authorization", format!("Bearer {}", peer.token));
 
@@ -745,6 +754,10 @@ pub async fn peer_rpc(
 
     // Build RPC response
     let resp_status = local_resp.status().as_u16();
+    tracing::debug!(
+        peer = %peer_name, method = %rpc_req.method, path = %rpc_req.path, status = resp_status,
+        "RPC loopback dispatch completed"
+    );
     let mut resp_headers = HashMap::new();
     if let Some(ct) = local_resp.headers().get("content-type")
         && let Ok(ct_str) = ct.to_str()
@@ -1383,77 +1396,32 @@ async fn proxy_filer_rpc(
     send_encrypted_rpc(state, &peer, method, &path, query, headers, body, None).await
 }
 
-/// GET /api/peers/{name}/filer/list
-pub async fn proxy_filer_list(
-    State(state): State<Arc<AppState>>,
-    Path(peer_name): Path<String>,
-    RawQuery(query): RawQuery,
-) -> Result<Response, StatusCode> {
-    proxy_filer_rpc(
-        &state,
-        &peer_name,
-        "GET",
-        "list",
-        query.as_deref(),
-        HashMap::new(),
-        vec![],
-    )
-    .await
+/// Generate GET proxy handlers for filer sub-endpoints.
+macro_rules! proxy_filer_get {
+    ($fn_name:ident, $subpath:literal) => {
+        pub async fn $fn_name(
+            State(state): State<Arc<AppState>>,
+            Path(peer_name): Path<String>,
+            RawQuery(query): RawQuery,
+        ) -> Result<Response, StatusCode> {
+            proxy_filer_rpc(
+                &state,
+                &peer_name,
+                "GET",
+                $subpath,
+                query.as_deref(),
+                HashMap::new(),
+                vec![],
+            )
+            .await
+        }
+    };
 }
 
-/// GET /api/peers/{name}/filer/read
-pub async fn proxy_filer_read(
-    State(state): State<Arc<AppState>>,
-    Path(peer_name): Path<String>,
-    RawQuery(query): RawQuery,
-) -> Result<Response, StatusCode> {
-    proxy_filer_rpc(
-        &state,
-        &peer_name,
-        "GET",
-        "read",
-        query.as_deref(),
-        HashMap::new(),
-        vec![],
-    )
-    .await
-}
-
-/// GET /api/peers/{name}/filer/download
-pub async fn proxy_filer_download(
-    State(state): State<Arc<AppState>>,
-    Path(peer_name): Path<String>,
-    RawQuery(query): RawQuery,
-) -> Result<Response, StatusCode> {
-    proxy_filer_rpc(
-        &state,
-        &peer_name,
-        "GET",
-        "download",
-        query.as_deref(),
-        HashMap::new(),
-        vec![],
-    )
-    .await
-}
-
-/// GET /api/peers/{name}/filer/search
-pub async fn proxy_filer_search(
-    State(state): State<Arc<AppState>>,
-    Path(peer_name): Path<String>,
-    RawQuery(query): RawQuery,
-) -> Result<Response, StatusCode> {
-    proxy_filer_rpc(
-        &state,
-        &peer_name,
-        "GET",
-        "search",
-        query.as_deref(),
-        HashMap::new(),
-        vec![],
-    )
-    .await
-}
+proxy_filer_get!(proxy_filer_list, "list");
+proxy_filer_get!(proxy_filer_read, "read");
+proxy_filer_get!(proxy_filer_download, "download");
+proxy_filer_get!(proxy_filer_search, "search");
 
 /// PUT /api/peers/{name}/filer/write
 pub async fn proxy_filer_write(
