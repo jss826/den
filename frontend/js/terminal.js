@@ -822,13 +822,13 @@ const DenTerminal = (() => {
     scheduleSessionTabsLayout();
 
     // Update port bar with detected ports from sessions
-    updatePortBar(sessions);
+    checkRemotePorts(sessions);
 
     // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
   }
 
-  async function updatePortBar(sessions) {
+  async function checkRemotePorts(sessions) {
     // Collect SSH session ports (local non-SSH ports are accessible directly)
     const allPorts = [];
     const seenPorts = new Set();
@@ -846,21 +846,24 @@ const DenTerminal = (() => {
       }
     }
 
-    // Fetch remote peer ports
-    for (const peer of (cachedPeers || []).filter(p => p.status === 'connected')) {
+    // Fetch remote peer ports in parallel (F001)
+    const connectedPeers = (cachedPeers || []).filter(p => p.status === 'connected');
+    const peerResults = await Promise.all(connectedPeers.map(async (peer) => {
       try {
         const resp = await fetch(`/api/peers/${encodeURIComponent(peer.name)}/ports`, { credentials: 'same-origin' });
-        if (resp.ok) {
-          const remotePorts = await resp.json();
-          for (const rp of remotePorts) {
-            const key = `${peer.name}:${rp.port}`;
-            if (!seenPorts.has(key)) {
-              seenPorts.add(key);
-              allPorts.push({ port: rp.port, forwarded: false, session: rp.session || null, peer: peer.name, sessionKey: `${peer.name}:${rp.session || 'system'}`, source: rp.source || 'system' });
-            }
-          }
-        }
+        if (resp.ok) return { peer: peer.name, ports: await resp.json() };
       } catch { /* ignore */ }
+      return null;
+    }));
+    for (const result of peerResults) {
+      if (!result) continue;
+      for (const rp of result.ports) {
+        const key = `${result.peer}:${rp.port}`;
+        if (!seenPorts.has(key)) {
+          seenPorts.add(key);
+          allPorts.push({ port: rp.port, forwarded: false, session: rp.session || null, peer: result.peer, sessionKey: `${result.peer}:${rp.session || 'system'}`, source: rp.source || 'system' });
+        }
+      }
     }
 
     // Show clickable toast for newly detected ports
@@ -869,15 +872,20 @@ const DenTerminal = (() => {
       if (!lastKnownPorts[p.sessionKey].has(p.port)) {
         lastKnownPorts[p.sessionKey].add(p.port);
         const label = p.peer ? `${p.peer}:${p.port}` : `Port ${p.port}`;
-        const portInfo = p;
         Toast.show(`${label} detected — click to open`, 'info', 5000, {
-          onClick: () => openPort(portInfo),
+          onClick: () => openPort(p),
         });
       }
     }
   }
 
   async function openPort(portInfo) {
+    // Open tab first to avoid popup blocker after await (F004)
+    const url = portInfo.peer
+      ? `/fwd/peer/${encodeURIComponent(portInfo.peer)}/${portInfo.port}/`
+      : `/fwd/${portInfo.port}/`;
+    const tab = window.open('about:blank', '_blank', 'noopener,noreferrer');
+
     // For SSH sessions, start tunnel first
     if (!portInfo.forwarded && portInfo.peer === null && portInfo.session) {
       try {
@@ -889,16 +897,15 @@ const DenTerminal = (() => {
           const msg = await resp.text();
           if (msg && !msg.includes('Password auth')) {
             Toast.error(`Forward failed: ${msg}`);
+            if (tab) tab.close();
             return;
           }
         }
       } catch { /* ignore — will open directly */ }
     }
 
-    if (portInfo.peer) {
-      window.open(`/fwd/peer/${encodeURIComponent(portInfo.peer)}/${portInfo.port}/`, '_blank');
-    } else {
-      window.open(`/fwd/${portInfo.port}/`, '_blank');
+    if (tab) {
+      tab.location.href = url;
     }
   }
 

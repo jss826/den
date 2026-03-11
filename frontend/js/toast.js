@@ -71,17 +71,15 @@ const Toast = (() => {
     document.body.appendChild(promptModal);
   }
 
-  function show(message, type, duration, opts) {
+  function show(message, type = 'info', duration = 3000, opts) {
     ensureInit();
-    if (!type) type = 'info';
-    if (!duration) duration = 3000;
 
     const toast = document.createElement('div');
     toast.className = 'toast toast-' + type;
     toast.textContent = message;
     if (opts && opts.onClick) {
       toast.style.cursor = 'pointer';
-      toast.addEventListener('click', opts.onClick);
+      toast.addEventListener('click', opts.onClick, { once: true });
     }
     container.appendChild(toast);
 
