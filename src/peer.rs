@@ -1152,6 +1152,7 @@ pub async fn proxy_get_settings(
     State(state): State<Arc<AppState>>,
     Path(peer_name): Path<String>,
 ) -> Result<Response, StatusCode> {
+    tracing::debug!("proxy_get_settings for peer {peer_name}");
     let peer = lookup_peer(&state, &peer_name)?;
     send_encrypted_rpc(
         &state,
@@ -1172,9 +1173,17 @@ pub async fn proxy_put_settings(
     Path(peer_name): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<Response, StatusCode> {
+    // Limit body size to prevent memory exhaustion (settings JSON should be small)
+    const MAX_SETTINGS_BODY: usize = 64 * 1024; // 64 KB
+    if body.len() > MAX_SETTINGS_BODY {
+        tracing::warn!(
+            size = body.len(),
+            "proxy_put_settings: body too large for peer {peer_name}"
+        );
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
     let peer = lookup_peer(&state, &peer_name)?;
-    let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), "application/json".to_string());
+    let headers = HashMap::from([("content-type".into(), "application/json".into())]);
     send_encrypted_rpc(
         &state,
         &peer,

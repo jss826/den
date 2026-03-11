@@ -390,8 +390,7 @@ const DenSettings = (() => {
     const peerJoinForm = document.getElementById('peer-join-form');
     if (peerJoinForm) peerJoinForm.hidden = true;
     latestVersion = null; // refetch on each modal open
-    loadPeerList();
-    initSettingsSync();
+    loadPeerList().then(peers => initSettingsSync(peers));
 
     const verText = document.getElementById('settings-version-text');
     if (verText && current.version) verText.textContent = 'Den v' + current.version;
@@ -899,13 +898,13 @@ const DenSettings = (() => {
 
     try {
       const resp = await fetch('/api/peers', { credentials: 'same-origin' });
-      if (!resp.ok) return;
+      if (!resp.ok) return null;
       const peers = await resp.json();
       if (peers.length === 0) {
         list.innerHTML = '<div class="peer-empty">No peers registered</div>';
         const btn = document.getElementById('peer-update-all-btn');
         if (btn) btn.hidden = true;
-        return;
+        return peers;
       }
 
       let outdatedCount = 0;
@@ -996,8 +995,10 @@ const DenSettings = (() => {
           }
         });
       });
+      return peers;
     } catch (e) {
       list.innerHTML = '<div class="peer-empty">Failed to load peers</div>';
+      return null;
     }
   }
 
@@ -1152,10 +1153,8 @@ const DenSettings = (() => {
 
   // --- Settings Sync (peer comparison view) ---
 
-  // Fields that should NOT be copied between peers
-  const NON_SYNCABLE = new Set(['peer_name', 'peers', 'version', 'hostname']);
-
-  // Display labels for setting fields
+  // Only fields listed in FIELD_LABELS are syncable.
+  // peer_name, peers, version, hostname are excluded by not listing them here.
   const FIELD_LABELS = {
     theme: 'Theme',
     font_size: 'Font Size',
@@ -1179,7 +1178,10 @@ const DenSettings = (() => {
   }
 
   function fieldsEqual(a, b) {
-    return JSON.stringify(a) === JSON.stringify(b);
+    if (a === b) return true;
+    // Sort keys for consistent comparison (F009)
+    return JSON.stringify(a, Object.keys(a ?? {}).sort())
+      === JSON.stringify(b, Object.keys(b ?? {}).sort());
   }
 
   function isArrayField(key) {
@@ -1187,24 +1189,35 @@ const DenSettings = (() => {
       || key === 'snippets' || key === 'ssh_bookmarks';
   }
 
-  async function initSettingsSync() {
+  // Track the latest loadPeerSettings call to prevent stale renders (F007)
+  let syncLoadGeneration = 0;
+  // Cache connected peers with scope info for ReadOnly filtering (F008)
+  let syncPeerMap = {};
+
+  async function initSettingsSync(sharedPeers) {
     const section = document.getElementById('settings-sync-section');
     const select = document.getElementById('settings-sync-peer');
     if (!section || !select) return;
 
-    // Fetch peers
-    let peers;
-    try {
-      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
-      if (!resp.ok) return;
-      peers = await resp.json();
-    } catch { return; }
+    // Use shared peers from loadPeerList to avoid duplicate fetch (F004)
+    let peers = sharedPeers;
+    if (!peers) {
+      try {
+        const resp = await fetch('/api/peers', { credentials: 'same-origin' });
+        if (!resp.ok) return;
+        peers = await resp.json();
+      } catch { return; }
+    }
 
     const connected = peers.filter(p => p.status === 'connected');
     if (connected.length === 0) {
       section.hidden = true;
       return;
     }
+
+    // Build scope lookup
+    syncPeerMap = {};
+    for (const p of connected) syncPeerMap[p.name] = p;
 
     section.hidden = false;
     select.innerHTML = '';
@@ -1215,7 +1228,7 @@ const DenSettings = (() => {
       select.appendChild(opt);
     }
 
-    select.onchange = () => loadPeerSettings(select.value);
+    select.addEventListener('change', () => loadPeerSettings(select.value));
     loadPeerSettings(select.value);
   }
 
@@ -1224,21 +1237,27 @@ const DenSettings = (() => {
     if (!table) return;
     table.innerHTML = '<div class="settings-sync-loading">Loading...</div>';
 
+    // Race guard: only render if this is still the latest request (F007)
+    const gen = ++syncLoadGeneration;
+
     let peerSettings;
     try {
       const resp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/settings`, {
         credentials: 'same-origin',
       });
+      if (gen !== syncLoadGeneration) return;
       if (!resp.ok) {
         table.innerHTML = '<div class="settings-sync-loading">Failed to load peer settings</div>';
         return;
       }
       peerSettings = await resp.json();
     } catch {
+      if (gen !== syncLoadGeneration) return;
       table.innerHTML = '<div class="settings-sync-loading">Failed to load peer settings</div>';
       return;
     }
 
+    if (gen !== syncLoadGeneration) return;
     renderSyncTable(peerName, peerSettings);
   }
 
@@ -1259,7 +1278,6 @@ const DenSettings = (() => {
     const allKeys = Object.keys(FIELD_LABELS);
 
     for (const key of allKeys) {
-      if (NON_SYNCABLE.has(key)) continue;
       const localVal = current[key];
       const peerVal = peerSettings[key];
       const same = fieldsEqual(localVal, peerVal);
@@ -1299,19 +1317,22 @@ const DenSettings = (() => {
         });
         actionsCell.appendChild(pullBtn);
 
-        // Push: local → peer
-        const pushBtn = document.createElement('button');
-        pushBtn.className = 'sync-btn sync-push';
-        pushBtn.textContent = '→';
-        pushBtn.title = `Push to ${peerName}`;
-        pushBtn.addEventListener('click', () => {
-          if (isArrayField(key)) {
-            showArrayMergeMenu(pushBtn, key, localVal, 'push', peerName);
-          } else {
-            applySyncField(key, localVal, 'peer', peerName);
-          }
-        });
-        actionsCell.appendChild(pushBtn);
+        // Push: local → peer (hide for ReadOnly peers — F008)
+        const peerInfo = syncPeerMap[peerName];
+        if (!peerInfo || peerInfo.scope !== 'readonly') {
+          const pushBtn = document.createElement('button');
+          pushBtn.className = 'sync-btn sync-push';
+          pushBtn.textContent = '→';
+          pushBtn.title = `Push to ${peerName}`;
+          pushBtn.addEventListener('click', () => {
+            if (isArrayField(key)) {
+              showArrayMergeMenu(pushBtn, key, localVal, 'push', peerName);
+            } else {
+              applySyncField(key, localVal, 'peer', peerName);
+            }
+          });
+          actionsCell.appendChild(pushBtn);
+        }
       }
 
       row.appendChild(labelCell);
@@ -1331,11 +1352,17 @@ const DenSettings = (() => {
     const menu = document.createElement('div');
     menu.className = 'sync-merge-menu';
 
+    // Shared cleanup for outside-click listener (F012)
+    const cleanup = () => {
+      menu.remove();
+      document.removeEventListener('click', closeOnOutside, true);
+    };
+
     const replaceBtn = document.createElement('button');
     replaceBtn.className = 'modal-btn';
     replaceBtn.textContent = 'Replace';
     replaceBtn.addEventListener('click', () => {
-      menu.remove();
+      cleanup();
       applySyncField(key, sourceVal, direction === 'pull' ? 'local' : 'peer', peerName);
     });
 
@@ -1343,14 +1370,14 @@ const DenSettings = (() => {
     mergeBtn.className = 'modal-btn';
     mergeBtn.textContent = 'Merge';
     mergeBtn.addEventListener('click', () => {
-      menu.remove();
+      cleanup();
       applySyncFieldMerge(key, sourceVal, direction, peerName);
     });
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'modal-btn';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => menu.remove());
+    cancelBtn.addEventListener('click', () => cleanup());
 
     menu.appendChild(replaceBtn);
     menu.appendChild(mergeBtn);
@@ -1359,20 +1386,21 @@ const DenSettings = (() => {
     anchorBtn.parentElement.appendChild(menu);
 
     // Close on outside click
-    const close = (e) => {
-      if (!menu.contains(e.target)) {
-        menu.remove();
-        document.removeEventListener('click', close, true);
-      }
+    const closeOnOutside = (e) => {
+      if (!menu.contains(e.target)) cleanup();
     };
-    requestAnimationFrame(() => document.addEventListener('click', close, true));
+    requestAnimationFrame(() => document.addEventListener('click', closeOnOutside, true));
   }
 
   async function applySyncField(key, value, target, peerName) {
     if (target === 'local') {
       // Apply to local settings
       current[key] = value;
-      await save({ [key]: value });
+      const ok = await save({ [key]: value });
+      if (ok === false) {
+        Toast.error(`Failed to save "${FIELD_LABELS[key] || key}"`);
+        return;
+      }
       Toast.success(`Copied "${FIELD_LABELS[key] || key}" from ${peerName}`);
     } else {
       // Push to peer: fetch peer's full settings, update field, PUT back
@@ -1405,10 +1433,12 @@ const DenSettings = (() => {
     let targetArr;
     let targetSettings;
 
+    // Dedup key: 'label' for bookmarks/buttons, 'label' for snippets (all use 'label')
+    const labelKey = 'label';
+
     if (direction === 'pull') {
       // Merge peer's items into local
       targetArr = Array.isArray(current[key]) ? [...current[key]] : [];
-      const labelKey = key === 'ssh_bookmarks' ? 'label' : 'label';
       const existingLabels = new Set(targetArr.map(i => i[labelKey]));
       let added = 0;
       for (const item of sourceArr) {
@@ -1418,7 +1448,11 @@ const DenSettings = (() => {
         }
       }
       current[key] = targetArr;
-      await save({ [key]: targetArr });
+      const ok = await save({ [key]: targetArr });
+      if (ok === false) {
+        Toast.error('Failed to save merged settings');
+        return;
+      }
       Toast.success(`Merged ${added} new item${added !== 1 ? 's' : ''} from ${peerName}`);
     } else {
       // Merge local items into peer
@@ -1429,7 +1463,6 @@ const DenSettings = (() => {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         targetSettings = await resp.json();
         targetArr = Array.isArray(targetSettings[key]) ? [...targetSettings[key]] : [];
-        const labelKey = 'label';
         const existingLabels = new Set(targetArr.map(i => i[labelKey]));
         let added = 0;
         for (const item of sourceArr) {

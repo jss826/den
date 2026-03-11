@@ -14,6 +14,8 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
         Ok(mut settings) => {
             settings.version = env!("CARGO_PKG_VERSION").to_string();
             settings.hostname = gethostname::gethostname().to_string_lossy().into_owned();
+            // Never expose peer tokens/encryption keys via API response
+            settings.peers = None;
             Json(settings).into_response()
         }
         Err(e) => {
@@ -119,7 +121,12 @@ pub async fn put_settings(
     // sleep_prevention_mode: enum 化により serde が不正値を拒否（422 を返す）
     settings.sleep_prevention_timeout = settings.sleep_prevention_timeout.clamp(1, 480);
 
+    // Preserve stored peers — API response strips this field, so incoming
+    // requests will have peers=None. Restore from disk to avoid data loss.
     let store = state.store.clone();
+    let stored = store.load_settings();
+    settings.peers = stored.peers;
+
     let sleep_mode = settings.sleep_prevention_mode;
     let sleep_timeout = settings.sleep_prevention_timeout;
     match tokio::task::spawn_blocking(move || store.save_settings(&settings)).await {
