@@ -11,6 +11,10 @@ const FilerEditor = (() => {
   let scrollLeftBtn;
   let scrollRightBtn;
   let renderTabsScheduled = false;
+  let statusBar;
+  let statusLang;
+  let statusCursor;
+  let statusSize;
 
   function init(editorEl, tabsEl) {
     editorContainer = editorEl;
@@ -28,6 +32,12 @@ const FilerEditor = (() => {
       tabsContainer.scrollLeft += 120;
     });
     tabsContainer.addEventListener('scroll', updateScrollButtons);
+
+    // ステータスバー
+    statusBar = document.getElementById('filer-statusbar');
+    statusLang = document.getElementById('filer-status-lang');
+    statusCursor = document.getElementById('filer-status-cursor');
+    statusSize = document.getElementById('filer-status-size');
 
     // Ctrl+S 保存
     document.addEventListener('keydown', (e) => {
@@ -88,6 +98,9 @@ const FilerEditor = (() => {
         if (update.docChanged) {
           markDirty(filePath);
         }
+        if (update.docChanged || update.selectionSet) {
+          if (activePath === filePath) updateStatusCursor(update.state);
+        }
       }),
     ];
     if (lang) extensions.push(lang);
@@ -108,6 +121,59 @@ const FilerEditor = (() => {
     // タブ追加
     renderTabs();
     setActive(filePath);
+  }
+
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function langLabel(filePath) {
+    const ext = getExtension(filePath);
+    const labels = {
+      js: 'JavaScript', mjs: 'JavaScript', jsx: 'JSX',
+      ts: 'TypeScript', tsx: 'TSX',
+      rs: 'Rust', py: 'Python', go: 'Go', rb: 'Ruby', java: 'Java',
+      css: 'CSS', scss: 'SCSS', less: 'LESS',
+      html: 'HTML', htm: 'HTML', xml: 'XML', svg: 'SVG',
+      json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
+      md: 'Markdown', mdx: 'MDX', txt: 'Plain Text',
+      sh: 'Shell', bash: 'Bash', zsh: 'Zsh', ps1: 'PowerShell',
+      sql: 'SQL', graphql: 'GraphQL',
+    };
+    return labels[ext] || ext.toUpperCase() || 'Plain Text';
+  }
+
+  function updateStatusCursor(editorState) {
+    if (!statusCursor) return;
+    const pos = editorState.selection.main.head;
+    const line = editorState.doc.lineAt(pos);
+    const col = pos - line.from + 1;
+    statusCursor.textContent = `Ln ${line.number}, Col ${col}`;
+  }
+
+  function updateStatusBar(filePath) {
+    if (!statusBar) return;
+    if (!filePath || !openFiles.has(filePath)) {
+      statusBar.hidden = true;
+      return;
+    }
+    const file = openFiles.get(filePath);
+    statusBar.hidden = false;
+
+    if (statusLang) statusLang.textContent = langLabel(filePath);
+
+    if (statusSize) {
+      const content = file.view.state.doc.toString();
+      statusSize.textContent = formatFileSize(new Blob([content]).size);
+    }
+
+    if (!file.isImage && file.view.state) {
+      updateStatusCursor(file.view.state);
+    } else if (statusCursor) {
+      statusCursor.textContent = '';
+    }
   }
 
   function openImagePreview(filePath) {
@@ -219,6 +285,7 @@ const FilerEditor = (() => {
     }
 
     renderTabs();
+    updateStatusBar(filePath);
   }
 
   function toggleMdPreview() {
@@ -255,6 +322,7 @@ const FilerEditor = (() => {
         setActive(remaining[remaining.length - 1]);
       } else {
         editorContainer.innerHTML = '<div class="filer-welcome"><p>Select a file to edit</p></div>';
+        updateStatusBar(null);
       }
     }
 
@@ -492,6 +560,7 @@ const FilerEditor = (() => {
     activePath = null;
     editorContainer.innerHTML = '<div class="filer-welcome"><p>Select a file to edit</p></div>';
     tabsContainer.innerHTML = '';
+    updateStatusBar(null);
   }
 
   return {

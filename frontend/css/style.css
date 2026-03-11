@@ -2104,6 +2104,24 @@ html, body {
   font-size: 0.9rem;
 }
 
+/* ステータスバー */
+.filer-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 10px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+.filer-status-item:empty {
+  display: none;
+}
+
 /* 画像プレビュー */
 .filer-image-preview {
   display: flex;
