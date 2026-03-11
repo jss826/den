@@ -48,15 +48,13 @@ const ClipboardHistory = (() => {
       clearBtn.className = 'clipboard-history-clear';
       clearBtn.type = 'button';
       clearBtn.textContent = 'Clear';
-      clearBtn.addEventListener('click', async () => {
-        try {
+      clearBtn.addEventListener('click', () => {
+        Spinner.button(clearBtn, async () => {
           const resp = await fetch('/api/clipboard-history', { method: 'DELETE', credentials: 'same-origin' });
-          if (!resp.ok) { Toast.error('Failed to clear history'); return; }
+          if (!resp.ok) throw new Error('Failed to clear history');
           close();
           Toast.success('History cleared');
-        } catch {
-          Toast.error('Failed to clear history');
-        }
+        }).catch(() => Toast.error('Failed to clear history'));
       });
       header.appendChild(clearBtn);
     }

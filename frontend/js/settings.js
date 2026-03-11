@@ -477,7 +477,7 @@ const DenSettings = (() => {
     if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
 
     const saveBtn = document.getElementById('settings-save');
-    if (saveBtn) saveBtn.addEventListener('click', async () => {
+    if (saveBtn) saveBtn.addEventListener('click', () => {
       const fontSize = parseInt(document.getElementById('setting-font-size').value, 10) || 14;
       const scrollback = parseInt(document.getElementById('setting-scrollback').value, 10) || 1000;
       const themeSelect = document.getElementById('setting-theme');
@@ -500,39 +500,41 @@ const DenSettings = (() => {
       const peerNameEl = document.getElementById('setting-peer-name');
       const peerName = peerNameEl ? (peerNameEl.value.trim() || null) : null;
 
-      const ok = await save({
-        font_size: Math.max(8, Math.min(32, fontSize)),
-        terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
-        theme: theme,
-        keybar_buttons: keybarButtons,
-        keybar_secondary_buttons: keybarSecondaryButtons,
-        ssh_agent_forwarding: sshAgentFwd,
-        snippets: snippets,
-        sleep_prevention_mode: sleepMode,
-        sleep_prevention_timeout: sleepTimeout,
-        peer_name: peerName,
+      Spinner.button(saveBtn, async () => {
+        const ok = await save({
+          font_size: Math.max(8, Math.min(32, fontSize)),
+          terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
+          theme: theme,
+          keybar_buttons: keybarButtons,
+          keybar_secondary_buttons: keybarSecondaryButtons,
+          ssh_agent_forwarding: sshAgentFwd,
+          snippets: snippets,
+          sleep_prevention_mode: sleepMode,
+          sleep_prevention_timeout: sleepTimeout,
+          peer_name: peerName,
+        });
+        if (!ok) return;
+        apply();
+
+        // scrollback / fontSize を即時反映（xterm.js は options の動的変更に対応）
+        const t = DenTerminal.getTerminal();
+        if (t) {
+          t.options.scrollback = Math.max(100, Math.min(50000, scrollback));
+          t.options.fontSize = Math.max(8, Math.min(32, fontSize));
+          DenTerminal.fitAndRefresh();
+        }
+
+        // フローティングターミナルにも設定反映
+        if (typeof FloatTerminal !== 'undefined') FloatTerminal.applySettings();
+
+        // キーバーを即時反映
+        Keybar.reload(keybarButtons, keybarSecondaryButtons);
+
+        // スニペットを即時反映
+        if (typeof DenSnippet !== 'undefined') DenSnippet.reload();
+
+        closeModal();
       });
-      if (!ok) return;
-      apply();
-
-      // scrollback / fontSize を即時反映（xterm.js は options の動的変更に対応）
-      const t = DenTerminal.getTerminal();
-      if (t) {
-        t.options.scrollback = Math.max(100, Math.min(50000, scrollback));
-        t.options.fontSize = Math.max(8, Math.min(32, fontSize));
-        DenTerminal.fitAndRefresh();
-      }
-
-      // フローティングターミナルにも設定反映
-      if (typeof FloatTerminal !== 'undefined') FloatTerminal.applySettings();
-
-      // キーバーを即時反映
-      Keybar.reload(keybarButtons, keybarSecondaryButtons);
-
-      // スニペットを即時反映
-      if (typeof DenSnippet !== 'undefined') DenSnippet.reload();
-
-      closeModal();
     });
 
     const modal = document.getElementById('settings-modal');
@@ -748,12 +750,10 @@ const DenSettings = (() => {
     const updateApplyBtn = document.getElementById('update-apply-btn');
     const updateStatus = document.getElementById('update-status');
 
-    if (updateCheckBtn) updateCheckBtn.addEventListener('click', async () => {
-      updateCheckBtn.disabled = true;
-      updateCheckBtn.textContent = 'Checking...';
+    if (updateCheckBtn) updateCheckBtn.addEventListener('click', () => {
       updateStatus.hidden = true;
       updateApplyBtn.hidden = true;
-      try {
+      Spinner.button(updateCheckBtn, async () => {
         const resp = await fetch('/api/system/version', { credentials: 'same-origin' });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const info = await resp.json();
@@ -771,22 +771,19 @@ const DenSettings = (() => {
           updateStatus.hidden = false;
           updateStatus.className = 'update-status update-error';
         }
-      } catch (e) {
+      }).catch(e => {
         updateStatus.textContent = 'Check failed';
         updateStatus.hidden = false;
         updateStatus.className = 'update-status update-error';
         console.warn('Update check failed:', e);
-      } finally {
-        updateCheckBtn.disabled = false;
-        updateCheckBtn.textContent = 'Check for Updates';
-      }
+      });
     });
 
     if (updateApplyBtn) updateApplyBtn.addEventListener('click', async () => {
       const ok = await Toast.confirm('Download and install update? Den will restart.');
       if (!ok) return;
       updateApplyBtn.disabled = true;
-      updateApplyBtn.textContent = 'Updating...';
+      updateApplyBtn.classList.add('btn-loading');
       updateStatus.textContent = 'Downloading...';
       updateStatus.className = 'update-status';
       try {
@@ -805,7 +802,7 @@ const DenSettings = (() => {
         updateStatus.textContent = 'Update failed: ' + e.message;
         updateStatus.className = 'update-status update-error';
         updateApplyBtn.disabled = false;
-        updateApplyBtn.textContent = 'Update Now';
+        updateApplyBtn.classList.remove('btn-loading');
         console.warn('Update failed:', e);
       }
     });
@@ -903,7 +900,7 @@ const DenSettings = (() => {
     peerUpdateInProgress = true;
     if (btn) {
       btn.disabled = true;
-      btn.textContent = 'Updating...';
+      btn.classList.add('btn-loading');
     }
     try {
       const resp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/system/update`, {
@@ -914,7 +911,6 @@ const DenSettings = (() => {
         const text = await resp.text().catch(() => '');
         throw new Error(text || `HTTP ${resp.status}`);
       }
-      if (btn) btn.textContent = 'Restarting...';
       const ok = await waitForPeerRestart(peerName, 30000);
       if (ok) {
         Toast.success(`${peerName} updated successfully`);
@@ -926,7 +922,7 @@ const DenSettings = (() => {
       Toast.error(`Failed to update ${peerName}: ${e.message}`);
       if (btn) {
         btn.disabled = false;
-        btn.textContent = 'Update';
+        btn.classList.remove('btn-loading');
       }
     } finally {
       peerUpdateInProgress = false;
@@ -1003,10 +999,10 @@ const DenSettings = (() => {
 
       // Bind scope toggle buttons
       list.querySelectorAll('.peer-scope-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
+        btn.addEventListener('click', () => {
           const name = btn.dataset.peer;
           const newScope = btn.dataset.scope === 'admin' ? 'readonly' : 'admin';
-          try {
+          Spinner.button(btn, async () => {
             const resp = await fetch(`/api/peers/${encodeURIComponent(name)}/scope`, {
               method: 'PUT',
               credentials: 'same-origin',
@@ -1015,9 +1011,7 @@ const DenSettings = (() => {
             });
             if (resp.ok) loadPeerList();
             else Toast.error('Failed to update scope');
-          } catch (e) {
-            Toast.error('Failed to update scope');
-          }
+          }).catch(() => Toast.error('Failed to update scope'));
         });
       });
 
@@ -1030,16 +1024,14 @@ const DenSettings = (() => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.peer;
           if (!confirm(`Remove peer "${name}"?`)) return;
-          try {
+          Spinner.button(btn, async () => {
             await fetch(`/api/peers/${encodeURIComponent(name)}`, {
               method: 'DELETE',
               credentials: 'same-origin',
             });
             PeerCache.invalidate();
             loadPeerList();
-          } catch (e) {
-            Toast.error('Failed to remove peer');
-          }
+          }).catch(() => Toast.error('Failed to remove peer'));
         });
       });
       return peers;
@@ -1063,8 +1055,8 @@ const DenSettings = (() => {
     const joinCancel = document.getElementById('peer-join-cancel');
     const inviteCopy = document.getElementById('peer-invite-copy');
 
-    if (inviteBtn) inviteBtn.addEventListener('click', async () => {
-      try {
+    if (inviteBtn) inviteBtn.addEventListener('click', () => {
+      Spinner.button(inviteBtn, async () => {
         const resp = await fetch('/api/peers/invite', {
           method: 'POST',
           credentials: 'same-origin',
@@ -1092,9 +1084,7 @@ const DenSettings = (() => {
             }
           }, 1000);
         }
-      } catch (e) {
-        Toast.error('Failed to generate invite code');
-      }
+      }).catch(() => Toast.error('Failed to generate invite code'));
     });
 
     if (inviteCopy) inviteCopy.addEventListener('click', () => {
@@ -1113,12 +1103,11 @@ const DenSettings = (() => {
       }
     });
 
-    if (joinConfirm) joinConfirm.addEventListener('click', async () => {
+    if (joinConfirm) joinConfirm.addEventListener('click', () => {
       const url = document.getElementById('peer-join-url').value.trim();
       const code = document.getElementById('peer-join-code').value.trim();
       if (!url || !code) return;
-      joinConfirm.disabled = true;
-      try {
+      Spinner.button(joinConfirm, async () => {
         const resp = await fetch('/api/peers/join', {
           method: 'POST',
           credentials: 'same-origin',
@@ -1137,11 +1126,7 @@ const DenSettings = (() => {
         joinForm.hidden = true;
         PeerCache.invalidate();
         loadPeerList();
-      } catch (e) {
-        Toast.error('Failed to join peer');
-      } finally {
-        joinConfirm.disabled = false;
-      }
+      }).catch(() => Toast.error('Failed to join peer'));
     });
 
     if (joinCancel) joinCancel.addEventListener('click', () => {
@@ -1154,7 +1139,7 @@ const DenSettings = (() => {
       if (!confirm('Update all outdated peers?')) return;
       peerUpdateInProgress = true;
       updateAllBtn.disabled = true;
-      updateAllBtn.textContent = 'Updating...';
+      updateAllBtn.classList.add('btn-loading');
       try {
         const resp = await fetch('/api/peers', { credentials: 'same-origin' });
         if (!resp.ok) throw new Error('Failed to fetch peers');
@@ -1163,7 +1148,6 @@ const DenSettings = (() => {
           p.status === 'connected' && isOlderVersion(p.version, latestVersion)
         );
         for (const peer of outdated) {
-          updateAllBtn.textContent = `Updating ${peer.name}...`;
           try {
             const r = await fetch(`/api/peers/${encodeURIComponent(peer.name)}/system/update`, {
               method: 'POST',
@@ -1193,7 +1177,7 @@ const DenSettings = (() => {
       } finally {
         peerUpdateInProgress = false;
         updateAllBtn.disabled = false;
-        updateAllBtn.textContent = 'Update All';
+        updateAllBtn.classList.remove('btn-loading');
       }
     });
   }
