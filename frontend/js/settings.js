@@ -324,27 +324,36 @@ const DenSettings = (() => {
   /**
    * 設定モーダルを開く。現在の設定値をフォームに反映する。
    */
-  // Restore accordion open/closed state from localStorage
-  function restoreAccordionState() {
-    try {
-      const saved = JSON.parse(localStorage.getItem('den_settings_groups') || '{}');
-      for (const [id, isOpen] of Object.entries(saved)) {
-        const el = document.getElementById(id);
-        if (el) el.open = isOpen;
-      }
-    } catch { /* ignore corrupt data */ }
+  // Module-level cache for accordion state (avoids repeated localStorage parse)
+  let accordionState = null;
+  let accordionBound = false;
+
+  function loadAccordionState() {
+    if (!accordionState) {
+      try { accordionState = JSON.parse(localStorage.getItem('den_settings_groups') || '{}'); }
+      catch { accordionState = {}; }
+    }
+    return accordionState;
   }
 
-  // Bind toggle events to persist accordion state
+  function restoreAccordionState() {
+    const saved = loadAccordionState();
+    for (const [id, isOpen] of Object.entries(saved)) {
+      const el = document.getElementById(id);
+      if (el) el.open = !!isOpen;
+    }
+  }
+
   function bindAccordionState() {
+    if (accordionBound) return;
+    accordionBound = true;
     const groups = document.querySelectorAll('.settings-group');
     for (const g of groups) {
       g.addEventListener('toggle', () => {
-        try {
-          const saved = JSON.parse(localStorage.getItem('den_settings_groups') || '{}');
-          saved[g.id] = g.open;
-          localStorage.setItem('den_settings_groups', JSON.stringify(saved));
-        } catch { /* ignore */ }
+        const state = loadAccordionState();
+        state[g.id] = g.open;
+        try { localStorage.setItem('den_settings_groups', JSON.stringify(state)); }
+        catch { /* ignore */ }
       });
     }
   }

@@ -339,70 +339,68 @@
         <details class="settings-group" id="sg-snippets">
           <summary class="settings-group-title">Snippets</summary>
           <div class="modal-section">
-          <label>Snippets</label>
-          <div class="snippet-editor">
-            <div id="snippet-list" class="snippet-list"></div>
-            <div class="keybar-editor-actions">
-              <button id="snippet-add-btn" class="modal-btn" type="button">Add Snippet</button>
+            <div class="snippet-editor">
+              <div id="snippet-list" class="snippet-list"></div>
+              <div class="keybar-editor-actions">
+                <button id="snippet-add-btn" class="modal-btn" type="button">Add Snippet</button>
+              </div>
+              <div id="snippet-add-form" class="snippet-add-form" hidden>
+                <div class="keybar-form-row">
+                  <label>Label</label>
+                  <input type="text" id="snippet-new-label" class="settings-input" placeholder="e.g. workspace" maxlength="20">
+                </div>
+                <div class="keybar-form-row">
+                  <label>Command</label>
+                  <textarea id="snippet-new-command" class="snippet-textarea" placeholder="e.g. cd d:\workspace / \r~s (supports \r \n \t \x##)" rows="2"></textarea>
+                </div>
+                <div class="keybar-form-row">
+                  <label>
+                    <input type="checkbox" id="snippet-new-autorun"> Auto-run (execute immediately)
+                  </label>
+                </div>
+                <div class="keybar-form-actions">
+                  <button id="snippet-add-confirm" class="modal-btn primary" type="button">Add</button>
+                  <button id="snippet-add-cancel" class="modal-btn" type="button">Cancel</button>
+                </div>
+              </div>
             </div>
-            <div id="snippet-add-form" class="snippet-add-form" hidden>
-              <div class="keybar-form-row">
-                <label>Label</label>
-                <input type="text" id="snippet-new-label" class="settings-input" placeholder="e.g. workspace" maxlength="20">
-              </div>
-              <div class="keybar-form-row">
-                <label>Command</label>
-                <textarea id="snippet-new-command" class="snippet-textarea" placeholder="e.g. cd d:\workspace / \r~s (supports \r \n \t \x##)" rows="2"></textarea>
-              </div>
-              <div class="keybar-form-row">
-                <label>
-                  <input type="checkbox" id="snippet-new-autorun"> Auto-run (execute immediately)
-                </label>
-              </div>
-              <div class="keybar-form-actions">
-                <button id="snippet-add-confirm" class="modal-btn primary" type="button">Add</button>
-                <button id="snippet-add-cancel" class="modal-btn" type="button">Cancel</button>
-              </div>
-            </div>
-          </div>
           </div>
         </details>
         <details class="settings-group" id="sg-peers">
           <summary class="settings-group-title">Peers</summary>
           <div class="modal-section">
-          <label>Peers</label>
-          <div class="peer-section">
-            <div class="peer-name-row">
-              <label>Peer Name</label>
-              <input type="text" id="setting-peer-name" class="settings-input" placeholder="(hostname)">
-            </div>
-            <div id="peer-list" class="peer-list"></div>
-            <div class="peer-actions">
-              <button id="peer-invite-btn" class="modal-btn" type="button">Generate Invite Code</button>
-              <button id="peer-join-btn" class="modal-btn" type="button">Join with Code</button>
-              <button id="peer-update-all-btn" class="modal-btn primary" type="button" hidden>Update All</button>
-            </div>
-            <div id="peer-invite-display" class="peer-invite-display" hidden>
-              <span class="peer-invite-code" id="peer-invite-code"></span>
-              <button id="peer-invite-copy" class="modal-btn" type="button">Copy</button>
-              <span class="peer-invite-ttl" id="peer-invite-ttl"></span>
-            </div>
-            <div id="peer-join-form" class="peer-join-form" hidden>
-              <div class="keybar-form-row">
-                <label>Peer URL</label>
-                <input type="text" id="peer-join-url" class="settings-input" placeholder="http://192.168.1.20:8080">
+            <div class="peer-section">
+              <div class="peer-name-row">
+                <label>Peer Name</label>
+                <input type="text" id="setting-peer-name" class="settings-input" placeholder="(hostname)">
               </div>
-              <div class="keybar-form-row">
-                <label>Invite Code</label>
-                <input type="text" id="peer-join-code" class="settings-input" placeholder="e.g. a1b2c3" maxlength="6">
+              <div id="peer-list" class="peer-list"></div>
+              <div class="peer-actions">
+                <button id="peer-invite-btn" class="modal-btn" type="button">Generate Invite Code</button>
+                <button id="peer-join-btn" class="modal-btn" type="button">Join with Code</button>
+                <button id="peer-update-all-btn" class="modal-btn primary" type="button" hidden>Update All</button>
               </div>
-              <div class="keybar-form-actions">
-                <button id="peer-join-confirm" class="modal-btn primary" type="button">Join</button>
-                <button id="peer-join-cancel" class="modal-btn" type="button">Cancel</button>
+              <div id="peer-invite-display" class="peer-invite-display" hidden>
+                <span class="peer-invite-code" id="peer-invite-code"></span>
+                <button id="peer-invite-copy" class="modal-btn" type="button">Copy</button>
+                <span class="peer-invite-ttl" id="peer-invite-ttl"></span>
+              </div>
+              <div id="peer-join-form" class="peer-join-form" hidden>
+                <div class="keybar-form-row">
+                  <label>Peer URL</label>
+                  <input type="text" id="peer-join-url" class="settings-input" placeholder="http://192.168.1.20:8080">
+                </div>
+                <div class="keybar-form-row">
+                  <label>Invite Code</label>
+                  <input type="text" id="peer-join-code" class="settings-input" placeholder="e.g. a1b2c3" maxlength="6">
+                </div>
+                <div class="keybar-form-actions">
+                  <button id="peer-join-confirm" class="modal-btn primary" type="button">Join</button>
+                  <button id="peer-join-cancel" class="modal-btn" type="button">Cancel</button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
           <div class="modal-section" id="settings-sync-section" hidden>
             <label>Settings Sync</label>
             <div class="settings-sync-container">

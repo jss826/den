@@ -1076,9 +1076,8 @@ html, body {
   color: var(--fg);
   background: var(--input-bg);
   user-select: none;
-  list-style: none;
+  display: block;
 }
-.settings-group-title::-webkit-details-marker { display: none; }
 .settings-group-title::before {
   content: '\25B6';
   display: inline-block;
