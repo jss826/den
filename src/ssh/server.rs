@@ -30,8 +30,11 @@ const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Maximum concurrent SSH connections from localhost (loopback self-connection guard)
-const MAX_SSH_LOOPBACK: usize = 10;
+/// Threshold for logging a warning about excessive loopback SSH connections.
+/// Connections are NOT blocked at this threshold — Layer 1 (DEN_INSTANCE) and
+/// Layer 3 (process tree inspection, Windows only) handle actual blocking.
+/// On non-Windows platforms without SendEnv, this log helps diagnose loops.
+const LOOPBACK_WARN_THRESHOLD: usize = 10;
 
 /// Escape character state machine for `~` sequences (like OpenSSH).
 /// Detects `Enter → ~ → command` patterns in SSH input.
@@ -255,20 +258,15 @@ impl DenSshHandler {
             return Ok(());
         }
 
-        // Layer 2: Too many loopback connections → likely self-connection loop
+        // Layer 2: Log warning on high loopback count (diagnostic only, does not block).
+        // Blocking is handled by Layer 1 (DEN_INSTANCE) and Layer 3 (process tree).
         if self.is_loopback {
             let count = self.loopback_count.load(Ordering::Relaxed);
-            if count > MAX_SSH_LOOPBACK {
+            if count > LOOPBACK_WARN_THRESHOLD {
                 tracing::warn!(
-                    "SSH loopback connection limit exceeded: {count}/{MAX_SSH_LOOPBACK}"
+                    "High loopback SSH connection count: {count} (threshold: {LOOPBACK_WARN_THRESHOLD}). \
+                     If this is unexpected, check for self-connection loops."
                 );
-                let msg = format!(
-                    "Error: Too many SSH connections from localhost ({count} exceeds limit of {MAX_SSH_LOOPBACK}).\r\n\
-                     This may indicate a self-connection loop (SSH into Den from within Den).\r\n"
-                );
-                session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
-                session.close(channel_id)?;
-                return Ok(());
             }
         }
 
