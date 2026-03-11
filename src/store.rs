@@ -85,13 +85,31 @@ fn default_ssh_port() -> u16 {
     22
 }
 
+/// Peer permission scope for F001 (peer token privilege separation).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PeerScope {
+    /// Can view sessions, files, ports — no mutations
+    ReadOnly,
+    /// Full access including create/delete/update
+    #[default]
+    Admin,
+}
+
 /// Registered peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
     pub name: String,
     pub url: String,
-    /// Token that the remote peer uses to authenticate to us
+    /// Token used during pairing (kept for identification, not for auth)
     pub token: String,
+    /// X25519 + HKDF derived encryption key (hex-encoded 32 bytes).
+    /// Peers without this field are legacy and cannot connect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<String>,
+    /// Permission scope for this peer
+    #[serde(default)]
+    pub scope: PeerScope,
 }
 
 /// Persisted session record for restart recovery

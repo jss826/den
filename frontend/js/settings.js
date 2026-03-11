@@ -931,12 +931,17 @@ const DenSettings = (() => {
           }
         }
 
+        const scopeLabel = peer.scope === 'readonly' ? 'Read' : 'Admin';
+        const scopeClass = peer.scope === 'readonly' ? 'peer-scope-readonly' : 'peer-scope-admin';
+        const scopeTitle = peer.scope === 'readonly' ? 'Read-only access (click to change)' : 'Full access (click to change)';
+
         row.innerHTML = `
           <span class="peer-status ${statusClass}" title="${statusLabel}"></span>
           <span class="peer-info">
             <strong>${escHtml(peer.name)}</strong>
             <small>${escHtml(peer.url)}${versionText}${latencyText}</small>
           </span>
+          <button class="peer-scope-btn ${scopeClass}" data-peer="${escHtml(peer.name)}" data-scope="${peer.scope}" title="${scopeTitle}">${scopeLabel}</button>
           ${updateHtml}
           <button class="peer-delete-btn modal-btn" data-peer="${escHtml(peer.name)}" title="Remove peer">×</button>
         `;
@@ -948,6 +953,26 @@ const DenSettings = (() => {
       if (updateAllBtn) {
         updateAllBtn.hidden = outdatedCount === 0;
       }
+
+      // Bind scope toggle buttons
+      list.querySelectorAll('.peer-scope-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const name = btn.dataset.peer;
+          const newScope = btn.dataset.scope === 'admin' ? 'readonly' : 'admin';
+          try {
+            const resp = await fetch(`/api/peers/${encodeURIComponent(name)}/scope`, {
+              method: 'PUT',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ scope: newScope }),
+            });
+            if (resp.ok) loadPeerList();
+            else Toast.error('Failed to update scope');
+          } catch (e) {
+            Toast.error('Failed to update scope');
+          }
+        });
+      });
 
       // Bind update buttons
       list.querySelectorAll('.peer-update-btn').forEach(btn => {

@@ -2836,6 +2836,20 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.peer-scope-btn {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-size: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.peer-scope-admin { color: var(--accent); border-color: var(--accent); }
+.peer-scope-readonly { color: var(--muted); }
+
 .peer-update-btn {
   flex-shrink: 0;
   padding: 2px 8px;

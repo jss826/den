@@ -175,6 +175,7 @@ impl russh::server::Server for DenSshServer {
             connected_at: None,
             is_remote: false,
             remote_ws_tx: None,
+            remote_enc_key: None,
         }
     }
 }
@@ -208,6 +209,8 @@ struct DenSshHandler {
     is_remote: bool,
     /// WebSocket sender for remote peer sessions (SSH → remote WS)
     remote_ws_tx: Option<RemoteWsTx>,
+    /// Encryption key for remote peer WS (set when starting remote bridge)
+    remote_enc_key: Option<String>,
 }
 
 type RemoteWsTx = Arc<
@@ -422,7 +425,16 @@ impl DenSshHandler {
         Some(peer)
     }
 
-    /// Start a remote bridge: SSH channel ↔ WebSocket relay to a peer
+    /// Get our peer name from settings
+    fn my_peer_name(&self) -> String {
+        let settings = self.store.load_settings();
+        settings
+            .peer_name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string())
+    }
+
+    /// Start a remote bridge: SSH channel ↔ encrypted WebSocket relay to a peer
     async fn start_remote_bridge(
         &mut self,
         peer: &PeerConfig,
@@ -432,44 +444,44 @@ impl DenSshHandler {
         use futures::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::{Message as TungMessage, client::IntoClientRequest};
 
+        let enc_key = peer
+            .encryption_key
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Peer {} has no encryption key", peer.name))?
+            .to_string();
+
         let channel_id = self
             .channel_id
             .ok_or_else(|| anyhow::anyhow!("No channel"))?;
 
         let display_name = format!("{}:{}", peer.name, session_name);
 
-        // Build remote WS URL
+        // Build remote encrypted WS URL
         let base = peer.url.trim_end_matches('/');
         let ws_base = if base.starts_with("https://") {
             base.replacen("https://", "wss://", 1)
         } else {
             base.replacen("http://", "ws://", 1)
         };
+        let my_name = self.my_peer_name();
         let cols = self.pty_cols;
         let rows = self.pty_rows;
         let url = format!(
-            "{}/api/ws?session={}&cols={}&rows={}",
-            ws_base, session_name, cols, rows
+            "{}/api/peer-ws?peer={}&session={}&cols={}&rows={}",
+            ws_base, my_name, session_name, cols, rows
         );
 
-        // Build request with auth header
-        let mut request = url
+        let request = url
             .into_client_request()
             .map_err(|e| anyhow::anyhow!("Invalid WS URL: {e}"))?;
-        request.headers_mut().insert(
-            "Authorization",
-            format!("Bearer {}", peer.token)
-                .parse()
-                .expect("valid header value"),
-        );
 
-        // Connect to remote WS
+        // Connect to remote encrypted WS
         let (remote_ws, _) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to connect to peer {}: {e}", peer.name))?;
 
         tracing::info!(
-            "SSH remote bridge established: {} → {}",
+            "SSH encrypted remote bridge established: {} → {}",
             display_name,
             peer.name
         );
@@ -491,35 +503,57 @@ impl DenSshHandler {
         // Store remote_tx for input forwarding
         let remote_tx_for_input = Arc::clone(&remote_tx);
 
-        // Output: remote WS → SSH channel
+        // Output: remote encrypted WS → decrypt → SSH channel
         let handle = session.handle();
+        let enc_key_for_output = enc_key.clone();
         self.output_task = Some(tokio::spawn(async move {
             while let Some(msg) = remote_rx.next().await {
                 match msg {
-                    Ok(TungMessage::Binary(data)) => {
-                        let filtered = filter_output_for_ssh(&data);
-                        let filtered = replace_osc_title(&filtered, &osc_title);
-                        if filtered.is_empty() {
+                    Ok(TungMessage::Binary(encrypted_data)) => {
+                        // Decrypt the frame
+                        let plain =
+                            match crate::crypto::decrypt(&encrypted_data, &enc_key_for_output) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "SSH remote decrypt failed for {display_name}: {e}"
+                                    );
+                                    break;
+                                }
+                            };
+                        if plain.is_empty() {
                             continue;
                         }
-                        if handle
-                            .data(channel_id, CryptoVec::from_slice(&filtered))
-                            .await
-                            .is_err()
-                        {
-                            tracing::debug!(
-                                "SSH remote output: handle.data() failed for {display_name}"
-                            );
-                            break;
-                        }
-                    }
-                    Ok(TungMessage::Text(text)) => {
-                        // Check for session_ended from remote
-                        if text.contains("session_ended") {
-                            let _ = handle.exit_status_request(channel_id, 0).await;
-                            let _ = handle.eof(channel_id).await;
-                            let _ = handle.close(channel_id).await;
-                            break;
+                        // First byte: 0=text, 1=binary
+                        let type_byte = plain[0];
+                        let payload = &plain[1..];
+
+                        if type_byte == 0 {
+                            // Text message — check for session_ended
+                            let text = String::from_utf8_lossy(payload);
+                            if text.contains("session_ended") {
+                                let _ = handle.exit_status_request(channel_id, 0).await;
+                                let _ = handle.eof(channel_id).await;
+                                let _ = handle.close(channel_id).await;
+                                break;
+                            }
+                        } else {
+                            // Binary message — terminal output
+                            let filtered = filter_output_for_ssh(payload);
+                            let filtered = replace_osc_title(&filtered, &osc_title);
+                            if filtered.is_empty() {
+                                continue;
+                            }
+                            if handle
+                                .data(channel_id, CryptoVec::from_slice(&filtered))
+                                .await
+                                .is_err()
+                            {
+                                tracing::debug!(
+                                    "SSH remote output: handle.data() failed for {display_name}"
+                                );
+                                break;
+                            }
                         }
                     }
                     Ok(TungMessage::Close(_)) | Err(_) => {
@@ -543,6 +577,7 @@ impl DenSshHandler {
         // We use a separate channel to pass remote_tx to the data handler.
         // Since russh Handler methods take &mut self, we store it directly.
         self.remote_ws_tx = Some(remote_tx_for_input);
+        self.remote_enc_key = Some(enc_key);
 
         Ok(())
     }
@@ -581,10 +616,11 @@ impl DenSshHandler {
         Ok(())
     }
 
-    /// Fetch session lists from all connected peers
+    /// Fetch session lists from all connected peers (via encrypted RPC)
     async fn fetch_remote_sessions(&self) -> Vec<(String, Vec<serde_json::Value>)> {
         let settings = self.store.load_settings();
         let peers = settings.peers.unwrap_or_default();
+        let my_name = self.my_peer_name();
 
         let mut results = Vec::new();
         for peer in &peers {
@@ -597,30 +633,70 @@ impl DenSshHandler {
                 continue;
             }
 
+            let enc_key = match &peer.encryption_key {
+                Some(k) => k,
+                None => continue,
+            };
+
+            // Use shared encrypt-send-decrypt helper (same protocol as send_encrypted_rpc)
+            let rpc_req = crate::peer::RpcRequest {
+                method: "GET".to_string(),
+                path: "/api/terminal/sessions".to_string(),
+                query: None,
+                headers: std::collections::HashMap::new(),
+                body: vec![],
+            };
+            let plaintext = match serde_json::to_vec(&rpc_req) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let encrypted = match crate::crypto::encrypt(&plaintext, enc_key) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
             let client = match reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
-                .danger_accept_invalid_certs(true)
                 .build()
             {
                 Ok(c) => c,
                 Err(_) => continue,
             };
 
-            let url = format!("{}/api/terminal/sessions", peer.url.trim_end_matches('/'));
-            match client
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", peer.token))
+            let url = format!("{}/api/peer-rpc", peer.url.trim_end_matches('/'));
+            let resp = match client
+                .post(&url)
+                .header("Content-Type", "application/octet-stream")
+                .header("X-Peer-Name", &my_name)
+                .body(encrypted)
                 .send()
                 .await
             {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(sessions) = resp.json::<Vec<serde_json::Value>>().await
-                        && !sessions.is_empty()
-                    {
-                        results.push((peer.name.clone(), sessions));
-                    }
-                }
-                _ => {}
+                Ok(r) if r.status().is_success() => r,
+                _ => continue,
+            };
+
+            let enc_body = match resp.bytes().await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            let dec_body = match crate::crypto::decrypt(&enc_body, enc_key) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            // Parse the RPC response envelope (same format as RpcResponse)
+            let rpc_resp: crate::peer::RpcResponse = match serde_json::from_slice(&dec_body) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if rpc_resp.status == 200
+                && let Ok(sessions) =
+                    serde_json::from_slice::<Vec<serde_json::Value>>(&rpc_resp.body)
+                && !sessions.is_empty()
+            {
+                results.push((peer.name.clone(), sessions));
             }
         }
         results
@@ -1013,12 +1089,18 @@ impl Handler for DenSshHandler {
         }
 
         if self.is_remote {
-            // Forward to remote peer via WebSocket
-            if let Some(ref remote_tx) = self.remote_ws_tx {
+            // Encrypt and forward to remote peer via WebSocket
+            if let (Some(remote_tx), Some(enc_key)) = (&self.remote_ws_tx, &self.remote_enc_key) {
                 use futures::SinkExt;
                 use tokio_tungstenite::tungstenite::Message as TungMessage;
-                let mut tx = remote_tx.lock().await;
-                let _ = tx.send(TungMessage::Binary(forward.into())).await;
+                // Binary frame: type_byte=1 + payload
+                let mut plain = Vec::with_capacity(1 + forward.len());
+                plain.push(1u8); // binary type
+                plain.extend_from_slice(&forward);
+                if let Ok(encrypted) = crate::crypto::encrypt(&plain, enc_key) {
+                    let mut tx = remote_tx.lock().await;
+                    let _ = tx.send(TungMessage::Binary(encrypted.into())).await;
+                }
             }
         } else if let Some(ref shared) = self.shared_session {
             // Forward to local PTY
@@ -1047,16 +1129,22 @@ impl Handler for DenSshHandler {
         self.pty_rows = row_height as u16;
 
         if self.is_remote {
-            // Send resize command to remote peer via WebSocket
-            if let Some(ref remote_tx) = self.remote_ws_tx {
+            // Encrypt and send resize command to remote peer via WebSocket
+            if let (Some(remote_tx), Some(enc_key)) = (&self.remote_ws_tx, &self.remote_enc_key) {
                 use futures::SinkExt;
                 use tokio_tungstenite::tungstenite::Message as TungMessage;
                 let json = format!(
                     r#"{{"type":"resize","cols":{},"rows":{}}}"#,
                     col_width, row_height
                 );
-                let mut tx = remote_tx.lock().await;
-                let _ = tx.send(TungMessage::Text(json.into())).await;
+                // Text frame: type_byte=0 + payload
+                let mut plain = Vec::with_capacity(1 + json.len());
+                plain.push(0u8); // text type
+                plain.extend_from_slice(json.as_bytes());
+                if let Ok(encrypted) = crate::crypto::encrypt(&plain, enc_key) {
+                    let mut tx = remote_tx.lock().await;
+                    let _ = tx.send(TungMessage::Binary(encrypted.into())).await;
+                }
             }
         } else if let (Some(session), Some(client_id)) = (&self.shared_session, self.client_id) {
             session

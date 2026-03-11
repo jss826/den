@@ -367,214 +367,226 @@ async fn handle_ws_proxy(socket: WebSocket, port: u16, path: String) {
 // --- Remote Peer Port Proxy ---
 
 /// Look up peer config and build proxy URL base.
-fn peer_fwd_base(state: &AppState, peer_name: &str) -> Result<(String, String), StatusCode> {
-    let settings = state.store.load_settings();
-    let peer = settings
-        .peers
-        .as_ref()
-        .and_then(|peers| peers.iter().find(|p| p.name == peer_name))
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let base = peer.url.trim_end_matches('/').to_string();
-    let token = peer.token.clone();
-    Ok((base, token))
-}
-
-/// HTTP proxy: `/fwd/{peer}/{port}/{*path}` → remote peer's `/fwd/{port}/{path}`
+/// HTTP proxy: `/fwd/peer/{peer}/{port}/{*path}` → encrypted RPC to remote peer
 pub async fn fwd_peer_proxy(
     State(state): State<Arc<AppState>>,
     Path((peer_name, port, path)): Path<(String, u16, String)>,
     req: Request,
 ) -> axum::response::Response {
-    proxy_peer_http(&state, &peer_name, port, &path, req).await
+    proxy_peer_http_encrypted(&state, &peer_name, port, &path, req).await
 }
 
-/// HTTP proxy: `/fwd/{peer}/{port}` → remote peer's `/fwd/{port}`
+/// HTTP proxy: `/fwd/peer/{peer}/{port}` → encrypted RPC to remote peer
 pub async fn fwd_peer_proxy_root(
     State(state): State<Arc<AppState>>,
     Path((peer_name, port)): Path<(String, u16)>,
     req: Request,
 ) -> axum::response::Response {
-    proxy_peer_http(&state, &peer_name, port, "", req).await
+    proxy_peer_http_encrypted(&state, &peer_name, port, "", req).await
 }
 
-/// WebSocket proxy: `/fwd-ws/{peer}/{port}/{*path}` → remote peer's WS
+/// WebSocket proxy: `/fwd-ws/peer/{peer}/{port}/{*path}` → encrypted WS to remote peer
 pub async fn fwd_peer_ws_proxy(
     State(state): State<Arc<AppState>>,
     Path((peer_name, port, path)): Path<(String, u16, String)>,
     ws: WebSocketUpgrade,
 ) -> axum::response::Response {
-    let (base, token) = match peer_fwd_base(&state, &peer_name) {
-        Ok(v) => v,
+    let peer = match crate::peer::lookup_peer(&state, &peer_name) {
+        Ok(p) => p,
         Err(s) => return s.into_response(),
     };
-    ws.on_upgrade(move |socket| handle_peer_ws_proxy(socket, base, token, port, path))
-        .into_response()
+    let enc_key = match &peer.encryption_key {
+        Some(k) => k.clone(),
+        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let my_name = get_my_peer_name(&state);
+    ws.on_upgrade(move |socket| {
+        handle_peer_ws_proxy_encrypted(socket, peer, enc_key, my_name, port, path)
+    })
+    .into_response()
 }
 
-/// WebSocket proxy: `/fwd-ws/{peer}/{port}` → remote peer's WS
+/// WebSocket proxy: `/fwd-ws/peer/{peer}/{port}` → encrypted WS to remote peer
 pub async fn fwd_peer_ws_proxy_root(
     State(state): State<Arc<AppState>>,
     Path((peer_name, port)): Path<(String, u16)>,
     ws: WebSocketUpgrade,
 ) -> axum::response::Response {
-    let (base, token) = match peer_fwd_base(&state, &peer_name) {
-        Ok(v) => v,
+    let peer = match crate::peer::lookup_peer(&state, &peer_name) {
+        Ok(p) => p,
         Err(s) => return s.into_response(),
     };
-    ws.on_upgrade(move |socket| handle_peer_ws_proxy(socket, base, token, port, String::new()))
-        .into_response()
+    let enc_key = match &peer.encryption_key {
+        Some(k) => k.clone(),
+        None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let my_name = get_my_peer_name(&state);
+    ws.on_upgrade(move |socket| {
+        handle_peer_ws_proxy_encrypted(socket, peer, enc_key, my_name, port, String::new())
+    })
+    .into_response()
 }
 
-/// Proxy HTTP request to remote peer's /fwd/{port}/{path}.
-async fn proxy_peer_http(
+fn get_my_peer_name(state: &AppState) -> String {
+    let settings = state.store.load_settings();
+    settings
+        .peer_name
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string())
+}
+
+/// Proxy HTTP request to remote peer via encrypted RPC.
+async fn proxy_peer_http_encrypted(
     state: &AppState,
     peer_name: &str,
     port: u16,
     path: &str,
     req: Request,
 ) -> axum::response::Response {
-    let (base, token) = match peer_fwd_base(state, peer_name) {
-        Ok(v) => v,
+    let peer = match crate::peer::lookup_peer(state, peer_name) {
+        Ok(p) => p,
         Err(s) => return s.into_response(),
     };
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .danger_accept_invalid_certs(true)
-        .build();
-
-    let client = match client {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Proxy client error: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    let method = req.method().clone();
+    let method = req.method().as_str().to_string();
     let uri = req.uri().clone();
-    let headers = req.headers().clone();
+    let req_headers = req.headers().clone();
 
-    let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
-    let target = if path.is_empty() {
-        format!("{base}/fwd/{port}{query}")
+    let query = uri.query().map(String::from);
+    let fwd_path = if path.is_empty() {
+        format!("/fwd/{port}")
     } else {
-        format!("{base}/fwd/{port}/{path}{query}")
+        format!("/fwd/{port}/{path}")
     };
-
-    let reqwest_method =
-        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
 
     let body_bytes = match axum::body::to_bytes(req.into_body(), 50 * 1024 * 1024).await {
-        Ok(b) => b,
+        Ok(b) => b.to_vec(),
         Err(e) => {
             return (StatusCode::BAD_REQUEST, format!("Body read error: {e}")).into_response();
         }
     };
 
-    let mut builder = client
-        .request(reqwest_method, &target)
-        .header("Authorization", format!("Bearer {token}"));
-
-    for (name, value) in &headers {
+    let mut headers = std::collections::HashMap::new();
+    for (name, value) in &req_headers {
         let skip = matches!(
             name.as_str(),
             "host" | "connection" | "upgrade" | "transfer-encoding" | "authorization" | "cookie"
         );
-        if !skip && let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
-            builder = builder.header(name.as_str(), v);
+        if !skip && let Ok(v) = value.to_str() {
+            headers.insert(name.as_str().to_string(), v.to_string());
         }
     }
 
-    builder = builder.body(body_bytes);
-
-    match builder.send().await {
-        Ok(resp) => convert_response(resp).await,
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            format!("Peer proxy request failed: {e}"),
-        )
-            .into_response(),
+    match crate::peer::send_encrypted_rpc(
+        state,
+        &peer,
+        &method,
+        &fwd_path,
+        query.as_deref(),
+        headers,
+        body_bytes,
+        None,
+    )
+    .await
+    {
+        Ok(resp) => resp,
+        Err(status) => status.into_response(),
     }
 }
 
-/// Bidirectional WebSocket proxy to remote peer's /fwd-ws/{port}/{path}.
-async fn handle_peer_ws_proxy(
+/// Bidirectional encrypted WebSocket proxy to remote peer.
+async fn handle_peer_ws_proxy_encrypted(
     socket: WebSocket,
-    base: String,
-    token: String,
+    peer: crate::store::PeerConfig,
+    enc_key: String,
+    my_name: String,
     port: u16,
     path: String,
 ) {
-    // Convert https:// to wss://, http:// to ws://
-    let ws_base = base
-        .replacen("https://", "wss://", 1)
-        .replacen("http://", "ws://", 1);
-    let ws_url = if path.is_empty() {
-        format!("{ws_base}/fwd-ws/{port}")
+    use tokio_tungstenite::tungstenite::{Message as TungMsg, client::IntoClientRequest};
+
+    // Build remote encrypted WS URL for port forwarding
+    let base = peer.url.trim_end_matches('/');
+    let ws_base = if base.starts_with("https://") {
+        base.replacen("https://", "wss://", 1)
     } else {
-        format!("{ws_base}/fwd-ws/{port}/{path}")
+        base.replacen("http://", "ws://", 1)
     };
+    let fwd_path = if path.is_empty() {
+        format!("fwd-ws/{port}")
+    } else {
+        format!("fwd-ws/{port}/{path}")
+    };
+    // Connect to remote's /api/peer-ws with the fwd path as extra query
+    let url = format!(
+        "{ws_base}/api/peer-ws?peer={my_name}&fwd_path={}",
+        urlencoding::encode(&fwd_path)
+    );
 
-    // Build request with auth header
-    let request = tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(&ws_url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header(
-            "Sec-WebSocket-Key",
-            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
-        )
-        .header("Sec-WebSocket-Version", "13")
-        .body(())
-        .unwrap();
-
-    let connect_result = tokio_tungstenite::connect_async(request).await;
-    let (remote_ws, _) = match connect_result {
+    let request = match url.into_client_request() {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("Peer WS proxy connect failed to {ws_url}: {e}");
+            tracing::warn!("Peer WS proxy: invalid URL: {e}");
+            return;
+        }
+    };
+
+    let (remote_ws, _) = match tokio_tungstenite::connect_async(request).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Peer WS proxy connect failed: {e}");
             return;
         }
     };
 
     let (mut local_tx, mut local_rx) = socket.split();
     let (mut remote_tx, mut remote_rx) = remote_ws.split();
+    let enc_key2 = enc_key.clone();
 
     use axum::extract::ws::Message as AxumMsg;
-    use tokio_tungstenite::tungstenite::Message as TungMsg;
 
+    // browser → encrypt → remote
     let local_to_remote = async {
         while let Some(Ok(msg)) = local_rx.next().await {
-            let tung_msg = match msg {
-                AxumMsg::Text(t) => TungMsg::Text(t.to_string().into()),
-                AxumMsg::Binary(b) => TungMsg::Binary(b.to_vec().into()),
-                AxumMsg::Ping(p) => TungMsg::Ping(p.to_vec().into()),
-                AxumMsg::Pong(p) => TungMsg::Pong(p.to_vec().into()),
+            let (type_byte, payload) = match msg {
+                AxumMsg::Text(t) => (0u8, t.as_bytes().to_vec()),
+                AxumMsg::Binary(b) => (1u8, b.to_vec()),
+                AxumMsg::Ping(_) | AxumMsg::Pong(_) => continue,
                 AxumMsg::Close(_) => break,
             };
-            if remote_tx.send(tung_msg).await.is_err() {
+            let mut plain = Vec::with_capacity(1 + payload.len());
+            plain.push(type_byte);
+            plain.extend_from_slice(&payload);
+            if let Ok(encrypted) = crate::crypto::encrypt(&plain, &enc_key)
+                && remote_tx
+                    .send(TungMsg::Binary(encrypted.into()))
+                    .await
+                    .is_err()
+            {
                 break;
             }
         }
     };
 
+    // remote → decrypt → browser
     let remote_to_local = async {
         while let Some(Ok(msg)) = remote_rx.next().await {
-            let axum_msg = match msg {
-                TungMsg::Text(t) => AxumMsg::Text(t.to_string().into()),
-                TungMsg::Binary(b) => AxumMsg::Binary(b.to_vec().into()),
-                TungMsg::Ping(p) => AxumMsg::Ping(p.to_vec().into()),
-                TungMsg::Pong(p) => AxumMsg::Pong(p.to_vec().into()),
-                TungMsg::Close(_) => break,
-                _ => continue,
-            };
-            if local_tx.send(axum_msg).await.is_err() {
-                break;
+            if let TungMsg::Binary(data) = msg {
+                if let Ok(plain) = crate::crypto::decrypt(&data, &enc_key2) {
+                    if plain.is_empty() {
+                        continue;
+                    }
+                    let axum_msg = if plain[0] == 0 {
+                        AxumMsg::Text(String::from_utf8_lossy(&plain[1..]).to_string().into())
+                    } else {
+                        AxumMsg::Binary(plain[1..].to_vec().into())
+                    };
+                    if local_tx.send(axum_msg).await.is_err() {
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
         }
     };
@@ -584,5 +596,5 @@ async fn handle_peer_ws_proxy(
         _ = remote_to_local => {},
     }
 
-    tracing::debug!("Peer WS proxy closed for {port}");
+    tracing::debug!("Encrypted peer WS proxy closed for {port}");
 }

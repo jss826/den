@@ -13,6 +13,12 @@ static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 const TEST_HMAC_SECRET: &[u8] = b"test-secret-key-for-integration!";
 
+/// Generate a test X25519 public key (hex-encoded) for pairing tests.
+fn test_public_key() -> String {
+    let (_, public_hex) = den::crypto::generate_keypair();
+    public_hex
+}
+
 fn test_config() -> Config {
     let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!("den-test-{}-{}", std::process::id(), id));
@@ -1529,7 +1535,7 @@ async fn peers_pair_invalid_code_rejected() {
         .uri("/api/peers/pair")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            r#"{"code":"badcode","name":"test-peer","url":"http://peer:8080","token":"tok123"}"#,
+            format!(r#"{{"code":"badcode","name":"test-peer","url":"http://peer:8080","token":"tok123","public_key":"{}"}}"#, test_public_key()),
         ))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1546,7 +1552,8 @@ async fn peers_pair_valid_code_succeeds() {
         "code": code,
         "name": "remote-den",
         "url": "http://192.168.1.10:8080",
-        "token": "remote-token-abc"
+        "token": "remote-token-abc",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1568,6 +1575,9 @@ async fn peers_pair_valid_code_succeeds() {
     assert_eq!(peers[0].name, "remote-den");
     assert_eq!(peers[0].url, "http://192.168.1.10:8080");
     assert_eq!(peers[0].token, "remote-token-abc");
+    // Verify encryption key was derived during pairing
+    assert!(peers[0].encryption_key.is_some());
+    assert_eq!(peers[0].encryption_key.as_ref().unwrap().len(), 64); // 32 bytes hex
 }
 
 #[tokio::test]
@@ -1580,7 +1590,8 @@ async fn peers_pair_code_consumed_once() {
         "code": code,
         "name": "peer-a",
         "url": "http://a:8080",
-        "token": "tok-a"
+        "token": "tok-a",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1595,7 +1606,8 @@ async fn peers_pair_code_consumed_once() {
         "code": code,
         "name": "peer-b",
         "url": "http://b:8080",
-        "token": "tok-b"
+        "token": "tok-b",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1632,7 +1644,8 @@ async fn peers_list_after_pair() {
         "code": code,
         "name": "my-peer",
         "url": "http://peer:8080",
-        "token": "peer-tok"
+        "token": "peer-tok",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1667,7 +1680,8 @@ async fn peers_delete() {
         "code": code,
         "name": "del-peer",
         "url": "http://peer:8080",
-        "token": "peer-tok"
+        "token": "peer-tok",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1715,7 +1729,8 @@ async fn peers_pair_invalid_name_rejected() {
         "code": code,
         "name": "invalid name!",
         "url": "http://peer:8080",
-        "token": "tok"
+        "token": "tok",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1736,7 +1751,8 @@ async fn peer_token_authenticates_to_protected_routes() {
         "code": code,
         "name": "auth-peer",
         "url": "http://peer:8080",
-        "token": "my-secret-peer-token"
+        "token": "my-secret-peer-token",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1849,7 +1865,8 @@ async fn peers_full_pairing_e2e() {
         "code": code,
         "name": "den-b",
         "url": "http://den-b:8080",
-        "token": "b-token-for-a"
+        "token": "b-token-for-a",
+        "public_key": test_public_key()
     });
     let req = Request::builder()
         .method("POST")
@@ -1863,15 +1880,18 @@ async fn peers_full_pairing_e2e() {
     let pair_resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let a_name = pair_resp["name"].as_str().unwrap();
     let a_token = pair_resp["token"].as_str().unwrap();
+    let a_public_key = pair_resp["public_key"].as_str().unwrap();
     assert!(!a_name.is_empty());
     assert!(!a_token.is_empty());
+    assert_eq!(a_public_key.len(), 64); // 32 bytes hex
 
-    // Step 3: Den A has Den B in peers
+    // Step 3: Den A has Den B in peers with encryption key
     let settings_a = state_a.store.load_settings();
     let peers_a = settings_a.peers.unwrap();
     assert_eq!(peers_a.len(), 1);
     assert_eq!(peers_a[0].name, "den-b");
     assert_eq!(peers_a[0].token, "b-token-for-a");
+    assert!(peers_a[0].encryption_key.is_some());
 
     // Step 4: Den B's token authenticates to Den A
     let req = Request::builder()
@@ -1974,6 +1994,8 @@ async fn proxy_list_sessions_with_registered_peer_returns_bad_gateway() {
         name: "fake-peer".to_string(),
         url: "http://127.0.0.1:1".to_string(), // unreachable port
         token: "fake-token".to_string(),
+        encryption_key: Some("a".repeat(64)),
+        scope: den::store::PeerScope::Admin,
     };
     let mut settings = state.store.load_settings();
     settings.peers = Some(vec![peer]);
@@ -2126,6 +2148,8 @@ async fn proxy_filer_with_registered_peer_returns_bad_gateway() {
         name: "fake-peer".to_string(),
         url: "http://127.0.0.1:1".to_string(),
         token: "fake-token".to_string(),
+        encryption_key: Some("a".repeat(64)),
+        scope: den::store::PeerScope::Admin,
     };
     let mut settings = state.store.load_settings();
     settings.peers = Some(vec![peer]);
@@ -2138,4 +2162,192 @@ async fn proxy_filer_with_registered_peer_returns_bad_gateway() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+}
+
+// --- Peer Scope API ---
+
+#[tokio::test]
+async fn peer_scope_update() {
+    let (app, state) = test_app_with_state();
+
+    // Pair a peer first
+    let (code, _token) = state.peer_registry.create_invite();
+    let body = serde_json::json!({
+        "code": code,
+        "name": "scope-peer",
+        "url": "http://peer:8080",
+        "token": "tok",
+        "public_key": test_public_key()
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap();
+
+    // Default scope is admin
+    let settings = state.store.load_settings();
+    let peers = settings.peers.unwrap();
+    assert_eq!(peers[0].scope, den::store::PeerScope::Admin);
+
+    // Update to readonly
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/peers/scope-peer/scope")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"scope":"readonly"}"#))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let settings = state.store.load_settings();
+    let peers = settings.peers.unwrap();
+    assert_eq!(peers[0].scope, den::store::PeerScope::ReadOnly);
+}
+
+#[tokio::test]
+async fn peer_scope_update_nonexistent_peer() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/peers/no-such-peer/scope")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"scope":"readonly"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// --- Encrypted Peer RPC ---
+
+#[tokio::test]
+async fn peer_rpc_unknown_peer_rejected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peer-rpc")
+        .header("Content-Type", "application/octet-stream")
+        .header("X-Peer-Name", "nonexistent")
+        .body(Body::from(vec![0u8; 32]))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn peer_rpc_missing_peer_name_rejected() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peer-rpc")
+        .header("Content-Type", "application/octet-stream")
+        .body(Body::from(vec![0u8; 32]))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn peer_rpc_invalid_ciphertext_rejected() {
+    let (app, state) = test_app_with_state();
+
+    let (secret_a, _pub_a) = den::crypto::generate_keypair();
+    let (_, pub_b) = den::crypto::generate_keypair();
+    let enc_key = den::crypto::derive_key(&secret_a, &pub_b).unwrap();
+
+    let peer = den::store::PeerConfig {
+        name: "rpc-peer".to_string(),
+        url: "http://127.0.0.1:1".to_string(),
+        token: "tok".to_string(),
+        encryption_key: Some(enc_key),
+        scope: den::store::PeerScope::Admin,
+    };
+    let mut settings = state.store.load_settings();
+    settings.peers = Some(vec![peer]);
+    state.store.save_settings(&settings).unwrap();
+
+    // Send garbage ciphertext
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peer-rpc")
+        .header("Content-Type", "application/octet-stream")
+        .header("X-Peer-Name", "rpc-peer")
+        .body(Body::from(vec![0u8; 64]))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn peer_rpc_readonly_scope_blocks_post() {
+    let (app, state) = test_app_with_state();
+
+    let (secret_a, _pub_a) = den::crypto::generate_keypair();
+    let (_secret_b, pub_b) = den::crypto::generate_keypair();
+    let enc_key_a = den::crypto::derive_key(&secret_a, &pub_b).unwrap();
+
+    let peer = den::store::PeerConfig {
+        name: "readonly-peer".to_string(),
+        url: "http://127.0.0.1:1".to_string(),
+        token: "tok".to_string(),
+        encryption_key: Some(enc_key_a.clone()),
+        scope: den::store::PeerScope::ReadOnly,
+    };
+    let mut settings = state.store.load_settings();
+    settings.peers = Some(vec![peer]);
+    state.store.save_settings(&settings).unwrap();
+
+    // Build a valid encrypted RPC request with POST method
+    let rpc_req = serde_json::json!({
+        "method": "POST",
+        "path": "/api/terminal/sessions",
+    });
+    let plaintext = serde_json::to_vec(&rpc_req).unwrap();
+    let encrypted = den::crypto::encrypt(&plaintext, &enc_key_a).unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peer-rpc")
+        .header("Content-Type", "application/octet-stream")
+        .header("X-Peer-Name", "readonly-peer")
+        .body(Body::from(encrypted))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn peer_list_includes_scope() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+    let body = serde_json::json!({
+        "code": code,
+        "name": "scoped-peer",
+        "url": "http://peer:8080",
+        "token": "tok",
+        "public_key": test_public_key()
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .uri("/api/peers")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let peers = json.as_array().unwrap();
+    assert_eq!(peers[0]["scope"], "admin");
 }

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
+pub mod crypto;
 pub mod filer;
 pub mod peer;
 pub mod port_detection;
@@ -87,6 +88,10 @@ pub fn create_app_with_secret(
         .route("/api/logout", post(auth::logout))
         // Peer pairing endpoint: authenticated by invite code, not user token
         .route("/api/peers/pair", post(peer::pair))
+        // Peer RPC endpoint: authenticated by encryption, not user token
+        .route("/api/peer-rpc", post(peer::peer_rpc))
+        // Peer encrypted WebSocket: authenticated by encryption
+        .route("/api/peer-ws", get(peer::peer_ws))
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
@@ -144,6 +149,7 @@ pub fn create_app_with_secret(
         .route("/api/peers/join", post(peer::join))
         .route("/api/peers", get(peer::list_peers))
         .route("/api/peers/{name}", delete(peer::delete_peer))
+        .route("/api/peers/{name}/scope", put(peer::update_peer_scope))
         // Peer terminal proxy API
         .route(
             "/api/peers/{name}/terminal/sessions",
