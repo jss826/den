@@ -357,6 +357,52 @@ pub async fn destroy_session(
     StatusCode::NO_CONTENT
 }
 
+// --- Port detection API ---
+
+/// Unified port info for GET /api/ports.
+#[derive(serde::Serialize)]
+struct UnifiedPort {
+    port: u16,
+    source: String,
+    /// Which session detected this port (None = system monitor).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
+}
+
+/// GET /api/ports — all detected ports (system monitor + PTY detection).
+pub async fn list_all_ports(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut ports: Vec<UnifiedPort> = Vec::new();
+    let mut seen: std::collections::HashSet<u16> = std::collections::HashSet::new();
+
+    // 1. PTY-detected ports from all sessions
+    let sessions = state.registry.list().await;
+    for si in &sessions {
+        for p in &si.detected_ports {
+            if seen.insert(p.port) {
+                ports.push(UnifiedPort {
+                    port: p.port,
+                    source: "pty".to_string(),
+                    session: Some(si.name.clone()),
+                });
+            }
+        }
+    }
+
+    // 2. System-level monitored ports
+    for mp in state.port_monitor.get_ports() {
+        if seen.insert(mp.port) {
+            ports.push(UnifiedPort {
+                port: mp.port,
+                source: "system".to_string(),
+                session: None,
+            });
+        }
+    }
+
+    ports.sort_by_key(|p| p.port);
+    Json(ports).into_response()
+}
+
 // --- Port forwarding API ---
 
 /// GET /api/terminal/sessions/{name}/ports

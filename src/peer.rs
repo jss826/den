@@ -556,6 +556,26 @@ async fn proxy_response(resp: reqwest::Response) -> Result<Response, StatusCode>
     Ok(response)
 }
 
+/// GET /api/peers/{name}/ports — proxy to remote peer's /api/ports
+pub async fn proxy_list_ports(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let client = proxy_client()?;
+    let url = format!("{}/api/ports", peer.url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy GET ports failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
 /// GET /api/peers/{name}/terminal/sessions
 pub async fn proxy_list_sessions(
     State(state): State<Arc<AppState>>,

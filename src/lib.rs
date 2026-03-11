@@ -7,6 +7,7 @@ pub mod filer;
 pub mod peer;
 pub mod port_detection;
 pub mod port_forward;
+pub mod port_monitor;
 pub mod pty;
 pub mod sftp;
 pub mod ssh;
@@ -32,6 +33,7 @@ pub struct AppState {
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
     pub peer_registry: Arc<peer::PeerRegistry>,
+    pub port_monitor: Arc<port_monitor::PortMonitor>,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -61,6 +63,13 @@ pub fn create_app_with_secret(
 
     let sftp_manager = sftp::client::SftpManager::new(store.clone());
 
+    let port_monitor = Arc::new(port_monitor::PortMonitor::new());
+    let mut exclude_ports = vec![config.port];
+    if let Some(ssh_port) = config.ssh_port {
+        exclude_ports.push(ssh_port);
+    }
+    port_monitor.start(exclude_ports);
+
     let state = Arc::new(AppState {
         config,
         store,
@@ -69,6 +78,7 @@ pub fn create_app_with_secret(
         rate_limiter: auth::LoginRateLimiter::new(),
         sftp_manager,
         peer_registry,
+        port_monitor,
     });
 
     // 認証不要のルート
@@ -175,6 +185,10 @@ pub fn create_app_with_secret(
             "/api/peers/{name}/filer/search",
             get(peer::proxy_filer_search),
         )
+        // Port detection API (system-level + PTY combined)
+        .route("/api/ports", get(ws::list_all_ports))
+        // Peer port proxy API
+        .route("/api/peers/{name}/ports", get(peer::proxy_list_ports))
         // Port forwarding API
         .route("/api/terminal/sessions/{name}/ports", get(ws::list_ports))
         .route(
@@ -201,6 +215,31 @@ pub fn create_app_with_secret(
         // WebSocket proxy for forwarded ports
         .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
         .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
+        // Remote peer port proxy (HTTP + WebSocket)
+        .route(
+            "/fwd/peer/{peer}/{port}",
+            get(port_forward::fwd_peer_proxy_root)
+                .post(port_forward::fwd_peer_proxy_root)
+                .put(port_forward::fwd_peer_proxy_root)
+                .delete(port_forward::fwd_peer_proxy_root)
+                .patch(port_forward::fwd_peer_proxy_root),
+        )
+        .route(
+            "/fwd/peer/{peer}/{port}/{*path}",
+            get(port_forward::fwd_peer_proxy)
+                .post(port_forward::fwd_peer_proxy)
+                .put(port_forward::fwd_peer_proxy)
+                .delete(port_forward::fwd_peer_proxy)
+                .patch(port_forward::fwd_peer_proxy),
+        )
+        .route(
+            "/fwd-ws/peer/{peer}/{port}",
+            get(port_forward::fwd_peer_ws_proxy_root),
+        )
+        .route(
+            "/fwd-ws/peer/{peer}/{port}/{*path}",
+            get(port_forward::fwd_peer_ws_proxy),
+        )
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

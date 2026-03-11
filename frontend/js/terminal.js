@@ -828,18 +828,55 @@ const DenTerminal = (() => {
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
   }
 
-  function updatePortBar(sessions) {
+  async function updatePortBar(sessions) {
     const portBar = document.getElementById('port-bar');
     if (!portBar) return;
 
-    // Collect all detected ports from all sessions
+    // Collect all detected ports from all sessions (PTY detection)
     const allPorts = [];
+    const seenPorts = new Set();
     for (const s of sessions) {
       if (!s.detected_ports || s.detected_ports.length === 0) continue;
       const sessionKey = s.peer ? `${s.peer}:${s.name}` : s.name;
       for (const p of s.detected_ports) {
-        allPorts.push({ ...p, session: s.name, peer: s.peer, sessionKey });
+        const key = `${s.peer || ''}:${p.port}`;
+        if (!seenPorts.has(key)) {
+          seenPorts.add(key);
+          allPorts.push({ ...p, session: s.name, peer: s.peer, sessionKey });
+        }
       }
+    }
+
+    // Fetch system-monitored ports (local) and merge
+    try {
+      const resp = await fetch('/api/ports', { credentials: 'same-origin' });
+      if (resp.ok) {
+        const systemPorts = await resp.json();
+        for (const sp of systemPorts) {
+          const key = `:${sp.port}`;
+          if (!seenPorts.has(key) && sp.source === 'system') {
+            seenPorts.add(key);
+            allPorts.push({ port: sp.port, forwarded: false, session: null, peer: null, sessionKey: 'system', source: 'system' });
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Fetch remote peer ports
+    for (const peer of (cachedPeers || []).filter(p => p.status === 'connected')) {
+      try {
+        const resp = await fetch(`/api/peers/${encodeURIComponent(peer.name)}/ports`, { credentials: 'same-origin' });
+        if (resp.ok) {
+          const remotePorts = await resp.json();
+          for (const rp of remotePorts) {
+            const key = `${peer.name}:${rp.port}`;
+            if (!seenPorts.has(key)) {
+              seenPorts.add(key);
+              allPorts.push({ port: rp.port, forwarded: false, session: rp.session || null, peer: peer.name, sessionKey: `${peer.name}:${rp.session || 'system'}`, source: rp.source || 'system' });
+            }
+          }
+        }
+      } catch { /* ignore */ }
     }
 
     if (allPorts.length === 0) {
@@ -852,8 +889,8 @@ const DenTerminal = (() => {
       if (!lastKnownPorts[p.sessionKey]) lastKnownPorts[p.sessionKey] = new Set();
       if (!lastKnownPorts[p.sessionKey].has(p.port)) {
         lastKnownPorts[p.sessionKey].add(p.port);
-        const label = p.peer ? `${p.peer}:${p.session}` : p.session;
-        Toast.info(`Port ${p.port} detected in ${label}`);
+        const label = p.peer ? `${p.peer}:${p.port}` : `Port ${p.port}`;
+        Toast.info(`${label} detected`);
       }
     }
 
@@ -869,7 +906,8 @@ const DenTerminal = (() => {
       dot.className = 'port-dot' + (p.forwarded ? ' forwarded' : '');
       badge.appendChild(dot);
 
-      const text = document.createTextNode(String(p.port));
+      const label = p.peer ? `${p.peer}:${p.port}` : String(p.port);
+      const text = document.createTextNode(label);
       badge.appendChild(text);
 
       badge.addEventListener('click', () => onPortClick(p));
@@ -896,8 +934,12 @@ const DenTerminal = (() => {
       } catch { /* ignore — will open directly */ }
     }
 
-    // Open the forwarded port in a new tab
-    window.open(`/fwd/${portInfo.port}/`, '_blank');
+    // Open the forwarded port: remote peer → /fwd/{peer}/{port}/, local → /fwd/{port}/
+    if (portInfo.peer) {
+      window.open(`/fwd/peer/${encodeURIComponent(portInfo.peer)}/${portInfo.port}/`, '_blank');
+    } else {
+      window.open(`/fwd/${portInfo.port}/`, '_blank');
+    }
   }
 
   function initSessionBar() {

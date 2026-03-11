@@ -198,8 +198,9 @@ pub async fn fwd_ws_proxy_root(
         .into_response()
 }
 
-/// Check if a port is known (detected in any session).
+/// Check if a port is known (detected in any session or system monitor).
 async fn is_port_known(state: &AppState, port: u16) -> bool {
+    // Check PTY-detected ports
     let sessions = state.registry.list_sessions_raw().await;
     for session in &sessions {
         if let Ok(ports) = session.detected_ports.lock()
@@ -208,7 +209,12 @@ async fn is_port_known(state: &AppState, port: u16) -> bool {
             return true;
         }
     }
-    false
+    // Check system-monitored ports
+    state
+        .port_monitor
+        .get_ports()
+        .iter()
+        .any(|p| p.port == port)
 }
 
 /// Proxy an HTTP request to localhost:{port}.
@@ -356,4 +362,227 @@ async fn handle_ws_proxy(socket: WebSocket, port: u16, path: String) {
     }
 
     tracing::debug!("WS proxy closed for port {port}");
+}
+
+// --- Remote Peer Port Proxy ---
+
+/// Look up peer config and build proxy URL base.
+fn peer_fwd_base(state: &AppState, peer_name: &str) -> Result<(String, String), StatusCode> {
+    let settings = state.store.load_settings();
+    let peer = settings
+        .peers
+        .as_ref()
+        .and_then(|peers| peers.iter().find(|p| p.name == peer_name))
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let base = peer.url.trim_end_matches('/').to_string();
+    let token = peer.token.clone();
+    Ok((base, token))
+}
+
+/// HTTP proxy: `/fwd/{peer}/{port}/{*path}` → remote peer's `/fwd/{port}/{path}`
+pub async fn fwd_peer_proxy(
+    State(state): State<Arc<AppState>>,
+    Path((peer_name, port, path)): Path<(String, u16, String)>,
+    req: Request,
+) -> axum::response::Response {
+    proxy_peer_http(&state, &peer_name, port, &path, req).await
+}
+
+/// HTTP proxy: `/fwd/{peer}/{port}` → remote peer's `/fwd/{port}`
+pub async fn fwd_peer_proxy_root(
+    State(state): State<Arc<AppState>>,
+    Path((peer_name, port)): Path<(String, u16)>,
+    req: Request,
+) -> axum::response::Response {
+    proxy_peer_http(&state, &peer_name, port, "", req).await
+}
+
+/// WebSocket proxy: `/fwd-ws/{peer}/{port}/{*path}` → remote peer's WS
+pub async fn fwd_peer_ws_proxy(
+    State(state): State<Arc<AppState>>,
+    Path((peer_name, port, path)): Path<(String, u16, String)>,
+    ws: WebSocketUpgrade,
+) -> axum::response::Response {
+    let (base, token) = match peer_fwd_base(&state, &peer_name) {
+        Ok(v) => v,
+        Err(s) => return s.into_response(),
+    };
+    ws.on_upgrade(move |socket| handle_peer_ws_proxy(socket, base, token, port, path))
+        .into_response()
+}
+
+/// WebSocket proxy: `/fwd-ws/{peer}/{port}` → remote peer's WS
+pub async fn fwd_peer_ws_proxy_root(
+    State(state): State<Arc<AppState>>,
+    Path((peer_name, port)): Path<(String, u16)>,
+    ws: WebSocketUpgrade,
+) -> axum::response::Response {
+    let (base, token) = match peer_fwd_base(&state, &peer_name) {
+        Ok(v) => v,
+        Err(s) => return s.into_response(),
+    };
+    ws.on_upgrade(move |socket| handle_peer_ws_proxy(socket, base, token, port, String::new()))
+        .into_response()
+}
+
+/// Proxy HTTP request to remote peer's /fwd/{port}/{path}.
+async fn proxy_peer_http(
+    state: &AppState,
+    peer_name: &str,
+    port: u16,
+    path: &str,
+    req: Request,
+) -> axum::response::Response {
+    let (base, token) = match peer_fwd_base(state, peer_name) {
+        Ok(v) => v,
+        Err(s) => return s.into_response(),
+    };
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .danger_accept_invalid_certs(true)
+        .build();
+
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Proxy client error: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let headers = req.headers().clone();
+
+    let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
+    let target = if path.is_empty() {
+        format!("{base}/fwd/{port}{query}")
+    } else {
+        format!("{base}/fwd/{port}/{path}{query}")
+    };
+
+    let reqwest_method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 50 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Body read error: {e}")).into_response();
+        }
+    };
+
+    let mut builder = client
+        .request(reqwest_method, &target)
+        .header("Authorization", format!("Bearer {token}"));
+
+    for (name, value) in &headers {
+        let skip = matches!(
+            name.as_str(),
+            "host" | "connection" | "upgrade" | "transfer-encoding" | "authorization" | "cookie"
+        );
+        if !skip && let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
+            builder = builder.header(name.as_str(), v);
+        }
+    }
+
+    builder = builder.body(body_bytes);
+
+    match builder.send().await {
+        Ok(resp) => convert_response(resp).await,
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            format!("Peer proxy request failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Bidirectional WebSocket proxy to remote peer's /fwd-ws/{port}/{path}.
+async fn handle_peer_ws_proxy(
+    socket: WebSocket,
+    base: String,
+    token: String,
+    port: u16,
+    path: String,
+) {
+    // Convert https:// to wss://, http:// to ws://
+    let ws_base = base
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1);
+    let ws_url = if path.is_empty() {
+        format!("{ws_base}/fwd-ws/{port}")
+    } else {
+        format!("{ws_base}/fwd-ws/{port}/{path}")
+    };
+
+    // Build request with auth header
+    let request = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(&ws_url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header(
+            "Sec-WebSocket-Key",
+            tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+        )
+        .header("Sec-WebSocket-Version", "13")
+        .body(())
+        .unwrap();
+
+    let connect_result = tokio_tungstenite::connect_async(request).await;
+    let (remote_ws, _) = match connect_result {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Peer WS proxy connect failed to {ws_url}: {e}");
+            return;
+        }
+    };
+
+    let (mut local_tx, mut local_rx) = socket.split();
+    let (mut remote_tx, mut remote_rx) = remote_ws.split();
+
+    use axum::extract::ws::Message as AxumMsg;
+    use tokio_tungstenite::tungstenite::Message as TungMsg;
+
+    let local_to_remote = async {
+        while let Some(Ok(msg)) = local_rx.next().await {
+            let tung_msg = match msg {
+                AxumMsg::Text(t) => TungMsg::Text(t.to_string().into()),
+                AxumMsg::Binary(b) => TungMsg::Binary(b.to_vec().into()),
+                AxumMsg::Ping(p) => TungMsg::Ping(p.to_vec().into()),
+                AxumMsg::Pong(p) => TungMsg::Pong(p.to_vec().into()),
+                AxumMsg::Close(_) => break,
+            };
+            if remote_tx.send(tung_msg).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    let remote_to_local = async {
+        while let Some(Ok(msg)) = remote_rx.next().await {
+            let axum_msg = match msg {
+                TungMsg::Text(t) => AxumMsg::Text(t.to_string().into()),
+                TungMsg::Binary(b) => AxumMsg::Binary(b.to_vec().into()),
+                TungMsg::Ping(p) => AxumMsg::Ping(p.to_vec().into()),
+                TungMsg::Pong(p) => AxumMsg::Pong(p.to_vec().into()),
+                TungMsg::Close(_) => break,
+                _ => continue,
+            };
+            if local_tx.send(axum_msg).await.is_err() {
+                break;
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = local_to_remote => {},
+        _ = remote_to_local => {},
+    }
+
+    tracing::debug!("Peer WS proxy closed for {port}");
 }
