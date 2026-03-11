@@ -2870,6 +2870,18 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.peer-update-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+.peer-uptodate {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .peer-delete-btn {
   flex-shrink: 0;
   padding: 2px 6px;

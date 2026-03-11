@@ -576,6 +576,51 @@ pub async fn proxy_list_ports(
     proxy_response(resp).await
 }
 
+/// GET /api/peers/{name}/system/version — proxy to remote peer's /api/system/version
+pub async fn proxy_version(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let client = proxy_client()?;
+    let url = format!("{}/api/system/version", peer.url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy GET version failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
+/// POST /api/peers/{name}/system/update — proxy to remote peer's /api/system/update
+pub async fn proxy_update(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    // Use a dedicated client with longer timeout for update (download + restart)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let url = format!("{}/api/system/update", peer.url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", peer.token))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Proxy POST update failed for {}: {e}", peer.name);
+            StatusCode::BAD_GATEWAY
+        })?;
+    proxy_response(resp).await
+}
+
 /// GET /api/peers/{name}/terminal/sessions
 pub async fn proxy_list_sessions(
     State(state): State<Arc<AppState>>,

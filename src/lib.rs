@@ -189,6 +189,9 @@ pub fn create_app_with_secret(
         .route("/api/ports", get(ws::list_all_ports))
         // Peer port proxy API
         .route("/api/peers/{name}/ports", get(peer::proxy_list_ports))
+        // Peer system proxy API (version check + update)
+        .route("/api/peers/{name}/system/version", get(peer::proxy_version))
+        .route("/api/peers/{name}/system/update", post(peer::proxy_update))
         // Port forwarding API
         .route("/api/terminal/sessions/{name}/ports", get(ws::list_ports))
         .route(

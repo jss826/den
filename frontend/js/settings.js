@@ -389,6 +389,7 @@ const DenSettings = (() => {
     if (peerInviteDisplay) peerInviteDisplay.hidden = true;
     const peerJoinForm = document.getElementById('peer-join-form');
     if (peerJoinForm) peerJoinForm.hidden = true;
+    latestVersion = null; // refetch on each modal open
     loadPeerList();
 
     const verText = document.getElementById('settings-version-text');
@@ -805,19 +806,108 @@ const DenSettings = (() => {
   // --- Peer management functions ---
 
   let peerInviteTimer = null;
+  let latestVersion = null;
+
+  async function fetchLatestVersion() {
+    try {
+      const resp = await fetch('/api/system/version', { credentials: 'same-origin' });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      return data.latest || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function isOlderVersion(peerVersion, latest) {
+    if (!peerVersion || !latest) return false;
+    const parse = v => v.replace(/^v/, '').split('-')[0].split('.').map(Number);
+    const p = parse(peerVersion);
+    const l = parse(latest);
+    for (let i = 0; i < Math.max(p.length, l.length); i++) {
+      const pv = p[i] || 0;
+      const lv = l[i] || 0;
+      if (pv < lv) return true;
+      if (pv > lv) return false;
+    }
+    return false;
+  }
+
+  let peerUpdateInProgress = false;
+
+  async function waitForPeerRestart(peerName, maxWaitMs) {
+    const deadline = Date.now() + (maxWaitMs || 30000);
+    let delay = 2000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, delay));
+      try {
+        const r = await fetch(`/api/peers/${encodeURIComponent(peerName)}/system/version`, {
+          credentials: 'same-origin',
+        });
+        if (r.ok) return true;
+      } catch (e) { /* peer still restarting */ }
+      delay = Math.min(delay * 1.5, 5000);
+    }
+    return false;
+  }
+
+  async function updatePeer(peerName, btn) {
+    if (peerUpdateInProgress) return;
+    peerUpdateInProgress = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+    }
+    try {
+      const resp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/system/update`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(text || `HTTP ${resp.status}`);
+      }
+      if (btn) btn.textContent = 'Restarting...';
+      const ok = await waitForPeerRestart(peerName, 30000);
+      if (ok) {
+        Toast.success(`${peerName} updated successfully`);
+      } else {
+        Toast.info(`${peerName} update sent — peer still restarting`);
+      }
+      loadPeerList();
+    } catch (e) {
+      Toast.error(`Failed to update ${peerName}: ${e.message}`);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Update';
+      }
+    } finally {
+      peerUpdateInProgress = false;
+    }
+  }
 
   async function loadPeerList() {
     const list = document.getElementById('peer-list');
     if (!list) return;
     list.innerHTML = '';
+
+    // Fetch latest version once per load
+    if (latestVersion == null) {
+      latestVersion = await fetchLatestVersion();
+    }
+
     try {
       const resp = await fetch('/api/peers', { credentials: 'same-origin' });
       if (!resp.ok) return;
       const peers = await resp.json();
       if (peers.length === 0) {
         list.innerHTML = '<div class="peer-empty">No peers registered</div>';
+        const btn = document.getElementById('peer-update-all-btn');
+        if (btn) btn.hidden = true;
         return;
       }
+
+      let outdatedCount = 0;
       for (const peer of peers) {
         const row = document.createElement('div');
         row.className = 'peer-row';
@@ -827,18 +917,43 @@ const DenSettings = (() => {
         const statusLabel = peer.status === 'connected' ? 'Connected'
           : peer.status === 'connecting' ? 'Connecting'
           : 'Disconnected';
-        const versionText = peer.version ? ` v${peer.version}` : '';
+        const versionText = peer.version ? ` v${escHtml(peer.version)}` : '';
         const latencyText = peer.latency_ms != null ? ` ${peer.latency_ms}ms` : '';
+        const outdated = peer.status === 'connected' && isOlderVersion(peer.version, latestVersion);
+        if (outdated) outdatedCount++;
+
+        let updateHtml = '';
+        if (peer.status === 'connected' && peer.version) {
+          if (outdated) {
+            updateHtml = `<button class="peer-update-btn modal-btn primary" data-peer="${escHtml(peer.name)}">Update</button>`;
+          } else {
+            updateHtml = '<span class="peer-uptodate">Up to date</span>';
+          }
+        }
+
         row.innerHTML = `
           <span class="peer-status ${statusClass}" title="${statusLabel}"></span>
           <span class="peer-info">
             <strong>${escHtml(peer.name)}</strong>
             <small>${escHtml(peer.url)}${versionText}${latencyText}</small>
           </span>
+          ${updateHtml}
           <button class="peer-delete-btn modal-btn" data-peer="${escHtml(peer.name)}" title="Remove peer">×</button>
         `;
         list.appendChild(row);
       }
+
+      // Update All button visibility
+      const updateAllBtn = document.getElementById('peer-update-all-btn');
+      if (updateAllBtn) {
+        updateAllBtn.hidden = outdatedCount === 0;
+      }
+
+      // Bind update buttons
+      list.querySelectorAll('.peer-update-btn').forEach(btn => {
+        btn.addEventListener('click', () => updatePeer(btn.dataset.peer, btn));
+      });
+
       list.querySelectorAll('.peer-delete-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.peer;
@@ -955,6 +1070,55 @@ const DenSettings = (() => {
 
     if (joinCancel) joinCancel.addEventListener('click', () => {
       if (joinForm) joinForm.hidden = true;
+    });
+
+    const updateAllBtn = document.getElementById('peer-update-all-btn');
+    if (updateAllBtn) updateAllBtn.addEventListener('click', async () => {
+      if (peerUpdateInProgress) return;
+      if (!confirm('Update all outdated peers?')) return;
+      peerUpdateInProgress = true;
+      updateAllBtn.disabled = true;
+      updateAllBtn.textContent = 'Updating...';
+      try {
+        const resp = await fetch('/api/peers', { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('Failed to fetch peers');
+        const peers = await resp.json();
+        const outdated = peers.filter(p =>
+          p.status === 'connected' && isOlderVersion(p.version, latestVersion)
+        );
+        for (const peer of outdated) {
+          updateAllBtn.textContent = `Updating ${peer.name}...`;
+          try {
+            const r = await fetch(`/api/peers/${encodeURIComponent(peer.name)}/system/update`, {
+              method: 'POST',
+              credentials: 'same-origin',
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const ok = await waitForPeerRestart(peer.name, 30000);
+            if (ok) {
+              Toast.success(`${peer.name} updated`);
+            } else {
+              Toast.info(`${peer.name} update sent — peer still restarting`);
+            }
+          } catch (e) {
+            Toast.error(`Failed to update ${peer.name}`);
+          }
+        }
+        const localResp = await fetch('/api/system/version', { credentials: 'same-origin' });
+        if (localResp.ok) {
+          const ver = await localResp.json();
+          if (ver.update_available) {
+            Toast.info('Local update available — use "Update Now" below');
+          }
+        }
+        loadPeerList();
+      } catch (e) {
+        Toast.error('Update All failed');
+      } finally {
+        peerUpdateInProgress = false;
+        updateAllBtn.disabled = false;
+        updateAllBtn.textContent = 'Update All';
+      }
     });
   }
 
