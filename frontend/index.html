@@ -211,54 +211,62 @@
     <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-content">
         <h3>Settings</h3>
-        <div class="modal-section">
-          <label>Theme</label>
-          <select id="setting-theme" class="settings-input">
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-            <option value="solarized-dark">Solarized Dark</option>
-            <option value="solarized-light">Solarized Light</option>
-            <option value="monokai">Monokai</option>
-            <option value="nord">Nord</option>
-            <option value="dracula">Dracula</option>
-            <option value="gruvbox-dark">Gruvbox Dark</option>
-            <option value="gruvbox-light">Gruvbox Light</option>
-            <option value="catppuccin">Catppuccin Mocha</option>
-            <option value="one-dark">One Dark</option>
-            <option value="system">System</option>
-          </select>
-        </div>
-        <div class="modal-section">
-          <label>Font Size</label>
-          <input type="number" id="setting-font-size" class="settings-input" min="8" max="32" value="14">
-        </div>
-        <div class="modal-section">
-          <label>Terminal Scrollback</label>
-          <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
-        </div>
-        <div class="modal-section">
-          <label>
-            <input type="checkbox" id="setting-ssh-agent-fwd">
-            SSH Agent Forwarding
-          </label>
-          <small class="setting-hint">Forward local SSH keys to remote hosts (security risk on untrusted hosts)</small>
-        </div>
-        <div class="modal-section">
-          <label>Sleep Prevention</label>
-          <select id="setting-sleep-mode" class="settings-input">
-            <option value="user-activity">After user activity (default)</option>
-            <option value="always">Always (while Den is running)</option>
-            <option value="off">Off</option>
-          </select>
-          <small class="setting-hint">Prevent system sleep while terminal is in use (Windows only)</small>
-          <div id="sleep-timeout-row" style="margin-top:0.5rem">
-            <label>Timeout (minutes)</label>
-            <input type="number" id="setting-sleep-timeout" class="settings-input" min="1" max="480" value="30">
+        <details class="settings-group" id="sg-appearance" open>
+          <summary class="settings-group-title">Appearance</summary>
+          <div class="modal-section">
+            <label>Theme</label>
+            <select id="setting-theme" class="settings-input">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="solarized-dark">Solarized Dark</option>
+              <option value="solarized-light">Solarized Light</option>
+              <option value="monokai">Monokai</option>
+              <option value="nord">Nord</option>
+              <option value="dracula">Dracula</option>
+              <option value="gruvbox-dark">Gruvbox Dark</option>
+              <option value="gruvbox-light">Gruvbox Light</option>
+              <option value="catppuccin">Catppuccin Mocha</option>
+              <option value="one-dark">One Dark</option>
+              <option value="system">System</option>
+            </select>
           </div>
-        </div>
-        <div class="modal-section">
-          <label>Keybar Buttons - Primary Row</label>
-          <div id="keybar-editor" class="keybar-editor">
+          <div class="modal-section">
+            <label>Font Size</label>
+            <input type="number" id="setting-font-size" class="settings-input" min="8" max="32" value="14">
+          </div>
+        </details>
+        <details class="settings-group" id="sg-terminal" open>
+          <summary class="settings-group-title">Terminal</summary>
+          <div class="modal-section">
+            <label>Terminal Scrollback</label>
+            <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
+          </div>
+          <div class="modal-section">
+            <label>
+              <input type="checkbox" id="setting-ssh-agent-fwd">
+              SSH Agent Forwarding
+            </label>
+            <small class="setting-hint">Forward local SSH keys to remote hosts (security risk on untrusted hosts)</small>
+          </div>
+          <div class="modal-section">
+            <label>Sleep Prevention</label>
+            <select id="setting-sleep-mode" class="settings-input">
+              <option value="user-activity">After user activity (default)</option>
+              <option value="always">Always (while Den is running)</option>
+              <option value="off">Off</option>
+            </select>
+            <small class="setting-hint">Prevent system sleep while terminal is in use (Windows only)</small>
+            <div id="sleep-timeout-row" style="margin-top:0.5rem">
+              <label>Timeout (minutes)</label>
+              <input type="number" id="setting-sleep-timeout" class="settings-input" min="1" max="480" value="30">
+            </div>
+          </div>
+        </details>
+        <details class="settings-group" id="sg-keybar">
+          <summary class="settings-group-title">Keybar</summary>
+          <div class="modal-section">
+            <label>Primary Row</label>
+            <div id="keybar-editor" class="keybar-editor">
             <div id="keybar-btn-list" class="keybar-btn-list"></div>
             <div class="keybar-editor-actions">
               <button id="keybar-add-btn" class="modal-btn" type="button">Add Button</button>
@@ -317,17 +325,20 @@
             </div>
           </div>
         </div>
-        <div class="modal-section">
-          <label>Keybar Buttons - Secondary Row</label>
-          <div id="keybar-secondary-editor" class="keybar-editor">
-            <div id="keybar-secondary-btn-list" class="keybar-btn-list"></div>
-            <div class="keybar-editor-actions">
-              <button id="keybar-secondary-add-btn" class="modal-btn" type="button">Add Button</button>
-              <button id="keybar-secondary-reset-btn" class="modal-btn" type="button">Reset to Default</button>
+          <div class="modal-section">
+            <label>Secondary Row</label>
+            <div id="keybar-secondary-editor" class="keybar-editor">
+              <div id="keybar-secondary-btn-list" class="keybar-btn-list"></div>
+              <div class="keybar-editor-actions">
+                <button id="keybar-secondary-add-btn" class="modal-btn" type="button">Add Button</button>
+                <button id="keybar-secondary-reset-btn" class="modal-btn" type="button">Reset to Default</button>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="modal-section">
+        </details>
+        <details class="settings-group" id="sg-snippets">
+          <summary class="settings-group-title">Snippets</summary>
+          <div class="modal-section">
           <label>Snippets</label>
           <div class="snippet-editor">
             <div id="snippet-list" class="snippet-list"></div>
@@ -354,8 +365,11 @@
               </div>
             </div>
           </div>
-        </div>
-        <div class="modal-section">
+          </div>
+        </details>
+        <details class="settings-group" id="sg-peers">
+          <summary class="settings-group-title">Peers</summary>
+          <div class="modal-section">
           <label>Peers</label>
           <div class="peer-section">
             <div class="peer-name-row">
@@ -389,15 +403,16 @@
             </div>
           </div>
         </div>
-        <div class="modal-section" id="settings-sync-section" hidden>
-          <label>Settings Sync</label>
-          <div class="settings-sync-container">
-            <div class="settings-sync-header">
-              <select id="settings-sync-peer" class="settings-input settings-sync-select"></select>
+          <div class="modal-section" id="settings-sync-section" hidden>
+            <label>Settings Sync</label>
+            <div class="settings-sync-container">
+              <div class="settings-sync-header">
+                <select id="settings-sync-peer" class="settings-input settings-sync-select"></select>
+              </div>
+              <div id="settings-sync-table" class="settings-sync-table"></div>
             </div>
-            <div id="settings-sync-table" class="settings-sync-table"></div>
           </div>
-        </div>
+        </details>
         <div class="settings-version" id="settings-version">
           <span id="settings-version-text"></span>
           <button id="update-check-btn" class="modal-btn update-btn" type="button">Check for Updates</button>

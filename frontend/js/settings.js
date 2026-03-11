@@ -324,8 +324,34 @@ const DenSettings = (() => {
   /**
    * 設定モーダルを開く。現在の設定値をフォームに反映する。
    */
+  // Restore accordion open/closed state from localStorage
+  function restoreAccordionState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('den_settings_groups') || '{}');
+      for (const [id, isOpen] of Object.entries(saved)) {
+        const el = document.getElementById(id);
+        if (el) el.open = isOpen;
+      }
+    } catch { /* ignore corrupt data */ }
+  }
+
+  // Bind toggle events to persist accordion state
+  function bindAccordionState() {
+    const groups = document.querySelectorAll('.settings-group');
+    for (const g of groups) {
+      g.addEventListener('toggle', () => {
+        try {
+          const saved = JSON.parse(localStorage.getItem('den_settings_groups') || '{}');
+          saved[g.id] = g.open;
+          localStorage.setItem('den_settings_groups', JSON.stringify(saved));
+        } catch { /* ignore */ }
+      });
+    }
+  }
+
   function openModal() {
     const modal = document.getElementById('settings-modal');
+    restoreAccordionState();
     document.getElementById('setting-font-size').value = current.font_size;
     document.getElementById('setting-scrollback').value = current.terminal_scrollback;
     const themeSelect = document.getElementById('setting-theme');
@@ -423,6 +449,8 @@ const DenSettings = (() => {
    * DOMContentLoaded 後に一度だけ呼び出す。
    */
   function bindUI() {
+    bindAccordionState();
+
     const btn = document.getElementById('settings-btn');
     if (btn) btn.addEventListener('click', openModal);
 

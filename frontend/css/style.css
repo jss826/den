@@ -1061,6 +1061,48 @@ html, body {
   margin-bottom: 16px;
 }
 
+/* Settings accordion groups */
+.settings-group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.settings-group-title {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--input-bg);
+  user-select: none;
+  list-style: none;
+}
+.settings-group-title::-webkit-details-marker { display: none; }
+.settings-group-title::before {
+  content: '\25B6';
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 0.65rem;
+  transition: transform 0.15s;
+  vertical-align: middle;
+}
+.settings-group[open] > .settings-group-title::before {
+  transform: rotate(90deg);
+}
+.settings-group-title:hover {
+  background: var(--hover);
+}
+.settings-group > .modal-section {
+  padding: 0 14px;
+}
+.settings-group > .modal-section:first-of-type {
+  padding-top: 8px;
+}
+.settings-group > .modal-section:last-of-type {
+  padding-bottom: 8px;
+}
+
 .modal-section {
   margin-bottom: 16px;
 }
