@@ -169,6 +169,11 @@ pub fn create_app_with_secret(
         .route("/api/peers", get(peer::list_peers))
         .route("/api/peers/{name}", delete(peer::delete_peer))
         .route("/api/peers/{name}/scope", put(peer::update_peer_scope))
+        // Peer settings proxy API
+        .route(
+            "/api/peers/{name}/settings",
+            get(peer::proxy_get_settings).put(peer::proxy_put_settings),
+        )
         // Peer terminal proxy API
         .route(
             "/api/peers/{name}/terminal/sessions",

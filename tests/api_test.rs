@@ -2587,3 +2587,143 @@ async fn peer_rpc_rejects_forbidden_path() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// --- Settings sync proxy tests ---
+
+#[tokio::test]
+async fn proxy_get_settings_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/some-peer/settings")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn proxy_get_settings_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .uri("/api/peers/unknown/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn proxy_put_settings_requires_auth() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/peers/some-peer/settings")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn proxy_put_settings_unknown_peer_returns_404() {
+    let app = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/peers/unknown/settings")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// RPC to /api/settings is allowed (in the allowlist).
+#[tokio::test]
+async fn peer_rpc_allows_settings_path() {
+    let (app, state) = test_app_with_state();
+
+    let (secret_a, _pub_a_hex) = den::crypto::generate_keypair();
+    let (_secret_b, pub_b_hex) = den::crypto::generate_keypair();
+    let enc_key = den::crypto::derive_key(&secret_a, &pub_b_hex).unwrap();
+
+    let peer = den::store::PeerConfig {
+        name: "rpc-settings".to_string(),
+        url: "http://127.0.0.1:1".to_string(),
+        token: "tok".to_string(),
+        encryption_key: Some(enc_key.clone()),
+        scope: den::store::PeerScope::Admin,
+    };
+    let mut settings = state.store.load_settings();
+    settings.peers = Some(vec![peer]);
+    state.store.save_settings(&settings).unwrap();
+
+    let rpc_req = den::peer::RpcRequest {
+        method: "GET".to_string(),
+        path: "/api/settings".to_string(),
+        query: None,
+        headers: std::collections::HashMap::new(),
+        body: vec![],
+    };
+    let plaintext = serde_json::to_vec(&rpc_req).unwrap();
+    let encrypted = den::crypto::encrypt(&plaintext, &enc_key).unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peer-rpc")
+        .header("Content-Type", "application/octet-stream")
+        .header("X-Peer-Name", "rpc-settings")
+        .body(Body::from(encrypted))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    // Loopback fails (no server) but validation + allowlist check succeeds
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// ReadOnly peer cannot PUT /api/settings via RPC.
+#[tokio::test]
+async fn peer_rpc_readonly_rejects_settings_put() {
+    let (app, state) = test_app_with_state();
+
+    let (secret_a, _pub_a_hex) = den::crypto::generate_keypair();
+    let (_secret_b, pub_b_hex) = den::crypto::generate_keypair();
+    let enc_key = den::crypto::derive_key(&secret_a, &pub_b_hex).unwrap();
+
+    let peer = den::store::PeerConfig {
+        name: "rpc-readonly-settings".to_string(),
+        url: "http://127.0.0.1:1".to_string(),
+        token: "tok".to_string(),
+        encryption_key: Some(enc_key.clone()),
+        scope: den::store::PeerScope::ReadOnly,
+    };
+    let mut settings = state.store.load_settings();
+    settings.peers = Some(vec![peer]);
+    state.store.save_settings(&settings).unwrap();
+
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    let rpc_req = den::peer::RpcRequest {
+        method: "PUT".to_string(),
+        path: "/api/settings".to_string(),
+        query: None,
+        headers,
+        body: b"{}".to_vec(),
+    };
+    let plaintext = serde_json::to_vec(&rpc_req).unwrap();
+    let encrypted = den::crypto::encrypt(&plaintext, &enc_key).unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peer-rpc")
+        .header("Content-Type", "application/octet-stream")
+        .header("X-Peer-Name", "rpc-readonly-settings")
+        .body(Body::from(encrypted))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    // ReadOnly scope rejects non-GET requests
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}

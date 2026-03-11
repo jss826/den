@@ -691,6 +691,7 @@ pub async fn peer_rpc(
         "/api/clipboard-history",
         "/api/keep-awake",
         "/api/sftp/",
+        "/api/settings",
     ];
     if !ALLOWED_RPC_PREFIXES
         .iter()
@@ -1142,6 +1143,47 @@ pub async fn proxy_update(
         HashMap::new(),
         vec![],
         Some(Duration::from_secs(120)),
+    )
+    .await
+}
+
+/// GET /api/peers/{name}/settings
+pub async fn proxy_get_settings(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    send_encrypted_rpc(
+        &state,
+        &peer,
+        "GET",
+        "/api/settings",
+        None,
+        HashMap::new(),
+        vec![],
+        None,
+    )
+    .await
+}
+
+/// PUT /api/peers/{name}/settings
+pub async fn proxy_put_settings(
+    State(state): State<Arc<AppState>>,
+    Path(peer_name): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Response, StatusCode> {
+    let peer = lookup_peer(&state, &peer_name)?;
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    send_encrypted_rpc(
+        &state,
+        &peer,
+        "PUT",
+        "/api/settings",
+        None,
+        headers,
+        body.to_vec(),
+        None,
     )
     .await
 }

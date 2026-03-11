@@ -391,6 +391,7 @@ const DenSettings = (() => {
     if (peerJoinForm) peerJoinForm.hidden = true;
     latestVersion = null; // refetch on each modal open
     loadPeerList();
+    initSettingsSync();
 
     const verText = document.getElementById('settings-version-text');
     if (verText && current.version) verText.textContent = 'Den v' + current.version;
@@ -1147,6 +1148,311 @@ const DenSettings = (() => {
         updateAllBtn.textContent = 'Update All';
       }
     });
+  }
+
+  // --- Settings Sync (peer comparison view) ---
+
+  // Fields that should NOT be copied between peers
+  const NON_SYNCABLE = new Set(['peer_name', 'peers', 'version', 'hostname']);
+
+  // Display labels for setting fields
+  const FIELD_LABELS = {
+    theme: 'Theme',
+    font_size: 'Font Size',
+    terminal_scrollback: 'Scrollback',
+    keybar_buttons: 'Keybar Buttons',
+    keybar_secondary_buttons: 'Keybar (Secondary)',
+    ssh_agent_forwarding: 'SSH Agent Forwarding',
+    keybar_position: 'Keybar Position',
+    snippets: 'Snippets',
+    ssh_bookmarks: 'SSH Bookmarks',
+    sleep_prevention_mode: 'Sleep Prevention',
+    sleep_prevention_timeout: 'Sleep Timeout (min)',
+  };
+
+  function formatFieldValue(key, val) {
+    if (val === null || val === undefined) return '—';
+    if (Array.isArray(val)) return `${val.length} item${val.length !== 1 ? 's' : ''}`;
+    if (typeof val === 'object') return JSON.stringify(val).substring(0, 40);
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+    return String(val);
+  }
+
+  function fieldsEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function isArrayField(key) {
+    return key === 'keybar_buttons' || key === 'keybar_secondary_buttons'
+      || key === 'snippets' || key === 'ssh_bookmarks';
+  }
+
+  async function initSettingsSync() {
+    const section = document.getElementById('settings-sync-section');
+    const select = document.getElementById('settings-sync-peer');
+    if (!section || !select) return;
+
+    // Fetch peers
+    let peers;
+    try {
+      const resp = await fetch('/api/peers', { credentials: 'same-origin' });
+      if (!resp.ok) return;
+      peers = await resp.json();
+    } catch { return; }
+
+    const connected = peers.filter(p => p.status === 'connected');
+    if (connected.length === 0) {
+      section.hidden = true;
+      return;
+    }
+
+    section.hidden = false;
+    select.innerHTML = '';
+    for (const p of connected) {
+      const opt = document.createElement('option');
+      opt.value = p.name;
+      opt.textContent = p.name;
+      select.appendChild(opt);
+    }
+
+    select.onchange = () => loadPeerSettings(select.value);
+    loadPeerSettings(select.value);
+  }
+
+  async function loadPeerSettings(peerName) {
+    const table = document.getElementById('settings-sync-table');
+    if (!table) return;
+    table.innerHTML = '<div class="settings-sync-loading">Loading...</div>';
+
+    let peerSettings;
+    try {
+      const resp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/settings`, {
+        credentials: 'same-origin',
+      });
+      if (!resp.ok) {
+        table.innerHTML = '<div class="settings-sync-loading">Failed to load peer settings</div>';
+        return;
+      }
+      peerSettings = await resp.json();
+    } catch {
+      table.innerHTML = '<div class="settings-sync-loading">Failed to load peer settings</div>';
+      return;
+    }
+
+    renderSyncTable(peerName, peerSettings);
+  }
+
+  function renderSyncTable(peerName, peerSettings) {
+    const table = document.getElementById('settings-sync-table');
+    if (!table) return;
+    table.innerHTML = '';
+
+    // Header row
+    const header = document.createElement('div');
+    header.className = 'sync-row sync-header';
+    header.innerHTML = `<span class="sync-cell sync-label">Setting</span>`
+      + `<span class="sync-cell sync-value">Local</span>`
+      + `<span class="sync-cell sync-actions"></span>`
+      + `<span class="sync-cell sync-value">${escHtml(peerName)}</span>`;
+    table.appendChild(header);
+
+    const allKeys = Object.keys(FIELD_LABELS);
+
+    for (const key of allKeys) {
+      if (NON_SYNCABLE.has(key)) continue;
+      const localVal = current[key];
+      const peerVal = peerSettings[key];
+      const same = fieldsEqual(localVal, peerVal);
+
+      const row = document.createElement('div');
+      row.className = 'sync-row' + (same ? '' : ' sync-diff');
+
+      const labelCell = document.createElement('span');
+      labelCell.className = 'sync-cell sync-label';
+      labelCell.textContent = FIELD_LABELS[key] || key;
+
+      const localCell = document.createElement('span');
+      localCell.className = 'sync-cell sync-value';
+      localCell.textContent = formatFieldValue(key, localVal);
+      localCell.title = JSON.stringify(localVal, null, 2);
+
+      const actionsCell = document.createElement('span');
+      actionsCell.className = 'sync-cell sync-actions';
+
+      const peerCell = document.createElement('span');
+      peerCell.className = 'sync-cell sync-value';
+      peerCell.textContent = formatFieldValue(key, peerVal);
+      peerCell.title = JSON.stringify(peerVal, null, 2);
+
+      if (!same) {
+        // Pull: peer → local
+        const pullBtn = document.createElement('button');
+        pullBtn.className = 'sync-btn sync-pull';
+        pullBtn.textContent = '←';
+        pullBtn.title = `Copy from ${peerName}`;
+        pullBtn.addEventListener('click', () => {
+          if (isArrayField(key)) {
+            showArrayMergeMenu(pullBtn, key, peerVal, 'pull', peerName);
+          } else {
+            applySyncField(key, peerVal, 'local', peerName);
+          }
+        });
+        actionsCell.appendChild(pullBtn);
+
+        // Push: local → peer
+        const pushBtn = document.createElement('button');
+        pushBtn.className = 'sync-btn sync-push';
+        pushBtn.textContent = '→';
+        pushBtn.title = `Push to ${peerName}`;
+        pushBtn.addEventListener('click', () => {
+          if (isArrayField(key)) {
+            showArrayMergeMenu(pushBtn, key, localVal, 'push', peerName);
+          } else {
+            applySyncField(key, localVal, 'peer', peerName);
+          }
+        });
+        actionsCell.appendChild(pushBtn);
+      }
+
+      row.appendChild(labelCell);
+      row.appendChild(localCell);
+      row.appendChild(actionsCell);
+      row.appendChild(peerCell);
+
+      table.appendChild(row);
+    }
+  }
+
+  function showArrayMergeMenu(anchorBtn, key, sourceVal, direction, peerName) {
+    // Remove existing menu
+    const existing = document.querySelector('.sync-merge-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'sync-merge-menu';
+
+    const replaceBtn = document.createElement('button');
+    replaceBtn.className = 'modal-btn';
+    replaceBtn.textContent = 'Replace';
+    replaceBtn.addEventListener('click', () => {
+      menu.remove();
+      applySyncField(key, sourceVal, direction === 'pull' ? 'local' : 'peer', peerName);
+    });
+
+    const mergeBtn = document.createElement('button');
+    mergeBtn.className = 'modal-btn';
+    mergeBtn.textContent = 'Merge';
+    mergeBtn.addEventListener('click', () => {
+      menu.remove();
+      applySyncFieldMerge(key, sourceVal, direction, peerName);
+    });
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'modal-btn';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => menu.remove());
+
+    menu.appendChild(replaceBtn);
+    menu.appendChild(mergeBtn);
+    menu.appendChild(cancelBtn);
+
+    anchorBtn.parentElement.appendChild(menu);
+
+    // Close on outside click
+    const close = (e) => {
+      if (!menu.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener('click', close, true);
+      }
+    };
+    requestAnimationFrame(() => document.addEventListener('click', close, true));
+  }
+
+  async function applySyncField(key, value, target, peerName) {
+    if (target === 'local') {
+      // Apply to local settings
+      current[key] = value;
+      await save({ [key]: value });
+      Toast.success(`Copied "${FIELD_LABELS[key] || key}" from ${peerName}`);
+    } else {
+      // Push to peer: fetch peer's full settings, update field, PUT back
+      try {
+        const resp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/settings`, {
+          credentials: 'same-origin',
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const peerSettings = await resp.json();
+        peerSettings[key] = value;
+        const putResp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/settings`, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(peerSettings),
+        });
+        if (!putResp.ok) throw new Error(`HTTP ${putResp.status}`);
+        Toast.success(`Pushed "${FIELD_LABELS[key] || key}" to ${peerName}`);
+      } catch (e) {
+        Toast.error(`Failed to push to ${peerName}: ${e.message}`);
+        return;
+      }
+    }
+    // Refresh comparison
+    loadPeerSettings(peerName);
+  }
+
+  async function applySyncFieldMerge(key, sourceVal, direction, peerName) {
+    const sourceArr = Array.isArray(sourceVal) ? sourceVal : [];
+    let targetArr;
+    let targetSettings;
+
+    if (direction === 'pull') {
+      // Merge peer's items into local
+      targetArr = Array.isArray(current[key]) ? [...current[key]] : [];
+      const labelKey = key === 'ssh_bookmarks' ? 'label' : 'label';
+      const existingLabels = new Set(targetArr.map(i => i[labelKey]));
+      let added = 0;
+      for (const item of sourceArr) {
+        if (!existingLabels.has(item[labelKey])) {
+          targetArr.push(item);
+          added++;
+        }
+      }
+      current[key] = targetArr;
+      await save({ [key]: targetArr });
+      Toast.success(`Merged ${added} new item${added !== 1 ? 's' : ''} from ${peerName}`);
+    } else {
+      // Merge local items into peer
+      try {
+        const resp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/settings`, {
+          credentials: 'same-origin',
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        targetSettings = await resp.json();
+        targetArr = Array.isArray(targetSettings[key]) ? [...targetSettings[key]] : [];
+        const labelKey = 'label';
+        const existingLabels = new Set(targetArr.map(i => i[labelKey]));
+        let added = 0;
+        for (const item of sourceArr) {
+          if (!existingLabels.has(item[labelKey])) {
+            targetArr.push(item);
+            added++;
+          }
+        }
+        targetSettings[key] = targetArr;
+        const putResp = await fetch(`/api/peers/${encodeURIComponent(peerName)}/settings`, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(targetSettings),
+        });
+        if (!putResp.ok) throw new Error(`HTTP ${putResp.status}`);
+        Toast.success(`Merged ${added} new item${added !== 1 ? 's' : ''} to ${peerName}`);
+      } catch (e) {
+        Toast.error(`Failed to merge to ${peerName}: ${e.message}`);
+        return;
+      }
+    }
+    loadPeerSettings(peerName);
   }
 
   return { load, save, apply, get, getAll, bindUI, openModal, setTitleTab, setOscTitle };

@@ -2903,6 +2903,102 @@ select:focus-visible {
   border-radius: 6px;
 }
 
+/* === Settings Sync === */
+
+.settings-sync-select {
+  max-width: 200px;
+  margin-bottom: 8px;
+}
+
+.settings-sync-table {
+  font-size: 0.8rem;
+}
+
+.sync-row {
+  display: grid;
+  grid-template-columns: 2fr 2fr auto 2fr;
+  gap: 4px 8px;
+  padding: 4px 6px;
+  align-items: center;
+  border-radius: 4px;
+}
+
+.sync-row:nth-child(even) {
+  background: var(--keybar-key);
+}
+
+.sync-header {
+  font-weight: bold;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+
+.sync-diff {
+  background: rgba(122, 162, 247, 0.08) !important;
+}
+
+.sync-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-label {
+  color: var(--muted);
+}
+
+.sync-value {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+}
+
+.sync-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  min-width: 48px;
+}
+
+.sync-btn {
+  background: var(--keybar-key);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.sync-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.sync-pull { color: #9ece6a; }
+.sync-push { color: #7aa2f7; }
+
+.sync-merge-menu {
+  display: flex;
+  gap: 4px;
+  position: absolute;
+  z-index: 10;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.settings-sync-loading {
+  text-align: center;
+  color: var(--muted);
+  padding: 16px;
+}
+
 /* === Reduced motion 対応 === */
 
 @media (prefers-reduced-motion: reduce) {
