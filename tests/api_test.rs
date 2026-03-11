@@ -2362,7 +2362,7 @@ async fn peer_rpc_valid_request_reaches_loopback() {
     let (app, state) = test_app_with_state();
 
     // Set up peer with proper encryption key pair (shared secret)
-    let (secret_a, pub_a_hex) = den::crypto::generate_keypair();
+    let (secret_a, _pub_a_hex) = den::crypto::generate_keypair();
     let (_secret_b, pub_b_hex) = den::crypto::generate_keypair();
 
     // A derives key from own secret + B's public (server stores this)

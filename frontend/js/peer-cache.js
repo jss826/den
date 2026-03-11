@@ -5,6 +5,7 @@ const PeerCache = (() => {
   let cached = null;
   let cachedAt = 0;
   let inflight = null;
+  let errorShown = false; // prevent toast spam on repeated failures
 
   /** Fetch peer list with short TTL cache. Returns array of peer objects. */
   async function get() {
@@ -18,14 +19,17 @@ const PeerCache = (() => {
       try {
         const resp = await fetch('/api/peers', { credentials: 'same-origin' });
         if (!resp.ok) {
-          DenToast.show('Failed to fetch peer list', 'error');
+          showError();
           return cached || [];
         }
-        cached = await resp.json();
+        const data = await resp.json();
+        if (!Array.isArray(data)) return cached || [];
+        cached = data;
         cachedAt = Date.now();
+        errorShown = false;
         return cached;
       } catch {
-        DenToast.show('Failed to fetch peer list', 'error');
+        showError();
         return cached || [];
       } finally {
         inflight = null;
@@ -35,10 +39,18 @@ const PeerCache = (() => {
     return inflight;
   }
 
+  function showError() {
+    if (!errorShown) {
+      Toast.error('Failed to fetch peer list');
+      errorShown = true;
+    }
+  }
+
   /** Invalidate the cache (e.g. after peer config change). */
   function invalidate() {
     cached = null;
     cachedAt = 0;
+    inflight = null;
   }
 
   return { get, invalidate };

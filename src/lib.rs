@@ -36,7 +36,7 @@ pub struct AppState {
     pub sftp_manager: sftp::client::SftpManager,
     pub peer_registry: Arc<peer::PeerRegistry>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
-    /// Shared HTTP client for peer RPC (30s default timeout, connection pooling)
+    /// Shared HTTP client for peer RPC (no default timeout — set per-request, connection pooling)
     pub http_client: reqwest::Client,
     /// HTTP client for loopback dispatch (60s timeout)
     pub http_client_loopback: reqwest::Client,
@@ -76,8 +76,9 @@ pub fn create_app_with_secret(
     }
     port_monitor.start(exclude_ports);
 
+    // No default timeout — each request sets its own via .timeout() on the RequestBuilder.
+    // Client-level timeout overrides per-request timeout in reqwest, so we must not set one here.
     let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(4)
         .build()
         .expect("Failed to build HTTP client");

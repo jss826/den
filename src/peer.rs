@@ -580,10 +580,8 @@ pub async fn send_encrypted_rpc(
         .header("X-Peer-Name", &my_name)
         .body(encrypted);
 
-    // Override per-request timeout if specified (e.g. long-running update operations)
-    if let Some(t) = timeout {
-        req_builder = req_builder.timeout(t);
-    }
+    // Per-request timeout (default 30s, overridable for long operations like update)
+    req_builder = req_builder.timeout(timeout.unwrap_or(Duration::from_secs(30)));
 
     let resp = req_builder.send().await.map_err(|e| {
         tracing::error!("RPC send to {} failed: {e}", peer.name);
@@ -691,7 +689,6 @@ pub async fn peer_rpc(
         "/api/system/version",
         "/api/system/update",
         "/api/clipboard-history",
-        "/api/settings",
         "/api/keep-awake",
         "/api/sftp/",
     ];

@@ -81,22 +81,20 @@ async fn main() {
         }
     }
 
-    // Shared HTTP client for peer RPC (reused across SSH and HTTP servers)
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .pool_max_idle_per_host(4)
-        .build()
-        .expect("Failed to build HTTP client");
+    // HTTP サーバー（メイン）+ graceful shutdown
+    let shutdown_registry = Arc::clone(&registry);
+    let (app, app_state) = den::create_app(config, registry, store, peer_registry);
 
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
+    // Uses shared http_client from AppState for connection pooling
     if let Some(ssh_port) = ssh_port {
-        let ssh_registry = Arc::clone(&registry);
-        let ssh_password = config.password.clone();
-        let ssh_data_dir = config.data_dir.clone();
-        let ssh_bind = config.bind_address.clone();
-        let ssh_store = store.clone();
-        let ssh_peer_registry = Arc::clone(&peer_registry);
-        let ssh_http_client = http_client.clone();
+        let ssh_registry = Arc::clone(&app_state.registry);
+        let ssh_password = app_state.config.password.clone();
+        let ssh_data_dir = app_state.config.data_dir.clone();
+        let ssh_bind = app_state.config.bind_address.clone();
+        let ssh_store = app_state.store.clone();
+        let ssh_peer_registry = Arc::clone(&app_state.peer_registry);
+        let ssh_http_client = app_state.http_client.clone();
         tokio::spawn(async move {
             if let Err(e) = den::ssh::server::run(
                 ssh_registry,
@@ -114,10 +112,6 @@ async fn main() {
             }
         });
     }
-
-    // HTTP サーバー（メイン）+ graceful shutdown
-    let shutdown_registry = Arc::clone(&registry);
-    let (app, app_state) = den::create_app(config, registry, store, peer_registry);
 
     // Start peer health check background task
     den::peer::spawn_health_check(Arc::clone(&app_state));
