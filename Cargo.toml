@@ -46,6 +46,11 @@ x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 urlencoding = "2"
+hyper-util = { version = "0.1.20", features = ["server-auto", "http1", "http2", "tokio"] }
+tower = { version = "0.5", features = ["util"] }
+tokio-rustls = "0.26.4"
+rustls = { version = "0.23.37", default-features = false, features = ["std", "ring"] }
+rcgen = "0.14.7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -65,7 +70,6 @@ windows-sys = { version = "0.59", features = [
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 serial_test = "3"
 tempfile = "3"

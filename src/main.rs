@@ -19,6 +19,10 @@ async fn main() {
     let config = Config::from_env();
     let port = config.port;
     let ssh_port = config.ssh_port;
+    let tls_runtime = den::tls::setup(&config).unwrap_or_else(|e| {
+        eprintln!("ERROR: TLS setup failed: {e}");
+        std::process::exit(1);
+    });
 
     // tracing 初期化: console (stderr) + file (data_dir/logs/)
     // stdout は ConPTY (OpenConsole.exe) のカーソル制御シーケンスに干渉されるため
@@ -80,7 +84,8 @@ async fn main() {
 
     // HTTP サーバー（メイン）+ graceful shutdown
     let shutdown_registry = Arc::clone(&registry);
-    let (app, app_state) = den::create_app(config, registry, store, peer_registry);
+    let (app, app_state) =
+        den::create_app(config, registry, store, peer_registry, tls_runtime.as_ref());
 
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
     // Uses shared http_client from AppState for connection pooling
@@ -117,12 +122,29 @@ async fn main() {
         .await
         .expect("Failed to bind port");
 
-    tracing::info!("Listening on http://{}:{}", bind_address, port);
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shutdown_registry))
+    if let Some(tls_runtime) = tls_runtime {
+        tracing::info!("TLS: enabled");
+        tracing::info!("TLS fingerprint: {}", tls_runtime.info.fingerprint);
+        tracing::info!(
+            "TLS SANs: {}",
+            tls_runtime.info.subject_alt_names.join(", ")
+        );
+        tracing::info!("Listening on https://{}:{}", bind_address, port);
+        den::tls::serve(
+            listener,
+            app,
+            tls_runtime.server_config,
+            shutdown_signal(shutdown_registry),
+        )
         .await
         .unwrap();
+    } else {
+        tracing::info!("Listening on http://{}:{}", bind_address, port);
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal(shutdown_registry))
+            .await
+            .unwrap();
+    }
 }
 
 /// Wait for shutdown signal (Ctrl+C) and persist sessions.

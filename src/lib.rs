@@ -14,6 +14,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod store;
 pub mod store_api;
+pub mod tls;
 pub mod update;
 pub mod ws;
 
@@ -35,6 +36,8 @@ pub struct AppState {
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
     pub peer_registry: Arc<peer::PeerRegistry>,
+    pub tls_info: Option<tls::TlsInfo>,
+    pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
     /// Shared HTTP client for peer RPC (no default timeout — set per-request, connection pooling)
     pub http_client: reqwest::Client,
@@ -48,11 +51,19 @@ pub fn create_app(
     registry: Arc<SessionRegistry>,
     store: Store,
     peer_registry: Arc<peer::PeerRegistry>,
+    tls_runtime: Option<&tls::TlsRuntime>,
 ) -> (Router, Arc<AppState>) {
     // 起動ごとにランダムな HMAC シークレットを生成
     // 再起動で全トークンが無効化される（セキュリティ上望ましい）
     let hmac_secret: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
-    create_app_with_secret(config, registry, hmac_secret, store, peer_registry)
+    create_app_with_secret(
+        config,
+        registry,
+        hmac_secret,
+        store,
+        peer_registry,
+        tls_runtime,
+    )
 }
 
 /// テスト用: 固定シークレットで Router を構築
@@ -62,6 +73,7 @@ pub fn create_app_with_secret(
     hmac_secret: Vec<u8>,
     store: Store,
     peer_registry: Arc<peer::PeerRegistry>,
+    tls_runtime: Option<&tls::TlsRuntime>,
 ) -> (Router, Arc<AppState>) {
     // NOTE: 永続化状態を追加する場合は、ここでスタートアップ時の整合性チェックを実装すること。
     // 例: 前回の異常終了で中断状態のままのリソースをリセットする（orphaned state cleanup）。
@@ -96,6 +108,8 @@ pub fn create_app_with_secret(
         rate_limiter: auth::LoginRateLimiter::new(),
         sftp_manager,
         peer_registry,
+        tls_info: tls_runtime.map(|tls| tls.info.clone()),
+        tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
         http_client,
         http_client_loopback,
@@ -111,6 +125,8 @@ pub fn create_app_with_secret(
         .route("/api/peer-rpc", post(peer::peer_rpc))
         // Peer encrypted WebSocket: authenticated by encryption
         .route("/api/peer-ws", get(peer::peer_ws))
+        .route("/api/system/tls", get(tls::status))
+        .route("/api/system/tls/certificate", get(tls::certificate))
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 

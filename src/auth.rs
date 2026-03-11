@@ -159,10 +159,11 @@ pub async fn login(
         tracing::info!("Login successful");
 
         let mut headers = HeaderMap::new();
+        let secure_attr = cookie_secure_attr(state.config.tls_enabled);
         // HttpOnly Cookie: JS からアクセス不可（XSS 対策）
         let token_cookie = format!(
-            "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-            TOKEN_COOKIE, token, TOKEN_TTL_SECS
+            "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}{}",
+            TOKEN_COOKIE, token, TOKEN_TTL_SECS, secure_attr
         );
         headers.insert(
             header::SET_COOKIE,
@@ -170,8 +171,8 @@ pub async fn login(
         );
         // Flag Cookie: JS から isLoggedIn() チェック用（トークン値は含まない）
         let flag_cookie = format!(
-            "{}=1; SameSite=Strict; Path=/; Max-Age={}",
-            LOGGED_IN_COOKIE, TOKEN_TTL_SECS
+            "{}=1; SameSite=Strict; Path=/; Max-Age={}{}",
+            LOGGED_IN_COOKIE, TOKEN_TTL_SECS, secure_attr
         );
         headers.append(
             header::SET_COOKIE,
@@ -189,22 +190,30 @@ pub async fn login(
 /// ログアウト API
 /// HttpOnly Cookie `den_token` と JS フラグ Cookie `den_logged_in` を削除する。
 /// 認証不要（無効クッキーの削除は無害）。
-pub async fn logout() -> Response {
+pub async fn logout(State(state): State<Arc<AppState>>) -> Response {
     let mut headers = HeaderMap::new();
+    let secure_attr = cookie_secure_attr(state.config.tls_enabled);
     let token_cookie = format!(
-        "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
-        TOKEN_COOKIE
+        "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{}",
+        TOKEN_COOKIE, secure_attr
     );
     headers.insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&token_cookie).expect("valid cookie value"),
     );
-    let flag_cookie = format!("{}=; SameSite=Strict; Path=/; Max-Age=0", LOGGED_IN_COOKIE);
+    let flag_cookie = format!(
+        "{}=; SameSite=Strict; Path=/; Max-Age=0{}",
+        LOGGED_IN_COOKIE, secure_attr
+    );
     headers.append(
         header::SET_COOKIE,
         HeaderValue::from_str(&flag_cookie).expect("valid cookie value"),
     );
     (StatusCode::NO_CONTENT, headers).into_response()
+}
+
+fn cookie_secure_attr(tls_enabled: bool) -> &'static str {
+    if tls_enabled { "; Secure" } else { "" }
 }
 
 /// Cookie ヘッダーから指定名の値を抽出
@@ -400,6 +409,12 @@ mod tests {
     fn extract_cookie_no_header() {
         let headers = HeaderMap::new();
         assert_eq!(extract_cookie(&headers, "den_token"), None);
+    }
+
+    #[test]
+    fn secure_cookie_attr_matches_tls_setting() {
+        assert_eq!(cookie_secure_attr(false), "");
+        assert_eq!(cookie_secure_attr(true), "; Secure");
     }
 
     #[test]

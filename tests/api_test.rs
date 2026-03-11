@@ -31,6 +31,10 @@ fn test_config() -> Config {
         data_dir: tmp.to_string_lossy().to_string(),
         bind_address: "127.0.0.1".to_string(),
         ssh_port: None,
+        tls_enabled: false,
+        tls_cert_path: None,
+        tls_key_path: None,
+        tls_subject_alt_names: Vec::new(),
     }
 }
 
@@ -38,8 +42,7 @@ fn test_app() -> axum::Router {
     test_app_with_state().0
 }
 
-fn test_app_with_state() -> (axum::Router, std::sync::Arc<den::AppState>) {
-    let config = test_config();
+fn test_app_from_config(config: Config) -> (axum::Router, std::sync::Arc<den::AppState>) {
     let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
     let registry = SessionRegistry::new(
         "powershell.exe".to_string(),
@@ -53,7 +56,12 @@ fn test_app_with_state() -> (axum::Router, std::sync::Arc<den::AppState>) {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     )
+}
+
+fn test_app_with_state() -> (axum::Router, std::sync::Arc<den::AppState>) {
+    test_app_from_config(test_config())
 }
 
 fn auth_header() -> String {
@@ -90,6 +98,67 @@ async fn login_correct_password() {
     assert_eq!(json["ok"], true);
     // Token is no longer in response body (HttpOnly Cookie only)
     assert!(json.get("token").is_none());
+}
+
+#[tokio::test]
+async fn login_sets_secure_cookie_when_tls_enabled() {
+    let mut config = test_config();
+    config.tls_enabled = true;
+    let (app, _) = test_app_from_config(config);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"password":"testpass"}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let cookies: Vec<&str> = resp
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    assert!(cookies.iter().any(|c| c.starts_with("den_token=") && c.contains("; Secure")));
+    assert!(cookies.iter().any(|c| c.starts_with("den_logged_in=") && c.contains("; Secure")));
+}
+
+#[tokio::test]
+async fn tls_status_omits_internal_paths() {
+    let mut config = test_config();
+    config.tls_enabled = true;
+    config.tls_subject_alt_names = vec!["den-a".to_string()];
+    let tls_runtime = den::tls::setup(&config).unwrap();
+    let store = den::store::Store::from_data_dir(&config.data_dir).unwrap();
+    let registry = SessionRegistry::new(
+        "powershell.exe".to_string(),
+        SleepPreventionMode::Off,
+        30,
+        None,
+    );
+    let (app, _) = den::create_app_with_secret(
+        config,
+        registry,
+        TEST_HMAC_SECRET.to_vec(),
+        store,
+        std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        tls_runtime.as_ref(),
+    );
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/system/tls").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled"], true);
+    assert!(json.get("fingerprint").is_some());
+    assert!(json.get("subject_alt_names").is_some());
+    assert!(json.get("cert_path").is_none());
+    assert!(json.get("key_path").is_none());
 }
 
 #[tokio::test]
@@ -335,6 +404,7 @@ async fn settings_put_and_get() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     // PUT
@@ -415,6 +485,7 @@ async fn settings_put_partial_json() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     // PUT with only some fields — serde should use defaults for missing fields
@@ -467,6 +538,7 @@ async fn settings_ssh_bookmarks_roundtrip() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     let req = Request::builder()
@@ -1136,6 +1208,7 @@ async fn clipboard_history_post_and_get() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     // POST
@@ -1188,6 +1261,7 @@ async fn clipboard_history_dedup() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     // Add two entries
@@ -1241,6 +1315,7 @@ async fn clipboard_history_delete() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     // Add an entry
@@ -1398,6 +1473,7 @@ async fn keep_awake_put_and_get() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     // PUT true — response body should confirm the state
@@ -1819,6 +1895,7 @@ async fn settings_peer_name_roundtrip() {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
 
     let req = Request::builder()

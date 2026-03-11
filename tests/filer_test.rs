@@ -43,6 +43,7 @@ fn test_app() -> axum::Router {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     )
     .0
 }
@@ -68,6 +69,7 @@ fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
         TEST_HMAC_SECRET.to_vec(),
         store,
         std::sync::Arc::new(den::peer::PeerRegistry::new()),
+        None,
     );
     (app, dir)
 }

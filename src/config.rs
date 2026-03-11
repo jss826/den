@@ -29,6 +29,7 @@ impl fmt::Display for Environment {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
     pub password: String,
@@ -39,6 +40,14 @@ pub struct Config {
     pub bind_address: String,
     /// SSH ポート（None = SSH 無効、DEN_SSH_PORT で指定）
     pub ssh_port: Option<u16>,
+    /// HTTPS/WSS を有効化する
+    pub tls_enabled: bool,
+    /// 明示指定のサーバー証明書（DER）。未指定なら自己署名を data_dir/tls/ に生成
+    pub tls_cert_path: Option<String>,
+    /// 明示指定の秘密鍵（PKCS#8 DER）
+    pub tls_key_path: Option<String>,
+    /// 自己署名証明書に追加する SAN（カンマ区切り）
+    pub tls_subject_alt_names: Vec<String>,
 }
 
 impl Config {
@@ -94,6 +103,28 @@ impl Config {
         };
         let bind_address =
             env::var("DEN_BIND_ADDRESS").unwrap_or_else(|_| default_bind.to_string());
+        let tls_enabled = env::var("DEN_TLS")
+            .ok()
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        let tls_cert_path = env::var("DEN_TLS_CERT_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let tls_key_path = env::var("DEN_TLS_KEY_PATH")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let tls_subject_alt_names = env::var("DEN_TLS_SAN")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
         Self {
             port,
@@ -104,6 +135,10 @@ impl Config {
             data_dir,
             bind_address,
             ssh_port,
+            tls_enabled,
+            tls_cert_path,
+            tls_key_path,
+            tls_subject_alt_names,
         }
     }
 }
@@ -125,6 +160,10 @@ mod tests {
             env::remove_var("DEN_DATA_DIR");
             env::remove_var("DEN_BIND_ADDRESS");
             env::remove_var("DEN_SSH_PORT");
+            env::remove_var("DEN_TLS");
+            env::remove_var("DEN_TLS_CERT_PATH");
+            env::remove_var("DEN_TLS_KEY_PATH");
+            env::remove_var("DEN_TLS_SAN");
         }
     }
 
@@ -138,6 +177,10 @@ mod tests {
         assert_eq!(config.password, "test_password");
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.bind_address, "127.0.0.1");
+        assert!(!config.tls_enabled);
+        assert!(config.tls_cert_path.is_none());
+        assert!(config.tls_key_path.is_none());
+        assert!(config.tls_subject_alt_names.is_empty());
     }
 
     #[test]
@@ -190,6 +233,31 @@ mod tests {
         unsafe { env::set_var("DEN_BIND_ADDRESS", "192.168.1.100") };
         let config = Config::from_env();
         assert_eq!(config.bind_address, "192.168.1.100");
+        clear_env();
+    }
+
+    #[test]
+    #[serial]
+    fn tls_settings_parse() {
+        clear_env();
+        unsafe {
+            env::set_var("DEN_TLS", "true");
+            env::set_var("DEN_TLS_CERT_PATH", "data/tls/cert.der");
+            env::set_var("DEN_TLS_KEY_PATH", "data/tls/key.der");
+            env::set_var("DEN_TLS_SAN", "den-a, 10.0.0.2, localhost");
+        }
+        let config = Config::from_env();
+        assert!(config.tls_enabled);
+        assert_eq!(config.tls_cert_path.as_deref(), Some("data/tls/cert.der"));
+        assert_eq!(config.tls_key_path.as_deref(), Some("data/tls/key.der"));
+        assert_eq!(
+            config.tls_subject_alt_names,
+            vec![
+                "den-a".to_string(),
+                "10.0.0.2".to_string(),
+                "localhost".to_string()
+            ]
+        );
         clear_env();
     }
 
