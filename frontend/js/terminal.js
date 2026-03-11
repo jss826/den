@@ -1062,13 +1062,13 @@ const DenTerminal = (() => {
       }, { passive: true });
 
       termContainer.addEventListener('touchmove', (e) => {
-        if (!swiping) return;
+        if (!swiping || !e.touches.length) return;
         const dy = Math.abs(e.touches[0].clientY - touchStartY);
         if (dy > 30) swiping = false;
       }, { passive: true });
 
       termContainer.addEventListener('touchend', (e) => {
-        if (!swiping) return;
+        if (!swiping || !e.changedTouches.length) return;
         swiping = false;
         const dx = e.changedTouches[0].clientX - touchStartX;
         if (Math.abs(dx) < 50) return;

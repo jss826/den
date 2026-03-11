@@ -1025,10 +1025,11 @@ const DenSettings = (() => {
           const name = btn.dataset.peer;
           if (!confirm(`Remove peer "${name}"?`)) return;
           Spinner.button(btn, async () => {
-            await fetch(`/api/peers/${encodeURIComponent(name)}`, {
+            const resp = await fetch(`/api/peers/${encodeURIComponent(name)}`, {
               method: 'DELETE',
               credentials: 'same-origin',
             });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             PeerCache.invalidate();
             loadPeerList();
           }).catch(() => Toast.error('Failed to remove peer'));

@@ -97,6 +97,7 @@ const FilerEditor = (() => {
       CM.EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           markDirty(filePath);
+          if (activePath === filePath) updateStatusSize(filePath, update.state);
         }
         if (update.docChanged || update.selectionSet) {
           if (activePath === filePath) updateStatusCursor(update.state);
@@ -129,20 +130,21 @@ const FilerEditor = (() => {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
+  const LANG_LABELS = {
+    js: 'JavaScript', mjs: 'JavaScript', jsx: 'JSX',
+    ts: 'TypeScript', tsx: 'TSX',
+    rs: 'Rust', py: 'Python', go: 'Go', rb: 'Ruby', java: 'Java',
+    css: 'CSS', scss: 'SCSS', less: 'LESS',
+    html: 'HTML', htm: 'HTML', xml: 'XML', svg: 'SVG',
+    json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
+    md: 'Markdown', mdx: 'MDX', txt: 'Plain Text',
+    sh: 'Shell', bash: 'Bash', zsh: 'Zsh', ps1: 'PowerShell',
+    sql: 'SQL', graphql: 'GraphQL',
+  };
+
   function langLabel(filePath) {
     const ext = getExtension(filePath);
-    const labels = {
-      js: 'JavaScript', mjs: 'JavaScript', jsx: 'JSX',
-      ts: 'TypeScript', tsx: 'TSX',
-      rs: 'Rust', py: 'Python', go: 'Go', rb: 'Ruby', java: 'Java',
-      css: 'CSS', scss: 'SCSS', less: 'LESS',
-      html: 'HTML', htm: 'HTML', xml: 'XML', svg: 'SVG',
-      json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
-      md: 'Markdown', mdx: 'MDX', txt: 'Plain Text',
-      sh: 'Shell', bash: 'Bash', zsh: 'Zsh', ps1: 'PowerShell',
-      sql: 'SQL', graphql: 'GraphQL',
-    };
-    return labels[ext] || ext.toUpperCase() || 'Plain Text';
+    return LANG_LABELS[ext] || ext.toUpperCase() || 'Plain Text';
   }
 
   function updateStatusCursor(editorState) {
@@ -151,6 +153,15 @@ const FilerEditor = (() => {
     const line = editorState.doc.lineAt(pos);
     const col = pos - line.from + 1;
     statusCursor.textContent = `Ln ${line.number}, Col ${col}`;
+  }
+
+  function updateStatusSize(filePath, editorState) {
+    if (!statusSize) return;
+    const content = editorState.doc.toString();
+    const size = new Blob([content]).size;
+    const file = openFiles.get(filePath);
+    if (file) file.cachedSize = size;
+    statusSize.textContent = formatFileSize(size);
   }
 
   function updateStatusBar(filePath) {
@@ -165,8 +176,11 @@ const FilerEditor = (() => {
     if (statusLang) statusLang.textContent = langLabel(filePath);
 
     if (statusSize) {
-      const content = file.view.state.doc.toString();
-      statusSize.textContent = formatFileSize(new Blob([content]).size);
+      if (file.cachedSize != null) {
+        statusSize.textContent = formatFileSize(file.cachedSize);
+      } else {
+        updateStatusSize(filePath, file.view.state);
+      }
     }
 
     if (!file.isImage && file.view.state) {
@@ -479,6 +493,7 @@ const FilerEditor = (() => {
           setActive(remaining[remaining.length - 1]);
         } else {
           editorContainer.innerHTML = '<div class="filer-welcome"><p>Select a file to edit</p></div>';
+          updateStatusBar(null);
         }
       }
       renderTabs();

@@ -30,11 +30,14 @@ const SSH_PASSWORD_DELAY: std::time::Duration = std::time::Duration::from_secs(3
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Threshold for logging a warning about excessive loopback SSH connections.
-/// Connections are NOT blocked at this threshold — Layer 1 (DEN_INSTANCE) and
-/// Layer 3 (process tree inspection, Windows only) handle actual blocking.
-/// On non-Windows platforms without SendEnv, this log helps diagnose loops.
+/// Threshold for logging a warning about high loopback SSH connection count.
 const LOOPBACK_WARN_THRESHOLD: usize = 10;
+
+/// Hard limit for loopback SSH connections. Blocks connections exceeding this
+/// count as a last-resort safety net against self-connection loops, especially
+/// on non-Windows platforms where Layer 3 (process tree) is unavailable.
+/// Set high enough (50) to never interfere with legitimate local SSH usage.
+const LOOPBACK_HARD_LIMIT: usize = 50;
 
 /// Escape character state machine for `~` sequences (like OpenSSH).
 /// Detects `Enter → ~ → command` patterns in SSH input.
@@ -258,14 +261,26 @@ impl DenSshHandler {
             return Ok(());
         }
 
-        // Layer 2: Log warning on high loopback count (diagnostic only, does not block).
-        // Blocking is handled by Layer 1 (DEN_INSTANCE) and Layer 3 (process tree).
+        // Layer 2: Loopback connection count guard.
+        // Warn at LOOPBACK_WARN_THRESHOLD, hard-block at LOOPBACK_HARD_LIMIT.
+        // The hard limit is a last-resort safety net for non-Windows platforms
+        // where Layer 3 (process tree inspection) is unavailable.
         if self.is_loopback {
             let count = self.loopback_count.load(Ordering::Relaxed);
+            if count > LOOPBACK_HARD_LIMIT {
+                tracing::warn!("SSH loopback hard limit exceeded: {count}/{LOOPBACK_HARD_LIMIT}");
+                let msg = format!(
+                    "Error: Too many SSH connections from localhost ({count} exceeds limit of {LOOPBACK_HARD_LIMIT}).\r\n\
+                     This may indicate a self-connection loop.\r\n"
+                );
+                session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
+                session.close(channel_id)?;
+                return Ok(());
+            }
             if count > LOOPBACK_WARN_THRESHOLD {
                 tracing::warn!(
-                    "High loopback SSH connection count: {count} (threshold: {LOOPBACK_WARN_THRESHOLD}). \
-                     If this is unexpected, check for self-connection loops."
+                    loopback_count = count,
+                    "High loopback SSH connection count (warn threshold: {LOOPBACK_WARN_THRESHOLD})"
                 );
             }
         }

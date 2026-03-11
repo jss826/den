@@ -3061,11 +3061,19 @@ select:focus-visible {
 /* === Theme transition === */
 
 html.theme-transition,
-html.theme-transition *,
-html.theme-transition *::before,
-html.theme-transition *::after {
-  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease,
-              box-shadow 0.2s ease !important;
+html.theme-transition body,
+html.theme-transition .toolbar,
+html.theme-transition .session-bar,
+html.theme-transition .session-tab,
+html.theme-transition .filer-tree,
+html.theme-transition .filer-editor,
+html.theme-transition .filer-statusbar,
+html.theme-transition .modal-content,
+html.theme-transition .tab-btn,
+html.theme-transition input,
+html.theme-transition select,
+html.theme-transition button {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease !important;
 }
 
 /* === Reduced motion 対応 === */
