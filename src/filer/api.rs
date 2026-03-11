@@ -195,8 +195,7 @@ fn resolve_path(raw: &str) -> Result<PathBuf, ApiError> {
     let path = PathBuf::from(&expanded);
 
     let result = if path.exists() {
-        path.canonicalize()
-            .map_err(|_| err(StatusCode::BAD_REQUEST, "Cannot resolve path"))?
+        normalize_existing_path(&path)?
     } else {
         // 新規作成系: 既存の祖先ディレクトリまで遡り正規化して子を結合
         let mut components_to_add = Vec::new();
@@ -213,8 +212,7 @@ fn resolve_path(raw: &str) -> Result<PathBuf, ApiError> {
                 break;
             }
         }
-        let canonical = current
-            .canonicalize()
+        let canonical = normalize_existing_path(current)
             .map_err(|_| err(StatusCode::NOT_FOUND, "Parent directory not found"))?;
         let mut result = canonical;
         for component in components_to_add.into_iter().rev() {
@@ -237,17 +235,63 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     }
 }
 
+fn normalize_existing_path(path: &Path) -> Result<PathBuf, ApiError> {
+    if let Ok(canonical) = path.canonicalize() {
+        return Ok(canonical);
+    }
+
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .map_err(|_| err(StatusCode::BAD_REQUEST, "Cannot resolve path"))
+}
+
 /// ~ をホームディレクトリに展開
 fn expand_home(path: &str) -> String {
     if let Some(rest) = path.strip_prefix('~') {
-        let home = if cfg!(windows) {
-            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".to_string())
-        } else {
-            std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
-        };
-        format!("{}{}", home, rest)
+        let home = home_dir_string().unwrap_or_else(|| {
+            if cfg!(windows) {
+                "C:\\".to_string()
+            } else {
+                "/".to_string()
+            }
+        });
+        let mut home = PathBuf::from(home);
+        let trimmed = rest.trim_start_matches(['/', '\\']);
+        if !trimmed.is_empty() {
+            home.push(trimmed);
+        }
+        home.to_string_lossy().into_owned()
     } else {
         path.to_string()
+    }
+}
+
+fn home_dir_string() -> Option<String> {
+    #[cfg(windows)]
+    {
+        if let Ok(userprofile) = std::env::var("USERPROFILE")
+            && !userprofile.is_empty()
+        {
+            return Some(userprofile);
+        }
+        let homedrive = std::env::var("HOMEDRIVE").ok();
+        let homepath = std::env::var("HOMEPATH").ok();
+        if let (Some(drive), Some(path)) = (homedrive, homepath) {
+            let combined = format!("{drive}{path}");
+            if !combined.is_empty() {
+                return Some(combined);
+            }
+        }
+        std::env::var("HOME").ok().filter(|home| !home.is_empty())
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::env::var("HOME").ok().filter(|home| !home.is_empty())
     }
 }
 

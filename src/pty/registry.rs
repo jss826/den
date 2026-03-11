@@ -329,6 +329,80 @@ fn now_epoch_secs() -> u64 {
 }
 
 impl SessionRegistry {
+    fn load_saved_records(&self) -> Vec<crate::store::SessionRecord> {
+        self.store
+            .as_ref()
+            .map(crate::store::Store::load_sessions)
+            .unwrap_or_default()
+    }
+
+    fn load_saved_record(&self, name: &str) -> Option<crate::store::SessionRecord> {
+        self.load_saved_records().into_iter().find(|record| record.name == name)
+    }
+
+    async fn upsert_saved_record(
+        &self,
+        name: &str,
+        ssh: Option<SshSessionConfig>,
+    ) -> Result<(), String> {
+        let Some(ref store) = self.store else {
+            return Ok(());
+        };
+        let store = store.clone();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut records = store.load_sessions();
+            if let Some(record) = records.iter_mut().find(|record| record.name == name) {
+                record.ssh = ssh;
+            } else {
+                records.push(crate::store::SessionRecord { name, ssh });
+            }
+            store.save_sessions(&records)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn remove_saved_record(&self, name: &str) -> Result<(), String> {
+        let Some(ref store) = self.store else {
+            return Ok(());
+        };
+        let store = store.clone();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut records = store.load_sessions();
+            records.retain(|record| record.name != name);
+            store.save_sessions(&records)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn rename_saved_record(&self, old_name: &str, new_name: &str) -> Result<(), String> {
+        let Some(ref store) = self.store else {
+            return Ok(());
+        };
+        let store = store.clone();
+        let old_name = old_name.to_string();
+        let new_name = new_name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut records = store.load_sessions();
+            if records.iter().any(|record| record.name == new_name) {
+                return Ok(());
+            }
+            if let Some(record) = records.iter_mut().find(|record| record.name == old_name) {
+                record.name = new_name;
+                store.save_sessions(&records)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e: std::io::Error| e.to_string())
+    }
+
     pub fn new(
         shell: String,
         sleep_mode: SleepPreventionMode,
@@ -660,7 +734,9 @@ impl SessionRegistry {
 
         self.evaluate_sleep_prevention(session_count);
         tracing::info!("Session created: {name}");
-        self.persist_sessions().await;
+        if let Err(e) = self.upsert_saved_record(name, session.ssh_config.clone()).await {
+            tracing::warn!("Failed to persist saved session '{name}': {e}");
+        }
         Ok((session, first_rx))
     }
 
@@ -768,7 +844,8 @@ impl SessionRegistry {
         }
 
         // create → inline attach
-        match self.create(name, cols, rows).await {
+        let saved_ssh = self.load_saved_record(name).and_then(|record| record.ssh);
+        match self.create_with_ssh(name, cols, rows, saved_ssh).await {
             Ok((session, first_rx)) => {
                 let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                 let mut inner = session.inner.lock().await;
@@ -882,6 +959,22 @@ impl SessionRegistry {
         }
 
         result.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        let saved_records = self.load_saved_records();
+        for record in saved_records {
+            if session_arcs.iter().any(|(name, _)| *name == record.name) {
+                continue;
+            }
+            result.push(SessionInfo {
+                name: record.name,
+                created_at: Utc::now(),
+                alive: false,
+                client_count: 0,
+                ssh_host: record.ssh.as_ref().map(|c| c.host.clone()),
+                detected_ports: Vec::new(),
+            });
+        }
+
         result
     }
 
@@ -900,6 +993,9 @@ impl SessionRegistry {
         };
 
         let Some(session) = session else {
+            if let Err(e) = self.remove_saved_record(name).await {
+                tracing::warn!("Failed to remove saved session '{name}': {e}");
+            }
             return;
         };
 
@@ -965,7 +1061,9 @@ impl SessionRegistry {
         }
 
         tracing::info!("Session destroyed: {name}");
-        self.persist_sessions().await;
+        if let Err(e) = self.remove_saved_record(name).await {
+            tracing::warn!("Failed to remove saved session '{name}': {e}");
+        }
     }
 
     /// セッション名を変更
@@ -974,10 +1072,16 @@ impl SessionRegistry {
             return Err(RegistryError::InvalidName(new_name.to_string()));
         }
         let mut sessions = self.sessions.write().await;
-        if !sessions.contains_key(old_name) {
+        if sessions.contains_key(new_name) {
+            return Err(RegistryError::AlreadyExists(new_name.to_string()));
+        }
+        let had_active = sessions.contains_key(old_name);
+        let saved_records = self.load_saved_records();
+        let had_saved = saved_records.iter().any(|record| record.name == old_name);
+        if !had_active && !had_saved {
             return Err(RegistryError::NotFound(old_name.to_string()));
         }
-        if sessions.contains_key(new_name) {
+        if !had_active && had_saved && saved_records.iter().any(|record| record.name == new_name) {
             return Err(RegistryError::AlreadyExists(new_name.to_string()));
         }
         // HashMap key change only — SharedSession.name is the creation-time name
@@ -987,31 +1091,26 @@ impl SessionRegistry {
         }
         tracing::info!("Session renamed: {old_name} -> {new_name}");
         drop(sessions);
-        self.persist_sessions().await;
+        if let Err(e) = self.rename_saved_record(old_name, new_name).await {
+            tracing::warn!("Failed to rename saved session '{old_name}': {e}");
+        }
         Ok(())
     }
 
     /// Persist current session list to disk (best-effort).
     pub async fn persist_sessions(&self) {
-        let Some(ref store) = self.store else {
-            return;
-        };
         let sessions = self.sessions.read().await;
-        let records: Vec<crate::store::SessionRecord> = sessions
+        let snapshots: Vec<_> = sessions
             .iter()
-            .map(|(name, session)| crate::store::SessionRecord {
-                name: name.clone(),
-                ssh: session.ssh_config.clone(),
-            })
+            .map(|(name, session)| (name.clone(), session.ssh_config.clone()))
             .collect();
         drop(sessions);
-        let store = store.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Err(e) = store.save_sessions(&records) {
-                tracing::warn!("Failed to persist sessions: {e}");
+
+        for (name, ssh) in snapshots {
+            if let Err(e) = self.upsert_saved_record(&name, ssh).await {
+                tracing::warn!("Failed to persist saved session '{name}': {e}");
             }
-        })
-        .await;
+        }
     }
 
     /// セッションが存在するか

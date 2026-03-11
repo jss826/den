@@ -361,6 +361,8 @@ impl DenSshHandler {
         // Output: broadcast::Receiver → SSH channel
         let handle = session.handle();
         let name_for_task = session_name.to_string();
+        let registry_for_task = Arc::clone(&self.registry);
+        let client_id_for_task = client_id;
         // Keep Arc alive so the session isn't dropped while output_task runs.
         // Also used for is_alive() checks inside the task.
         let session_ref = shared_session;
@@ -421,6 +423,13 @@ impl DenSshHandler {
                 "SSH output_task ended for session {name_for_task} (alive={}, reason={reason})",
                 session_ref.is_alive()
             );
+
+            // Some clients disconnect in a way that ends the output task before russh
+            // delivers channel_close/channel_eof. Detach here as a safety net to
+            // avoid leaking stale SSH clients into restored sessions.
+            registry_for_task
+                .detach(&name_for_task, client_id_for_task)
+                .await;
         }));
 
         Ok(())
