@@ -1047,6 +1047,50 @@ const DenTerminal = (() => {
       });
     }
 
+    // Swipe gesture for session switching on touch devices
+    const termContainer = document.getElementById('terminal-container');
+    if (termContainer) {
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let swiping = false;
+
+      termContainer.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        swiping = true;
+      }, { passive: true });
+
+      termContainer.addEventListener('touchmove', (e) => {
+        if (!swiping) return;
+        const dy = Math.abs(e.touches[0].clientY - touchStartY);
+        if (dy > 30) swiping = false;
+      }, { passive: true });
+
+      termContainer.addEventListener('touchend', (e) => {
+        if (!swiping) return;
+        swiping = false;
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(dx) < 50) return;
+
+        const tabs = [...sessionTabsEl.querySelectorAll('.session-tab')];
+        if (tabs.length < 2) return;
+        const activeIdx = tabs.findIndex(t => t.classList.contains('active'));
+        if (activeIdx === -1) return;
+
+        let nextIdx;
+        if (dx < 0) {
+          // swipe left = next
+          nextIdx = (activeIdx + 1) % tabs.length;
+        } else {
+          // swipe right = prev
+          nextIdx = (activeIdx - 1 + tabs.length) % tabs.length;
+        }
+        const target = tabs[nextIdx];
+        switchSession(target.dataset.session, target.dataset.peer || null);
+      }, { passive: true });
+    }
+
     if (newBtn) {
       newBtn.addEventListener('click', (e) => {
         e.stopPropagation();
