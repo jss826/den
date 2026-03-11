@@ -156,6 +156,12 @@ const DenSettings = (() => {
       mediaQuery = null;
     }
 
+    // Enable smooth theme transition (skip on reduced-motion preference)
+    const skipTransition = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!skipTransition) {
+      document.documentElement.classList.add('theme-transition');
+    }
+
     if (theme === 'system') {
       mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
       mediaQuery.addEventListener('change', onSystemThemeChange);
@@ -163,6 +169,10 @@ const DenSettings = (() => {
       document.documentElement.setAttribute('data-theme', resolved);
     } else {
       document.documentElement.setAttribute('data-theme', theme);
+    }
+
+    if (!skipTransition) {
+      setTimeout(() => document.documentElement.classList.remove('theme-transition'), 300);
     }
     // light 系テーマでは color-scheme を light に
     const lightThemes = ['light', 'solarized-light', 'gruvbox-light'];
