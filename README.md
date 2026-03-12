@@ -122,12 +122,34 @@ The server's TLS fingerprint is shown in Settings. When connecting to a remote D
 
 Connect to another Den instance's terminal and files from your browser. Requires TLS on the remote Den.
 
-1. Open the **Remote** dropdown in the file manager (or session bar)
-2. Enter the remote Den's URL and password
-3. Confirm the TLS fingerprint on first connection
-4. Terminal sessions and files from the remote Den appear alongside local ones
+### Direct Connection
 
-The connection is proxied through the local Den — your browser only talks to localhost.
+1. Open the **Remote** dropdown in the file manager (or session bar)
+2. Select **Quick Connect Den**
+3. Enter the remote Den's URL and password
+4. Confirm the TLS fingerprint on first connection
+5. Terminal sessions and files from the remote Den appear alongside local ones
+
+### Relay Connection
+
+When the target Den is not directly reachable (e.g., a VM on another host's private network), use one-hop relay through an intermediate Den:
+
+1. Open **Quick Connect Den**
+2. Enter the **Target URL** and **Target Password**
+3. Check **Use Relay**
+4. Enter the **Relay URL** and **Relay Password**
+5. Confirm TLS fingerprints for each hop (relay and target)
+
+```
+Browser → Local Den → Relay Den → Target Den
+```
+
+- Explicit one-hop only — no automatic route discovery or multi-hop
+- Passwords are never persisted; session tokens remain memory-only
+- Each hop uses HTTPS/WSS with TLS certificate pinning
+- Relay sessions expire after 30 minutes of inactivity
+
+All connections are proxied through the local Den — your browser only talks to localhost.
 
 ## SSH Server
 
@@ -188,8 +210,8 @@ Falls back to password auth when no keys are set up.
 │  │ PTY (shell, ConPTY) │  │  Filer API  │  │ SFTP API  │ │
 │  └─────────────────────┘  └─────────────┘  └───────────┘ │
 │  ┌──────────────────────────────────────────────────────┐ │
-│  │ Quick Connect Relay  →  Remote Den (HTTPS)           │ │
-│  │ (terminal + filer + WS proxy)                        │ │
+│  │ Quick Connect  →  Remote Den (HTTPS, direct or relay) │ │
+│  │ (terminal + filer + WS proxy, one-hop relay support) │ │
 │  └──────────────────────────────────────────────────────┘ │
 │  Static files (rust-embed)    TLS (self-signed / custom)  │
 │  Store (JSON persistence)     SSH Server (russh)          │
