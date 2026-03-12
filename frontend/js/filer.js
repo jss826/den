@@ -87,6 +87,11 @@ const DenFiler = (() => {
     });
     const denSubmit = document.getElementById('den-connect-submit');
     if (denSubmit) denSubmit.addEventListener('click', doDenConnect);
+    const denUseRelay = document.getElementById('den-use-relay');
+    if (denUseRelay) denUseRelay.addEventListener('change', () => {
+      const section = document.getElementById('den-relay-section');
+      if (section) section.hidden = !denUseRelay.checked;
+    });
 
     // SSH Bookmarks
     const bookmarkSelect = document.getElementById('sftp-bookmark-select');
@@ -223,7 +228,11 @@ const DenFiler = (() => {
     const btn = document.getElementById('filer-remote-btn');
     if (!btn) return;
     const info = FilerRemote.getInfo();
-    if (info.mode === 'den') {
+    if (info.mode === 'relay') {
+      btn.textContent = info.hostPort || 'Relay';
+      btn.classList.add('active');
+      btn.setAttribute('data-tooltip', `Connected via relay ${info.relayHostPort || ''}`);
+    } else if (info.mode === 'den') {
       btn.textContent = info.hostPort || 'Remote Den';
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', 'Connected to remote Den');
@@ -254,9 +263,14 @@ const DenFiler = (() => {
     // Disconnect option if connected
     if (FilerRemote.isRemote()) {
       const info = FilerRemote.getInfo();
-      const label = info.mode === 'den'
-        ? (info.hostPort || 'remote Den')
-        : `${info.username}@${info.host}`;
+      let label;
+      if (info.mode === 'relay') {
+        label = `${info.hostPort || 'target'} via ${info.relayHostPort || 'relay'}`;
+      } else if (info.mode === 'den') {
+        label = info.hostPort || 'remote Den';
+      } else {
+        label = `${info.username}@${info.host}`;
+      }
       const disconnItem = document.createElement('div');
       disconnItem.className = 'new-session-menu-item disconnect';
       disconnItem.textContent = `Disconnect ${label}`;
@@ -264,6 +278,8 @@ const DenFiler = (() => {
         closeRemoteDropdown();
         if (info.mode === 'sftp') {
           doDisconnect();
+        } else if (info.mode === 'relay') {
+          doRelayDisconnect();
         } else {
           doDenDisconnect();
         }
@@ -439,6 +455,15 @@ const DenFiler = (() => {
     const passwordInput = document.getElementById('den-connect-password');
     urlInput.value = defaultUrl || '';
     passwordInput.value = '';
+    // Reset relay fields
+    const relayCheckbox = document.getElementById('den-use-relay');
+    if (relayCheckbox) relayCheckbox.checked = false;
+    const relaySection = document.getElementById('den-relay-section');
+    if (relaySection) relaySection.hidden = true;
+    const relayUrl = document.getElementById('den-relay-url');
+    if (relayUrl) relayUrl.value = '';
+    const relayPassword = document.getElementById('den-relay-password');
+    if (relayPassword) relayPassword.value = '';
     modal.hidden = false;
     urlInput.focus();
   }
@@ -480,16 +505,35 @@ const DenFiler = (() => {
     const url = document.getElementById('den-connect-url').value.trim();
     const password = document.getElementById('den-connect-password').value;
     if (!url || !password) {
-      Toast.error('URL and password are required');
+      Toast.error('Target URL and password are required');
       return;
+    }
+
+    const useRelay = document.getElementById('den-use-relay')?.checked;
+    if (useRelay) {
+      const relayUrl = document.getElementById('den-relay-url')?.value.trim();
+      const relayPassword = document.getElementById('den-relay-password')?.value;
+      if (!relayUrl || !relayPassword) {
+        Toast.error('Relay URL and password are required');
+        return;
+      }
     }
 
     const submitBtn = document.getElementById('den-connect-submit');
     await Spinner.button(submitBtn, async () => {
       try {
-        const data = await FilerRemote.connectDen(url, password);
-        document.getElementById('den-connect-modal').hidden = true;
-        Toast.success(`Connected to ${data.host_port || url}`);
+        let data;
+        if (useRelay) {
+          const relayUrl = document.getElementById('den-relay-url').value.trim();
+          const relayPassword = document.getElementById('den-relay-password').value;
+          data = await FilerRemote.connectDenViaRelay(relayUrl, relayPassword, url, password);
+          document.getElementById('den-connect-modal').hidden = true;
+          Toast.success(`Connected to ${data.target_host_port || url} via relay`);
+        } else {
+          data = await FilerRemote.connectDen(url, password);
+          document.getElementById('den-connect-modal').hidden = true;
+          Toast.success(`Connected to ${data.host_port || url}`);
+        }
       } catch (e) {
         if (e.message !== 'Connection cancelled') {
           Toast.error(e.message || 'Connection failed');
@@ -507,6 +551,12 @@ const DenFiler = (() => {
   async function doDenDisconnect() {
     if (!(await Toast.confirm('Disconnect from remote Den?'))) return;
     await FilerRemote.disconnectDen();
+    Toast.success('Disconnected');
+  }
+
+  async function doRelayDisconnect() {
+    if (!(await Toast.confirm('Disconnect relay connection?'))) return;
+    await FilerRemote.disconnectRelay();
     Toast.success('Disconnected');
   }
 

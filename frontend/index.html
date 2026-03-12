@@ -186,12 +186,27 @@
       <div class="modal-content">
         <h3>Quick Connect to Den</h3>
         <div class="modal-section">
-          <label>URL</label>
+          <label>Target URL</label>
           <input type="text" id="den-connect-url" class="settings-input" placeholder="https://den-b:8080" autocomplete="off" />
         </div>
         <div class="modal-section">
-          <label>Password</label>
+          <label>Target Password</label>
           <input type="password" id="den-connect-password" class="settings-input" autocomplete="off" />
+        </div>
+        <div class="modal-section">
+          <label>
+            <input type="checkbox" id="den-use-relay" /> Use Relay
+          </label>
+        </div>
+        <div id="den-relay-section" hidden>
+          <div class="modal-section">
+            <label>Relay URL</label>
+            <input type="text" id="den-relay-url" class="settings-input" placeholder="https://relay-den:8080" autocomplete="off" />
+          </div>
+          <div class="modal-section">
+            <label>Relay Password</label>
+            <input type="password" id="den-relay-password" class="settings-input" autocomplete="off" />
+          </div>
         </div>
         <div class="modal-actions">
           <button id="den-connect-cancel" class="modal-btn">Cancel</button>

@@ -19,6 +19,27 @@ const DenTerminal = (() => {
     return !!info && target === info.hostPort;
   }
 
+  function getRelayInfo() {
+    const info = window.FilerRemote?.getInfo?.();
+    return info && info.mode === 'relay' ? info : null;
+  }
+
+  function isRelayTarget(target) {
+    const info = getRelayInfo();
+    return !!info && target === info.hostPort;
+  }
+
+  function getWsPath() {
+    if (currentRemote) {
+      const relayInfo = getRelayInfo();
+      if (relayInfo && currentRemote === relayInfo.hostPort) {
+        return `/api/relay/${relayInfo.relaySessionId}/ws`;
+      }
+      return '/api/remote/ws';
+    }
+    return '/api/ws';
+  }
+
   /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
   function mergeChunks(chunks) {
     let total = 0;
@@ -331,10 +352,8 @@ const DenTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Route WS through remote proxy if connected to another Den
-    const wsPath = currentRemote
-      ? '/api/remote/ws'
-      : '/api/ws';
+    // Route WS through remote/relay proxy if connected to another Den
+    const wsPath = getWsPath();
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
     let retries = 0;
@@ -708,22 +727,37 @@ const DenTerminal = (() => {
     return [];
   }
 
-  /** Fetch sessions from local + current remote Den */
+  /** Fetch sessions from local + current remote/relay Den */
   async function fetchAllSessions() {
     const local = await fetchSessions();
-    const remoteInfo = getRemoteDenInfo();
 
     // Mark local sessions
     const all = local.map(s => ({ ...s, remote: null }));
-    if (remoteInfo?.hostPort) {
+
+    // Fetch relay sessions
+    const relay = getRelayInfo();
+    if (relay?.relaySessionId) {
       try {
-        const r = await fetch('/api/remote/terminal/sessions', {
+        const r = await fetch(`/api/relay/${relay.relaySessionId}/terminal/sessions`, {
           credentials: 'same-origin',
         });
         if (r.ok) {
-          all.push(...(await r.json()).map(s => ({ ...s, remote: remoteInfo.hostPort, detected_ports: [] })));
+          all.push(...(await r.json()).map(s => ({ ...s, remote: relay.hostPort, detected_ports: [] })));
         }
       } catch { /* ignore */ }
+    } else {
+      // Fetch direct remote sessions
+      const remoteInfo = getRemoteDenInfo();
+      if (remoteInfo?.hostPort) {
+        try {
+          const r = await fetch('/api/remote/terminal/sessions', {
+            credentials: 'same-origin',
+          });
+          if (r.ok) {
+            all.push(...(await r.json()).map(s => ({ ...s, remote: remoteInfo.hostPort, detected_ports: [] })));
+          }
+        } catch { /* ignore */ }
+      }
     }
     return all;
   }
@@ -731,6 +765,10 @@ const DenTerminal = (() => {
   /** Get API base path for session operations */
   function sessionApiBase(remote) {
     if (!remote) return '';
+    if (isRelayTarget(remote)) {
+      const info = getRelayInfo();
+      return `/api/relay/${info.relaySessionId}`;
+    }
     return isRemoteDenTarget(remote) ? '/api/remote' : '';
   }
 
@@ -1129,11 +1167,14 @@ const DenTerminal = (() => {
     });
     menu.appendChild(localItem);
 
+    const relayInfo = getRelayInfo();
     const remoteInfo = getRemoteDenInfo();
-    if (remoteInfo?.hostPort) {
+    const connectedHostPort = relayInfo?.hostPort || remoteInfo?.hostPort;
+    if (connectedHostPort) {
       const sep = document.createElement('div');
       sep.className = 'new-session-menu-separator';
-      sep.textContent = `Remote ${remoteInfo.hostPort}`;
+      const label = relayInfo ? `Relay ${connectedHostPort}` : `Remote ${connectedHostPort}`;
+      sep.textContent = label;
       menu.appendChild(sep);
 
       const newItem = document.createElement('div');
@@ -1146,11 +1187,11 @@ const DenTerminal = (() => {
         const trimmed = name.trim();
         const validationError = validateSessionName(trimmed);
         if (validationError) { Toast.error(validationError); return; }
-        const ok = await createSession(trimmed, null, remoteInfo.hostPort);
+        const ok = await createSession(trimmed, null, connectedHostPort);
         if (!ok) { Toast.error('Failed to create remote session'); return; }
         lastSessionsKey = '';
         await refreshSessionList();
-        switchSession(trimmed, remoteInfo.hostPort);
+        switchSession(trimmed, connectedHostPort);
       });
       menu.appendChild(newItem);
     } else {

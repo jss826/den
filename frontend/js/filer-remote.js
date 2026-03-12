@@ -1,13 +1,15 @@
-// Den - Remote file source management (SFTP + Remote Den)
+// Den - Remote file source management (SFTP + Remote Den + Relay)
 // eslint-disable-next-line no-unused-vars
 const FilerRemote = (() => {
-  // mode: 'local' | 'sftp' | 'den'
+  // mode: 'local' | 'sftp' | 'den' | 'relay'
   let mode = 'local';
   let hostInfo = null; // { host, username } for SFTP
   let denInfo = null; // { url, hostPort, fingerprint } for Quick Connect
+  let relayInfo = null; // { relaySessionId, relayHostPort, targetHostPort, targetFingerprint } for Relay
 
   /** Current API base path */
   function getApiBase() {
+    if (mode === 'relay') return `/api/relay/${relayInfo.relaySessionId}/filer`;
     if (mode === 'den') return '/api/remote/filer';
     if (mode === 'sftp') return '/api/sftp';
     return '/api/filer';
@@ -20,6 +22,19 @@ const FilerRemote = (() => {
 
   /** Current connection info */
   function getInfo() {
+    if (mode === 'relay') {
+      return {
+        connected: true,
+        mode: 'relay',
+        relaySessionId: relayInfo?.relaySessionId || null,
+        relayHostPort: relayInfo?.relayHostPort || null,
+        hostPort: relayInfo?.targetHostPort || null,
+        fingerprint: relayInfo?.targetFingerprint || null,
+        url: null,
+        host: null,
+        username: null,
+      };
+    }
     if (mode === 'den') {
       return {
         connected: true,
@@ -97,6 +112,108 @@ const FilerRemote = (() => {
     } catch { /* ignore */ }
     mode = 'local';
     denInfo = null;
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
+  }
+
+  /** Connect to a target Den through a relay Den */
+  async function connectDenViaRelay(relayUrl, relayPassword, targetUrl, targetPassword) {
+    if (mode === 'sftp') await disconnectSftpSilent();
+    if (mode === 'den') await disconnectDenSilent();
+    if (mode === 'relay') await disconnectRelaySilent();
+
+    let resp = await doRelayConnectFetch(relayUrl, relayPassword, targetUrl, targetPassword);
+
+    // Handle TLS trust for relay or target (409 with hop field)
+    if (resp.status === 409) {
+      const errData = await resp.json().catch(() => ({}));
+      if (errData.host_port && errData.fingerprint
+          && (errData.error === 'untrusted_tls_certificate' || errData.error === 'tls_fingerprint_mismatch')) {
+        const accepted = await DenTlsTrust.confirmAndStore({
+          hostPort: errData.host_port,
+          fingerprint: errData.fingerprint,
+          expectedFingerprint: errData.expected_fingerprint || null,
+          hop: errData.hop || null,
+        });
+        if (!accepted) throw new Error('Connection cancelled');
+
+        // Retry — if target hop, include trusted_fingerprint
+        const trustedFp = errData.hop === 'target' ? errData.fingerprint : null;
+        resp = await doRelayConnectFetch(relayUrl, relayPassword, targetUrl, targetPassword, trustedFp);
+
+        // Second hop might need trust too
+        if (resp.status === 409) {
+          const errData2 = await resp.json().catch(() => ({}));
+          if (errData2.host_port && errData2.fingerprint
+              && (errData2.error === 'untrusted_tls_certificate' || errData2.error === 'tls_fingerprint_mismatch')) {
+            const accepted2 = await DenTlsTrust.confirmAndStore({
+              hostPort: errData2.host_port,
+              fingerprint: errData2.fingerprint,
+              expectedFingerprint: errData2.expected_fingerprint || null,
+              hop: errData2.hop || null,
+            });
+            if (!accepted2) throw new Error('Connection cancelled');
+            const trustedFp2 = errData2.hop === 'target' ? errData2.fingerprint : null;
+            resp = await doRelayConnectFetch(relayUrl, relayPassword, targetUrl, targetPassword, trustedFp2 || trustedFp);
+          }
+        }
+      }
+    }
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'Connection failed' }));
+      throw new Error(err.error || 'Connection failed');
+    }
+
+    const data = await resp.json();
+    mode = 'relay';
+    relayInfo = {
+      relaySessionId: data.relay_session_id,
+      relayHostPort: data.relay_host_port || null,
+      targetHostPort: data.target_host_port || null,
+      targetFingerprint: data.target_fingerprint || null,
+    };
+    document.dispatchEvent(new CustomEvent('den:remote-changed', {
+      detail: { mode: 'relay', hostPort: relayInfo.targetHostPort, relayHostPort: relayInfo.relayHostPort },
+    }));
+    return data;
+  }
+
+  function doRelayConnectFetch(relayUrl, relayPassword, targetUrl, targetPassword, trustedFingerprint) {
+    const body = {
+      url: targetUrl,
+      password: targetPassword,
+      relay_url: relayUrl,
+      relay_password: relayPassword,
+    };
+    if (trustedFingerprint) body.trusted_fingerprint = trustedFingerprint;
+    return fetch('/api/relay/connect', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function disconnectRelaySilent() {
+    if (relayInfo?.relaySessionId) {
+      await fetch(`/api/relay/${relayInfo.relaySessionId}/disconnect`, {
+        method: 'POST', credentials: 'same-origin',
+      }).catch(() => {});
+    }
+    mode = 'local';
+    relayInfo = null;
+  }
+
+  async function disconnectRelay() {
+    if (relayInfo?.relaySessionId) {
+      try {
+        await fetch(`/api/relay/${relayInfo.relaySessionId}/disconnect`, {
+          method: 'POST', credentials: 'same-origin',
+        });
+      } catch { /* ignore */ }
+    }
+    mode = 'local';
+    relayInfo = null;
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
@@ -242,8 +359,42 @@ const FilerRemote = (() => {
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
-  /** Restore SFTP connection on page load */
+  /** Restore connection on page load */
   async function checkStatus() {
+    // Check relay status first
+    try {
+      const resp = await fetch('/api/relay/status', { credentials: 'same-origin' });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.connected) {
+          mode = 'relay';
+          relayInfo = {
+            relaySessionId: data.relay_session_id,
+            relayHostPort: data.relay_host_port || null,
+            targetHostPort: data.target_host_port || null,
+            targetFingerprint: data.target_fingerprint || null,
+          };
+          document.dispatchEvent(new CustomEvent('den:remote-changed', {
+            detail: { mode: 'relay', hostPort: relayInfo.targetHostPort },
+          }));
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+    // Check direct Den connection
+    try {
+      const resp = await fetch('/api/remote/status', { credentials: 'same-origin' });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.connected) {
+          mode = 'den';
+          denInfo = { url: data.url, hostPort: data.host_port, fingerprint: data.fingerprint };
+          document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+    // Check SFTP
     try {
       const resp = await fetch('/api/sftp/status', { credentials: 'same-origin' });
       if (!resp.ok) return;
@@ -264,6 +415,8 @@ const FilerRemote = (() => {
     disconnect,
     connectDen,
     disconnectDen,
+    connectDenViaRelay,
+    disconnectRelay,
     checkStatus,
   };
 })();

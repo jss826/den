@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 
@@ -893,6 +894,826 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+// ── Relay ──────────────────────────────────────────────────────────────
+
+const RELAY_SESSION_TTL_MS: u64 = 30 * 60 * 1000; // 30 minutes
+
+/// Relay server: manages sessions when this Den acts as a relay for others.
+#[derive(Clone)]
+pub struct RelayManager {
+    sessions: Arc<Mutex<HashMap<String, RelaySession>>>,
+}
+
+struct RelaySession {
+    target: RemoteSession,
+    #[allow(dead_code)]
+    created_at: u64,
+    last_activity: AtomicU64,
+}
+
+impl Default for RelayManager {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl RelayManager {
+    fn insert(&self, id: String, session: RelaySession) {
+        self.sessions.lock().unwrap().insert(id, session);
+    }
+
+    fn get_target(&self, id: &str) -> Option<RemoteSession> {
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(id)?;
+        let now = now_ms();
+        if now.saturating_sub(session.last_activity.load(Ordering::Relaxed)) > RELAY_SESSION_TTL_MS
+        {
+            return None; // expired — will be cleaned up lazily
+        }
+        session.last_activity.store(now, Ordering::Relaxed);
+        Some(session.target.clone())
+    }
+
+    fn remove(&self, id: &str) -> bool {
+        self.sessions.lock().unwrap().remove(id).is_some()
+    }
+
+    fn cleanup_expired(&self) {
+        let now = now_ms();
+        self.sessions.lock().unwrap().retain(|_, s| {
+            now.saturating_sub(s.last_activity.load(Ordering::Relaxed)) <= RELAY_SESSION_TTL_MS
+        });
+    }
+}
+
+/// Relay client: state when this Den connects to a target through a relay.
+#[derive(Clone)]
+pub struct RelayClientManager {
+    current: Arc<Mutex<Option<RelayClientSession>>>,
+}
+
+#[derive(Clone)]
+struct RelayClientSession {
+    relay: RemoteSession,
+    relay_session_id: String,
+    relay_host_port: String,
+    target_host_port: String,
+    target_fingerprint: String,
+}
+
+impl Default for RelayClientManager {
+    fn default() -> Self {
+        Self {
+            current: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl RelayClientManager {
+    fn get(&self) -> Option<RelayClientSession> {
+        self.current.lock().unwrap().clone()
+    }
+
+    fn set(&self, session: RelayClientSession) {
+        *self.current.lock().unwrap() = Some(session);
+    }
+
+    fn clear(&self) {
+        *self.current.lock().unwrap() = None;
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RelayConnectRequest {
+    pub url: String,
+    pub password: String,
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub relay_password: Option<String>,
+    #[serde(default)]
+    pub trusted_fingerprint: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RelayConnectResponse {
+    relay_session_id: String,
+    target_host_port: String,
+    target_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_host_port: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RelayStatusResponse {
+    connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relay_host_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_host_port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_fingerprint: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RelayTlsTrustRequiredResponse {
+    error: &'static str,
+    hop: &'static str,
+    host_port: String,
+    fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_fingerprint: Option<String>,
+}
+
+/// POST /api/relay/connect
+pub async fn relay_connect(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<RelayConnectRequest>,
+) -> Response {
+    if req.relay_url.is_some() {
+        relay_connect_two_hop(state, req).await
+    } else {
+        relay_connect_one_hop(state, req).await
+    }
+}
+
+/// Two-hop: this Den is the relay client (browser → local → relay → target).
+async fn relay_connect_two_hop(state: Arc<AppState>, req: RelayConnectRequest) -> Response {
+    let relay_url = match req.relay_url.as_deref() {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => return api_error(StatusCode::BAD_REQUEST, "relay_url is required"),
+    };
+    let relay_password = match req.relay_password.as_deref() {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => return api_error(StatusCode::BAD_REQUEST, "relay_password is required"),
+    };
+
+    // 1. Probe relay TLS certificate
+    let relay_normalized = match normalize_remote_url(&relay_url) {
+        Ok(url) => url,
+        Err(msg) => return api_error(StatusCode::BAD_REQUEST, &msg),
+    };
+    let relay_host_port = host_port_for_url(&relay_normalized);
+
+    let relay_probed = match probe_server_certificate(&relay_normalized).await {
+        Ok(p) => p,
+        Err(msg) => return api_error(StatusCode::BAD_GATEWAY, &format!("relay: {msg}")),
+    };
+
+    // 2. Relay TLS trust check
+    let relay_trusted = tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        let hp = relay_host_port.clone();
+        move || store.get_trusted_tls_cert(&hp)
+    })
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(existing) = relay_trusted.as_ref() {
+        if existing.fingerprint != relay_probed.fingerprint {
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(RelayTlsTrustRequiredResponse {
+                    error: "tls_fingerprint_mismatch",
+                    hop: "relay",
+                    host_port: relay_host_port,
+                    fingerprint: relay_probed.fingerprint,
+                    expected_fingerprint: Some(existing.fingerprint.clone()),
+                }),
+            )
+                .into_response();
+        }
+    } else {
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(RelayTlsTrustRequiredResponse {
+                error: "untrusted_tls_certificate",
+                hop: "relay",
+                host_port: relay_host_port,
+                fingerprint: relay_probed.fingerprint,
+                expected_fingerprint: None,
+            }),
+        )
+            .into_response();
+    }
+
+    // 3. Build pinned clients for relay
+    let (relay_http, relay_ws_config) = match build_pinned_clients(&relay_probed.cert_der) {
+        Ok(c) => c,
+        Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    };
+
+    // 4. Login to relay
+    let relay_cookie =
+        match login_remote(&relay_http, relay_normalized.as_str(), &relay_password).await {
+            Ok(c) => c,
+            Err(RemoteConnectError::Unauthorized) => {
+                return api_error(StatusCode::UNAUTHORIZED, "Relay login failed");
+            }
+            Err(RemoteConnectError::Message(msg)) => {
+                return api_error(StatusCode::BAD_GATEWAY, &format!("relay: {msg}"));
+            }
+        };
+
+    // Save relay fingerprint
+    let now = now_ms();
+    let _ = tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        let hp = relay_host_port.clone();
+        let fp = relay_probed.fingerprint.clone();
+        move || {
+            store.save_trusted_tls_cert(
+                &hp,
+                TrustedTlsCert {
+                    fingerprint: fp,
+                    first_seen: now,
+                    last_seen: now,
+                },
+            )
+        }
+    })
+    .await;
+
+    // 5. Call relay's /api/relay/connect with target info
+    let relay_base = relay_normalized.as_str().trim_end_matches('/');
+    let relay_connect_url = format!("{relay_base}/api/relay/connect");
+
+    #[derive(Serialize)]
+    struct RelayServerRequest<'a> {
+        url: &'a str,
+        password: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        trusted_fingerprint: Option<&'a str>,
+    }
+
+    let relay_resp = relay_http
+        .post(&relay_connect_url)
+        .timeout(REMOTE_REQUEST_TIMEOUT)
+        .header(header::COOKIE, &relay_cookie)
+        .json(&RelayServerRequest {
+            url: &req.url,
+            password: &req.password,
+            trusted_fingerprint: req.trusted_fingerprint.as_deref(),
+        })
+        .send()
+        .await;
+
+    let relay_resp = match relay_resp {
+        Ok(r) => r,
+        Err(e) => {
+            return api_error(
+                StatusCode::BAD_GATEWAY,
+                &format!("failed to reach relay connect API: {e}"),
+            );
+        }
+    };
+
+    // If relay returns 409 (target TLS issue), forward with hop="target"
+    if relay_resp.status() == StatusCode::CONFLICT {
+        let body = relay_resp.bytes().await.unwrap_or_default();
+        // Try to parse and add hop="target" if missing
+        if let Ok(mut val) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if val.get("hop").is_none() {
+                val.as_object_mut()
+                    .map(|o| o.insert("hop".to_string(), serde_json::json!("target")));
+            }
+            return (StatusCode::CONFLICT, axum::Json(val)).into_response();
+        }
+        return Response::builder()
+            .status(StatusCode::CONFLICT)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+    }
+
+    if relay_resp.status() == StatusCode::UNAUTHORIZED {
+        return api_error(StatusCode::UNAUTHORIZED, "Target login failed (via relay)");
+    }
+
+    if !relay_resp.status().is_success() {
+        let err_body = relay_resp.text().await.unwrap_or_default();
+        return api_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("relay connect failed: {err_body}"),
+        );
+    }
+
+    let relay_data: RelayConnectResponse = match relay_resp.json().await {
+        Ok(d) => d,
+        Err(e) => {
+            return api_error(
+                StatusCode::BAD_GATEWAY,
+                &format!("invalid relay connect response: {e}"),
+            );
+        }
+    };
+
+    // 6. Store relay client session
+    state.relay_client.set(RelayClientSession {
+        relay: RemoteSession {
+            base_url: relay_base.to_string(),
+            host_port: relay_host_port.clone(),
+            fingerprint: relay_probed.fingerprint,
+            cookie_header: relay_cookie,
+            http_client: relay_http,
+            ws_client_config: relay_ws_config,
+        },
+        relay_session_id: relay_data.relay_session_id.clone(),
+        relay_host_port: relay_host_port.clone(),
+        target_host_port: relay_data.target_host_port.clone(),
+        target_fingerprint: relay_data.target_fingerprint.clone(),
+    });
+
+    axum::Json(RelayConnectResponse {
+        relay_session_id: relay_data.relay_session_id,
+        target_host_port: relay_data.target_host_port,
+        target_fingerprint: relay_data.target_fingerprint,
+        relay_host_port: Some(relay_host_port),
+    })
+    .into_response()
+}
+
+/// One-hop: this Den is the relay server (another Den → this Den → target).
+async fn relay_connect_one_hop(state: Arc<AppState>, req: RelayConnectRequest) -> Response {
+    let normalized = match normalize_remote_url(&req.url) {
+        Ok(url) => url,
+        Err(msg) => return api_error(StatusCode::BAD_REQUEST, &msg),
+    };
+
+    let host_port = host_port_for_url(&normalized);
+    let probed = match probe_server_certificate(&normalized).await {
+        Ok(p) => p,
+        Err(msg) => return api_error(StatusCode::BAD_GATEWAY, &msg),
+    };
+
+    // Check trusted_fingerprint (ephemeral trust from initiator)
+    if let Some(ref trusted_fp) = req.trusted_fingerprint {
+        if trusted_fp != &probed.fingerprint {
+            return api_error(
+                StatusCode::CONFLICT,
+                "target fingerprint does not match trusted_fingerprint",
+            );
+        }
+    } else {
+        // Check local trust store
+        let trusted = tokio::task::spawn_blocking({
+            let store = state.store.clone();
+            let hp = host_port.clone();
+            move || store.get_trusted_tls_cert(&hp)
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(existing) = trusted.as_ref() {
+            if existing.fingerprint != probed.fingerprint {
+                return (
+                    StatusCode::CONFLICT,
+                    axum::Json(TlsTrustRequiredResponse {
+                        error: "tls_fingerprint_mismatch",
+                        host_port,
+                        fingerprint: probed.fingerprint,
+                        expected_fingerprint: Some(existing.fingerprint.clone()),
+                    }),
+                )
+                    .into_response();
+            }
+        } else {
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(TlsTrustRequiredResponse {
+                    error: "untrusted_tls_certificate",
+                    host_port,
+                    fingerprint: probed.fingerprint,
+                    expected_fingerprint: None,
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    // Build pinned clients and login to target
+    let (http_client, ws_client_config) = match build_pinned_clients(&probed.cert_der) {
+        Ok(c) => c,
+        Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    };
+
+    let cookie_header = match login_remote(&http_client, normalized.as_str(), &req.password).await {
+        Ok(c) => c,
+        Err(RemoteConnectError::Unauthorized) => {
+            return api_error(StatusCode::UNAUTHORIZED, "Target login failed");
+        }
+        Err(RemoteConnectError::Message(msg)) => return api_error(StatusCode::BAD_GATEWAY, &msg),
+    };
+
+    // Save fingerprint
+    let now = now_ms();
+    let _ = tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        let hp = host_port.clone();
+        let fp = probed.fingerprint.clone();
+        move || {
+            store.save_trusted_tls_cert(
+                &hp,
+                TrustedTlsCert {
+                    fingerprint: fp,
+                    first_seen: now,
+                    last_seen: now,
+                },
+            )
+        }
+    })
+    .await;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    state.relay_manager.cleanup_expired();
+    state.relay_manager.insert(
+        session_id.clone(),
+        RelaySession {
+            target: RemoteSession {
+                base_url: normalized.as_str().trim_end_matches('/').to_string(),
+                host_port: host_port.clone(),
+                fingerprint: probed.fingerprint.clone(),
+                cookie_header,
+                http_client,
+                ws_client_config,
+            },
+            created_at: now,
+            last_activity: AtomicU64::new(now),
+        },
+    );
+
+    axum::Json(RelayConnectResponse {
+        relay_session_id: session_id,
+        target_host_port: host_port,
+        target_fingerprint: probed.fingerprint,
+        relay_host_port: None,
+    })
+    .into_response()
+}
+
+/// GET /api/relay/status
+pub async fn relay_status(State(state): State<Arc<AppState>>) -> axum::Json<RelayStatusResponse> {
+    let body = match state.relay_client.get() {
+        Some(rc) => RelayStatusResponse {
+            connected: true,
+            relay_session_id: Some(rc.relay_session_id),
+            relay_host_port: Some(rc.relay_host_port),
+            target_host_port: Some(rc.target_host_port),
+            target_fingerprint: Some(rc.target_fingerprint),
+        },
+        None => RelayStatusResponse {
+            connected: false,
+            relay_session_id: None,
+            relay_host_port: None,
+            target_host_port: None,
+            target_fingerprint: None,
+        },
+    };
+    axum::Json(body)
+}
+
+/// POST /api/relay/{id}/disconnect
+pub async fn relay_disconnect(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> StatusCode {
+    // Check relay server sessions first
+    if state.relay_manager.remove(&session_id) {
+        return StatusCode::NO_CONTENT;
+    }
+    // Check relay client
+    if let Some(rc) = state.relay_client.get()
+        && rc.relay_session_id == session_id
+    {
+        // Disconnect on the relay side too
+        let disconnect_url = format!(
+            "{}/api/relay/{}/disconnect",
+            rc.relay.base_url, rc.relay_session_id
+        );
+        let _ = rc
+            .relay
+            .http_client
+            .post(&disconnect_url)
+            .timeout(REMOTE_REQUEST_TIMEOUT)
+            .header(header::COOKIE, &rc.relay.cookie_header)
+            .send()
+            .await;
+        state.relay_client.clear();
+        return StatusCode::NO_CONTENT;
+    }
+    StatusCode::NOT_FOUND
+}
+
+/// Resolve relay session: returns the target RemoteSession and the path to proxy to.
+/// For relay server: target directly. For relay client: proxy through relay.
+enum RelayResolve {
+    /// This Den is the relay server — proxy directly to target
+    Server(RemoteSession),
+    /// This Den is the relay client — proxy to the relay Den's /api/relay/{id}/...
+    Client(RelayClientSession),
+}
+
+fn resolve_relay_session(state: &AppState, session_id: &str) -> Option<RelayResolve> {
+    if let Some(target) = state.relay_manager.get_target(session_id) {
+        return Some(RelayResolve::Server(target));
+    }
+    if let Some(rc) = state.relay_client.get()
+        && rc.relay_session_id == session_id
+    {
+        return Some(RelayResolve::Client(rc));
+    }
+    None
+}
+
+/// Generic proxy for /api/relay/{id}/{*rest}
+pub async fn relay_proxy_catch_all(
+    State(state): State<Arc<AppState>>,
+    Path((session_id, rest)): Path<(String, String)>,
+    RawQuery(query): RawQuery,
+    method: axum::http::Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, StatusCode> {
+    let resolved = resolve_relay_session(&state, &session_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let rest = rest.trim_start_matches('/');
+
+    match resolved {
+        RelayResolve::Server(target) => {
+            // Proxy directly to target
+            let path = format!("/api/{rest}");
+            proxy_to_remote_session(
+                &target,
+                reqwest::Method::from_bytes(method.as_str().as_bytes())
+                    .unwrap_or(reqwest::Method::GET),
+                &path,
+                query.as_deref(),
+                extract_forwarded_headers(&headers),
+                body.to_vec(),
+            )
+            .await
+        }
+        RelayResolve::Client(rc) => {
+            // Proxy to relay Den's /api/relay/{id}/...
+            let path = format!("/api/relay/{}/{rest}", rc.relay_session_id);
+            proxy_to_remote_session(
+                &rc.relay,
+                reqwest::Method::from_bytes(method.as_str().as_bytes())
+                    .unwrap_or(reqwest::Method::GET),
+                &path,
+                query.as_deref(),
+                extract_forwarded_headers(&headers),
+                body.to_vec(),
+            )
+            .await
+        }
+    }
+}
+
+/// WebSocket relay for /api/relay/{id}/ws
+pub async fn relay_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(session_id): Path<String>,
+    RawQuery(query): RawQuery,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let resolved = match resolve_relay_session(&state, &session_id) {
+        Some(r) => r,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    match resolved {
+        RelayResolve::Server(target) => ws
+            .on_upgrade(move |socket| handle_remote_ws(socket, target, query))
+            .into_response(),
+        RelayResolve::Client(rc) => {
+            let ws_base = rc.relay.base_url.replacen("https://", "wss://", 1);
+            let relay_ws_url = match query.as_deref() {
+                Some(q) if !q.is_empty() => {
+                    format!("{ws_base}/api/relay/{}/ws?{q}", rc.relay_session_id)
+                }
+                _ => format!("{ws_base}/api/relay/{}/ws", rc.relay_session_id),
+            };
+            let cookie = rc.relay.cookie_header.clone();
+            let ws_config = rc.relay.ws_client_config.clone();
+            ws.on_upgrade(move |socket| {
+                handle_relay_client_ws(socket, relay_ws_url, cookie, ws_config)
+            })
+            .into_response()
+        }
+    }
+}
+
+async fn handle_relay_client_ws(
+    browser_ws: WebSocket,
+    relay_ws_url: String,
+    cookie: String,
+    ws_config: Arc<ClientConfig>,
+) {
+    let mut request = match relay_ws_url.into_client_request() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("relay client ws: invalid URL: {e}");
+            return;
+        }
+    };
+    if let Ok(c) = cookie.parse() {
+        request.headers_mut().insert(header::COOKIE, c);
+    }
+
+    let (remote_ws, _) = match connect_remote_ws_client(request, ws_config).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("relay client ws connect failed: {e}");
+            let (mut tx, _) = browser_ws.split();
+            let _ = tx
+                .send(AxumWsMessage::Text(
+                    r#"{"type":"relay_error","message":"Failed to connect to relay Den"}"#.into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    let (mut browser_tx, mut browser_rx) = browser_ws.split();
+    let (mut remote_tx, mut remote_rx) = remote_ws.split();
+
+    let browser_to_remote = async {
+        while let Some(Ok(msg)) = browser_rx.next().await {
+            match msg {
+                AxumWsMessage::Text(text) => {
+                    if remote_tx
+                        .send(TungsteniteMessage::Text(text.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                AxumWsMessage::Binary(data) => {
+                    if remote_tx
+                        .send(TungsteniteMessage::Binary(data))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                AxumWsMessage::Ping(data) => {
+                    if remote_tx
+                        .send(TungsteniteMessage::Ping(data))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                AxumWsMessage::Pong(data) => {
+                    if remote_tx
+                        .send(TungsteniteMessage::Pong(data))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                AxumWsMessage::Close(frame) => {
+                    let _ = frame;
+                    let _ = remote_tx.close().await;
+                    break;
+                }
+            }
+        }
+    };
+
+    let remote_to_browser = async {
+        while let Some(Ok(msg)) = remote_rx.next().await {
+            match msg {
+                TungsteniteMessage::Text(text) => {
+                    if browser_tx
+                        .send(AxumWsMessage::Text(text.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                TungsteniteMessage::Binary(data) => {
+                    if browser_tx.send(AxumWsMessage::Binary(data)).await.is_err() {
+                        break;
+                    }
+                }
+                TungsteniteMessage::Ping(data) => {
+                    if browser_tx.send(AxumWsMessage::Ping(data)).await.is_err() {
+                        break;
+                    }
+                }
+                TungsteniteMessage::Pong(data) => {
+                    if browser_tx.send(AxumWsMessage::Pong(data)).await.is_err() {
+                        break;
+                    }
+                }
+                TungsteniteMessage::Close(frame) => {
+                    let _ = frame;
+                    let _ = browser_tx.close().await;
+                    break;
+                }
+                TungsteniteMessage::Frame(_) => {}
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = browser_to_remote => {},
+        _ = remote_to_browser => {},
+    }
+}
+
+/// Proxy HTTP request to a specific RemoteSession (shared between direct and relay).
+async fn proxy_to_remote_session(
+    remote: &RemoteSession,
+    method: reqwest::Method,
+    path: &str,
+    query: Option<&str>,
+    headers: Option<HashMap<String, String>>,
+    body: Vec<u8>,
+) -> Result<Response, StatusCode> {
+    let mut url = format!("{}{}", remote.base_url.trim_end_matches('/'), path);
+    if let Some(query) = query.filter(|v| !v.is_empty()) {
+        url.push('?');
+        url.push_str(query);
+    }
+
+    let mut request = remote
+        .http_client
+        .request(method, url)
+        .timeout(REMOTE_REQUEST_TIMEOUT)
+        .header(header::COOKIE, remote.cookie_header.clone());
+
+    if let Some(headers) = headers {
+        for (name, value) in headers {
+            request = request.header(&name, value);
+        }
+    }
+    if !body.is_empty() {
+        request = request.body(body);
+    }
+
+    let response = request.send().await.map_err(|e| {
+        tracing::warn!("relay proxy request failed: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let content_disposition = response
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let bytes = response.bytes().await.map_err(|e| {
+        tracing::warn!("relay proxy response body read failed: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    let mut builder = Response::builder().status(status);
+    if let Some(ct) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, ct);
+    }
+    if let Some(cd) = content_disposition {
+        builder = builder.header(header::CONTENT_DISPOSITION, cd);
+    }
+    builder.body(axum::body::Body::from(bytes)).map_err(|e| {
+        tracing::warn!("relay proxy response build failed: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+fn extract_forwarded_headers(headers: &HeaderMap) -> Option<HashMap<String, String>> {
+    let mut forwarded = HashMap::new();
+    if let Some(ct) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    {
+        forwarded.insert("content-type".to_string(), ct.to_string());
+    }
+    if forwarded.is_empty() {
+        None
+    } else {
+        Some(forwarded)
+    }
 }
 
 #[cfg(test)]
