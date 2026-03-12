@@ -213,6 +213,32 @@
       </div>
     </div>
 
+    <div id="tls-cert-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="TLS Certificate Verification">
+      <div class="modal-content">
+        <h3 id="tls-cert-title">TLS Certificate Verification</h3>
+        <div id="tls-cert-warning" class="hostkey-warning" hidden>
+          <strong>WARNING: CERTIFICATE FINGERPRINT HAS CHANGED!</strong><br>
+          This could indicate a man-in-the-middle attack.
+        </div>
+        <div class="modal-section">
+          <label>Remote</label>
+          <code id="tls-cert-host" class="hostkey-value"></code>
+        </div>
+        <div class="modal-section">
+          <label>Presented Fingerprint</label>
+          <code id="tls-cert-fingerprint" class="hostkey-value"></code>
+        </div>
+        <div id="tls-cert-expected-section" class="modal-section" hidden>
+          <label>Trusted Fingerprint</label>
+          <code id="tls-cert-expected" class="hostkey-value"></code>
+        </div>
+        <div class="modal-actions">
+          <button id="tls-cert-cancel" class="modal-btn">Cancel</button>
+          <button id="tls-cert-trust" class="modal-btn hostkey-trust-btn">Trust</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 設定モーダル -->
     <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-content">
@@ -512,6 +538,7 @@
   <script src="/js/auth.js"></script>
   <script src="/js/settings-drag-list.js"></script>
   <script src="/js/settings-presets.js"></script>
+  <script src="/js/tls-trust.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/peer-cache.js"></script>
   <script src="/js/terminal.js"></script>

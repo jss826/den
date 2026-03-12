@@ -144,11 +144,7 @@ const DenSettings = (() => {
         const hostPort = btn.dataset.hostPort;
         if (!hostPort) return;
         Spinner.button(btn, async () => {
-          const resp = await fetch(`/api/system/tls/trusted?host_port=${encodeURIComponent(hostPort)}`, {
-            method: 'DELETE',
-            credentials: 'same-origin',
-          });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          await DenTlsTrust.remove(hostPort);
           delete trustedTlsCerts[hostPort];
           renderTrustedTls();
           Toast.success(`Removed trusted certificate for ${hostPort}`);
@@ -161,19 +157,13 @@ const DenSettings = (() => {
     const list = document.getElementById('tls-trust-list');
     if (list) list.innerHTML = '<div class="tls-trust-empty">Loading...</div>';
     try {
-      const resp = await fetch('/api/system/tls/trusted', { credentials: 'same-origin' });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      trustedTlsCerts = await resp.json();
+      trustedTlsCerts = await DenTlsTrust.list(true);
       renderTrustedTls();
     } catch (e) {
       trustedTlsCerts = {};
       if (list) list.innerHTML = '<div class="tls-trust-empty">Failed to load trusted certificates.</div>';
       console.warn('Failed to load trusted TLS certificates:', e);
     }
-  }
-
-  function isValidTlsFingerprint(value) {
-    return /^SHA256:[0-9a-fA-F]{64}$/.test(value);
   }
 
   let saveInFlight = false;
@@ -697,20 +687,24 @@ const DenSettings = (() => {
         fingerprintInput?.focus();
         return;
       }
-      if (!isValidTlsFingerprint(fingerprint)) {
+      if (!DenTlsTrust.isValidFingerprint(fingerprint)) {
         Toast.error('Fingerprint must be SHA256: followed by 64 hex characters');
         fingerprintInput?.focus();
         return;
       }
 
       Spinner.button(tlsTrustSaveBtn, async () => {
-        const resp = await fetch('/api/system/tls/trusted', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ host_port: hostPort, fingerprint }),
-        });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const expectedFingerprint = trustedTlsCerts?.[hostPort]?.fingerprint || null;
+        if (expectedFingerprint && expectedFingerprint !== fingerprint) {
+          const accepted = await DenTlsTrust.confirmAndStore({
+            hostPort,
+            fingerprint,
+            expectedFingerprint,
+          });
+          if (!accepted) return;
+        } else {
+          await DenTlsTrust.save(hostPort, fingerprint);
+        }
         await loadTrustedTls();
         if (hostPortInput) hostPortInput.value = '';
         if (fingerprintInput) fingerprintInput.value = '';

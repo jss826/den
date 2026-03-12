@@ -55,8 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
   const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
-  // hostkey-modal is Promise-based (like confirm-modal) — Esc handled internally
-  const allModals = ['confirm-modal', 'prompt-modal', 'hostkey-modal', ...escModals];
+  // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
+  const allModals = ['confirm-modal', 'prompt-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
 
   // Esc キーで開いているモーダルを閉じる + Ctrl+1/2 タブ切替
   document.addEventListener('keydown', (e) => {
