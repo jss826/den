@@ -107,11 +107,11 @@ pub enum SftpAuth {
 
 // --- SSH Agent 接続 ---
 
-type DynAgentClient =
+pub(crate) type DynAgentClient =
     AgentClient<Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin + 'static>>;
 
 #[cfg(windows)]
-async fn connect_agent() -> Result<DynAgentClient, SftpError> {
+pub(crate) async fn connect_agent() -> Result<DynAgentClient, SftpError> {
     // Try OpenSSH Agent (named pipe) first
     if let Ok(agent) = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
         return Ok(agent.dynamic());
@@ -124,7 +124,7 @@ async fn connect_agent() -> Result<DynAgentClient, SftpError> {
 }
 
 #[cfg(unix)]
-async fn connect_agent() -> Result<DynAgentClient, SftpError> {
+pub(crate) async fn connect_agent() -> Result<DynAgentClient, SftpError> {
     AgentClient::connect_env()
         .await
         .map(|a| a.dynamic())

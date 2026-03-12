@@ -7,9 +7,12 @@ use russh::keys::ssh_key;
 use russh::server::{Auth, Handler, Msg, Server as _, Session};
 use russh::{ChannelId, CryptoVec, Pty};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 
 use crate::auth::constant_time_eq;
 use crate::pty::registry::{ClientKind, SessionRegistry, SharedSession};
+use crate::sftp::client::{HostKeyStatus, connect_agent};
+use crate::store::Store;
 
 /// SSH セッション非アクティブタイムアウト（1時間）
 /// `claude -p` 等の長時間コマンドでも切断されないよう余裕を持たせる。
@@ -36,6 +39,60 @@ const LOOPBACK_WARN_THRESHOLD: usize = 10;
 /// on non-Windows platforms where Layer 3 (process tree) is unavailable.
 /// Set high enough (50) to never interfere with legitimate local SSH usage.
 const LOOPBACK_HARD_LIMIT: usize = 50;
+
+/// Message type for communicating with the remote bridge task.
+enum RemoteMsg {
+    Data(Vec<u8>),
+    Resize(u16, u16),
+}
+
+/// Format host:port key for SSH known hosts storage.
+/// IPv6 addresses are wrapped in brackets: `[::1]:22`
+fn format_host_port_ssh(host: &str, port: u16) -> String {
+    if host.starts_with('[') {
+        format!("{host}:{port}")
+    } else if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+/// Parse a remote target string into (host, port, session_name).
+/// Formats: `host/session`, `host:port/session`, `[ipv6]/session`, `[ipv6]:port/session`
+/// Default port is 2222.
+fn parse_remote_target(target: &str) -> Option<(&str, u16, &str)> {
+    let slash_pos = target.find('/')?;
+    let host_part = &target[..slash_pos];
+    let session_name = &target[slash_pos + 1..];
+    if session_name.is_empty() || host_part.is_empty() {
+        return None;
+    }
+
+    if host_part.starts_with('[') {
+        // IPv6: [addr]:port or [addr]
+        let bracket_end = host_part.find(']')?;
+        let host = &host_part[1..bracket_end];
+        let rest = &host_part[bracket_end + 1..];
+        let port = if let Some(port_str) = rest.strip_prefix(':') {
+            port_str.parse().ok()?
+        } else {
+            2222
+        };
+        Some((host, port, session_name))
+    } else if let Some(colon_pos) = host_part.rfind(':') {
+        // host:port — but only if the part after : is numeric
+        let maybe_port = &host_part[colon_pos + 1..];
+        if let Ok(port) = maybe_port.parse::<u16>() {
+            Some((&host_part[..colon_pos], port, session_name))
+        } else {
+            // No valid port, treat whole thing as host
+            Some((host_part, 2222, session_name))
+        }
+    } else {
+        Some((host_part, 2222, session_name))
+    }
+}
 
 /// Escape character state machine for `~` sequences (like OpenSSH).
 /// Detects `Enter → ~ → command` patterns in SSH input.
@@ -92,6 +149,7 @@ pub async fn run(
     port: u16,
     data_dir: String,
     bind_address: String,
+    store: Store,
 ) -> anyhow::Result<()> {
     // ホストキー読み込み/生成
     let host_key = super::keys::load_or_generate_host_key(std::path::Path::new(&data_dir))?;
@@ -120,6 +178,7 @@ pub async fn run(
         instance_id,
         loopback_count: Arc::new(AtomicUsize::new(0)),
         ssh_port: port,
+        store,
     };
 
     let addr = format!("{bind_address}:{port}");
@@ -139,6 +198,7 @@ struct DenSshServer {
     instance_id: String,
     loopback_count: Arc<AtomicUsize>,
     ssh_port: u16,
+    store: Store,
 }
 
 impl russh::server::Server for DenSshServer {
@@ -154,6 +214,7 @@ impl russh::server::Server for DenSshServer {
             registry: Arc::clone(&self.registry),
             password: self.password.clone(),
             authorized_keys: Arc::clone(&self.authorized_keys),
+            store: self.store.clone(),
             instance_id: self.instance_id.clone(),
             is_loopback: is_local,
             self_connection_detected: false,
@@ -170,6 +231,8 @@ impl russh::server::Server for DenSshServer {
             pty_requested: false,
             escape_state: EscapeState::default(),
             connected_at: None,
+            remote_input_tx: None,
+            remote_bridge_task: None,
         }
     }
 }
@@ -178,6 +241,7 @@ struct DenSshHandler {
     registry: Arc<SessionRegistry>,
     password: String,
     authorized_keys: Arc<HashSet<String>>,
+    store: Store,
     // Self-connection detection
     instance_id: String,
     is_loopback: bool,
@@ -196,6 +260,9 @@ struct DenSshHandler {
     pty_requested: bool,
     escape_state: EscapeState,
     connected_at: Option<std::time::Instant>,
+    // Remote bridge state (SSH Quick Connect)
+    remote_input_tx: Option<mpsc::UnboundedSender<RemoteMsg>>,
+    remote_bridge_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl DenSshHandler {
@@ -469,10 +536,12 @@ impl DenSshHandler {
          \x1b[1m  ~s\x1b[0m  Show status\r\n\
          \x1b[1m  ~r\x1b[0m  Force screen redraw\r\n\
          \x1b[1m  ~?\x1b[0m  Show help\r\n\
-         \x1b[1m  ~~\x1b[0m  Send literal ~\r\n"
+         \x1b[1m  ~~\x1b[0m  Send literal ~\r\n\
+         \r\n\
+         \x1b[1m  Remote:\x1b[0m attach host/session or attach host:port/session\r\n"
     }
 
-    /// cleanup: detach + output_task abort
+    /// cleanup: detach + output_task/remote_bridge abort
     async fn cleanup(&mut self) {
         if let (Some(name), Some(client_id)) = (self.session_name.take(), self.client_id.take()) {
             self.registry.detach(&name, client_id).await;
@@ -481,7 +550,370 @@ impl DenSshHandler {
         if let Some(task) = self.output_task.take() {
             task.abort();
         }
+        self.remote_input_tx.take();
+        if let Some(task) = self.remote_bridge_task.take() {
+            task.abort();
+        }
     }
+
+    /// Start a remote SSH bridge to another Den instance.
+    async fn start_remote_bridge(
+        &mut self,
+        remote_host: &str,
+        remote_port: u16,
+        remote_session: &str,
+        session: &mut Session,
+    ) -> Result<(), anyhow::Error> {
+        let channel_id = self
+            .channel_id
+            .ok_or_else(|| anyhow::anyhow!("No channel"))?;
+
+        let msg = format!("Connecting to {}:{}...\r\n", remote_host, remote_port);
+        session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
+
+        let cols = self.pty_cols;
+        let rows = self.pty_rows;
+        let local_handle = session.handle();
+        let store = self.store.clone();
+        let password = self.password.clone();
+        let host = remote_host.to_string();
+        let port = remote_port;
+        let r_session = remote_session.to_string();
+
+        let (tx, rx) = mpsc::unbounded_channel::<RemoteMsg>();
+        self.remote_input_tx = Some(tx);
+        self.connected_at = Some(std::time::Instant::now());
+        self.session_name = Some(format!("{}:{}/{}", host, port, r_session));
+        self.escape_state = EscapeState::AfterNewline;
+
+        self.remote_bridge_task = Some(tokio::spawn(async move {
+            if let Err(e) = remote_bridge_task(
+                local_handle,
+                channel_id,
+                store,
+                &host,
+                port,
+                &password,
+                &r_session,
+                cols,
+                rows,
+                rx,
+            )
+            .await
+            {
+                tracing::error!("ssh-remote: bridge error: {e}");
+            }
+        }));
+
+        Ok(())
+    }
+}
+
+// --- Remote SSH client handler (for connecting to other Den instances) ---
+
+struct RemoteSshHandler {
+    host_port: String,
+    store: Store,
+}
+
+impl russh::client::Handler for RemoteSshHandler {
+    type Error = anyhow::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let fingerprint = server_public_key
+            .fingerprint(ssh_key::HashAlg::Sha256)
+            .to_string();
+        let algorithm = server_public_key.algorithm().to_string();
+        let host_port = self.host_port.clone();
+
+        let store = self.store.clone();
+        let fp = fingerprint.clone();
+        let hp = host_port.clone();
+        let known = tokio::task::spawn_blocking(move || store.get_known_host(&hp))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?;
+
+        match known {
+            Some(entry) if entry.fingerprint == fp => {
+                tracing::info!(
+                    host_port = %host_port,
+                    "ssh-remote: host key verified (known)"
+                );
+                let store = self.store.clone();
+                let hp = host_port.clone();
+                tokio::task::spawn_blocking(move || {
+                    store.update_known_host_last_seen(&hp);
+                });
+                Ok(true)
+            }
+            Some(entry) => {
+                tracing::warn!(
+                    host_port = %host_port,
+                    expected = %entry.fingerprint,
+                    actual = %fingerprint,
+                    "ssh-remote: HOST KEY MISMATCH"
+                );
+                Err(HostKeyStatus::Mismatch {
+                    host_port,
+                    fingerprint,
+                    algorithm,
+                    expected: entry.fingerprint,
+                }
+                .into())
+            }
+            None => {
+                // TOFU: auto-trust and save
+                tracing::info!(
+                    host_port = %host_port,
+                    fingerprint = %fingerprint,
+                    algorithm = %algorithm,
+                    "ssh-remote: auto-trusting host key (TOFU)"
+                );
+                let store = self.store.clone();
+                let hp = host_port.clone();
+                let fp = fingerprint.clone();
+                let algo = algorithm.clone();
+                tokio::task::spawn_blocking(move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let entry = crate::store::KnownHost {
+                        fingerprint: fp,
+                        algorithm: algo,
+                        first_seen: now,
+                        last_seen: now,
+                    };
+                    let _ = store.save_known_host(&hp, entry);
+                });
+                Ok(true)
+            }
+        }
+    }
+}
+
+/// Authenticate with the remote Den via SSH agent.
+/// Runs on a dedicated thread to avoid russh's Send/lifetime issues with agent auth.
+async fn authenticate_remote_agent(
+    mut session: russh::client::Handle<RemoteSshHandler>,
+    username: String,
+) -> Result<russh::client::Handle<RemoteSshHandler>, anyhow::Error> {
+    let mut agent = connect_agent().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|e| anyhow::anyhow!("SSH agent error: {e}"))?;
+    if identities.is_empty() {
+        return Err(anyhow::anyhow!("No keys in SSH agent"));
+    }
+    for key in identities {
+        match session
+            .authenticate_publickey_with(username.clone(), key, None, &mut agent)
+            .await
+        {
+            Ok(result) if result.success() => return Ok(session),
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!("ssh-remote: agent auth error: {e}");
+                return Err(anyhow::anyhow!("Agent auth error: {e}"));
+            }
+        }
+    }
+    Err(anyhow::anyhow!("No agent key accepted by remote"))
+}
+
+/// The remote bridge task: connects to a remote Den SSH server, authenticates,
+/// and bridges I/O between the local SSH channel and the remote session.
+#[allow(clippy::too_many_arguments)]
+async fn remote_bridge_task(
+    local_handle: russh::server::Handle,
+    local_channel: ChannelId,
+    store: Store,
+    host: &str,
+    port: u16,
+    password: &str,
+    remote_session: &str,
+    cols: u16,
+    rows: u16,
+    mut input_rx: mpsc::UnboundedReceiver<RemoteMsg>,
+) -> Result<(), anyhow::Error> {
+    let host_port = format_host_port_ssh(host, port);
+
+    let config = russh::client::Config {
+        inactivity_timeout: Some(std::time::Duration::from_secs(300)),
+        keepalive_interval: Some(std::time::Duration::from_secs(30)),
+        keepalive_max: 5,
+        ..Default::default()
+    };
+
+    let handler = RemoteSshHandler {
+        host_port: host_port.clone(),
+        store,
+    };
+
+    let send_error = |msg: &str| {
+        let local_handle = local_handle.clone();
+        let msg = msg.to_string();
+        async move {
+            let _ = local_handle
+                .data(local_channel, CryptoVec::from_slice(msg.as_bytes()))
+                .await;
+            let _ = local_handle.close(local_channel).await;
+        }
+    };
+
+    let mut remote = match russh::client::connect(Arc::new(config), (host, port), handler).await {
+        Ok(h) => h,
+        Err(e) => {
+            let msg = if e.downcast_ref::<HostKeyStatus>().is_some() {
+                format!("Host key error: {e}\r\n")
+            } else {
+                format!("Connection failed: {e}\r\n")
+            };
+            send_error(&msg).await;
+            return Err(anyhow::anyhow!("{msg}"));
+        }
+    };
+
+    // Try password auth first (most common: same DEN_PASSWORD on both instances)
+    let password_ok = match remote.authenticate_password("den", password).await {
+        Ok(result) => result.success(),
+        Err(e) => {
+            tracing::debug!("ssh-remote: password auth error: {e}");
+            false
+        }
+    };
+
+    if !password_ok {
+        // Try SSH agent auth on a dedicated thread (russh Send workaround)
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            let result = match rt {
+                Ok(rt) => rt.block_on(authenticate_remote_agent(remote, "den".to_string())),
+                Err(e) => Err(anyhow::anyhow!("{e}")),
+            };
+            let _ = tx.send(result);
+        });
+
+        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(Ok(handle))) => {
+                remote = handle;
+            }
+            Ok(Ok(Err(e))) => {
+                send_error(&format!("Authentication failed: {e}\r\n")).await;
+                return Err(anyhow::anyhow!("Auth failed: {e}"));
+            }
+            Ok(Err(_)) => {
+                send_error("Authentication failed: agent thread panicked\r\n").await;
+                return Err(anyhow::anyhow!("Agent auth thread panicked"));
+            }
+            Err(_) => {
+                send_error("Authentication timed out\r\n").await;
+                return Err(anyhow::anyhow!("Agent auth timed out"));
+            }
+        }
+    }
+
+    // Open channel, request PTY, exec attach
+    let channel = remote.channel_open_session().await?;
+
+    channel
+        .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
+        .await?;
+    channel
+        .exec(true, format!("attach {remote_session}"))
+        .await?;
+
+    let connected_msg = format!("Connected to {host_port}/{remote_session}\r\n");
+    let _ = local_handle
+        .data(
+            local_channel,
+            CryptoVec::from_slice(connected_msg.as_bytes()),
+        )
+        .await;
+
+    // Split channel into read/write halves for concurrent use in select!
+    let (mut reader, writer) = channel.split();
+
+    // Bridge I/O: remote channel ↔ local SSH channel
+    loop {
+        tokio::select! {
+            msg = reader.wait() => {
+                match msg {
+                    Some(russh::ChannelMsg::Data { data }) => {
+                        if local_handle
+                            .data(local_channel, CryptoVec::from_slice(&data))
+                            .await
+                            .is_err()
+                        {
+                            tracing::info!("ssh-remote: local channel closed");
+                            break;
+                        }
+                    }
+                    Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
+                        // stderr — forward as-is
+                        if local_handle
+                            .data(local_channel, CryptoVec::from_slice(&data))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) => {
+                        tracing::info!("ssh-remote: remote channel closed");
+                        let _ = local_handle.eof(local_channel).await;
+                        let _ = local_handle.close(local_channel).await;
+                        break;
+                    }
+                    Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+                        let _ = local_handle.exit_status_request(local_channel, exit_status).await;
+                    }
+                    None => {
+                        tracing::info!("ssh-remote: remote channel ended");
+                        let _ = local_handle.eof(local_channel).await;
+                        let _ = local_handle.close(local_channel).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            msg = input_rx.recv() => {
+                match msg {
+                    Some(RemoteMsg::Data(data)) => {
+                        if writer
+                            .data(&data[..])
+                            .await
+                            .is_err()
+                        {
+                            tracing::info!("ssh-remote: remote data send failed");
+                            break;
+                        }
+                    }
+                    Some(RemoteMsg::Resize(c, r)) => {
+                        let _ = writer
+                            .window_change(c as u32, r as u32, 0, 0)
+                            .await;
+                    }
+                    None => {
+                        tracing::info!("ssh-remote: input channel closed");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = remote
+        .disconnect(russh::Disconnect::ByApplication, "", "")
+        .await;
+    Ok(())
 }
 
 impl Handler for DenSshHandler {
@@ -635,7 +1067,7 @@ impl Handler for DenSshHandler {
                 if sessions.is_empty() {
                     output.push_str("No active sessions\r\n");
                 }
-                output.push_str("\r\nNote: remote sessions via SSH have been removed. Use Quick Connect in the browser UI.\r\n");
+                output.push_str("\r\nRemote: attach host/session or attach host:port/session (default port 2222)\r\n");
 
                 session.data(channel, CryptoVec::from_slice(output.as_bytes()))?;
                 session.close(channel)?;
@@ -663,14 +1095,20 @@ impl Handler for DenSshHandler {
                     session.close(channel)?;
                     return Ok(());
                 }
-                if name.contains(':') {
-                    session.data(
-                        channel,
-                        CryptoVec::from_slice(
-                            b"Remote attach has been removed. Use Quick Connect from the UI.\r\n",
-                        ),
-                    )?;
-                    session.close(channel)?;
+                // Remote syntax: host/session or host:port/session
+                if name.contains('/') {
+                    if let Some((host, port, remote_session)) = parse_remote_target(name) {
+                        self.start_remote_bridge(host, port, remote_session, session)
+                            .await?;
+                    } else {
+                        session.data(
+                            channel,
+                            CryptoVec::from_slice(
+                                b"Invalid remote syntax. Use: attach host/session or attach host:port/session\r\n",
+                            ),
+                        )?;
+                        session.close(channel)?;
+                    }
                     return Ok(());
                 }
                 self.start_bridge(name, session).await?;
@@ -765,7 +1203,10 @@ impl Handler for DenSshHandler {
             return Ok(());
         }
 
-        if let Some(ref shared) = self.shared_session {
+        if let Some(ref tx) = self.remote_input_tx {
+            // Forward to remote SSH bridge
+            let _ = tx.send(RemoteMsg::Data(forward));
+        } else if let Some(ref shared) = self.shared_session {
             // Forward to local PTY
             Self::flush_to_pty(
                 shared,
@@ -791,7 +1232,9 @@ impl Handler for DenSshHandler {
         self.pty_cols = col_width as u16;
         self.pty_rows = row_height as u16;
 
-        if let (Some(session), Some(client_id)) = (&self.shared_session, self.client_id) {
+        if let Some(ref tx) = self.remote_input_tx {
+            let _ = tx.send(RemoteMsg::Resize(col_width as u16, row_height as u16));
+        } else if let (Some(session), Some(client_id)) = (&self.shared_session, self.client_id) {
             session
                 .resize(client_id, col_width as u16, row_height as u16)
                 .await;
@@ -836,6 +1279,10 @@ impl Drop for DenSshHandler {
         }
 
         if let Some(task) = self.output_task.take() {
+            task.abort();
+        }
+        self.remote_input_tx.take();
+        if let Some(task) = self.remote_bridge_task.take() {
             task.abort();
         }
     }
@@ -1680,5 +2127,84 @@ mod tests {
         let data = b"\x1b]0;\x07";
         let result = replace_osc_title(data, TEST_REPLACEMENT);
         assert_eq!(&result[..], TEST_REPLACEMENT);
+    }
+
+    // ── parse_remote_target tests ─────────────────────────────────────
+
+    #[test]
+    fn parse_remote_host_session() {
+        let (host, port, session) = parse_remote_target("192.168.1.20/work").unwrap();
+        assert_eq!(host, "192.168.1.20");
+        assert_eq!(port, 2222);
+        assert_eq!(session, "work");
+    }
+
+    #[test]
+    fn parse_remote_host_port_session() {
+        let (host, port, session) = parse_remote_target("192.168.1.20:3333/dev").unwrap();
+        assert_eq!(host, "192.168.1.20");
+        assert_eq!(port, 3333);
+        assert_eq!(session, "dev");
+    }
+
+    #[test]
+    fn parse_remote_hostname_session() {
+        let (host, port, session) = parse_remote_target("example.com/default").unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 2222);
+        assert_eq!(session, "default");
+    }
+
+    #[test]
+    fn parse_remote_ipv6_session() {
+        let (host, port, session) = parse_remote_target("[::1]/work").unwrap();
+        assert_eq!(host, "::1");
+        assert_eq!(port, 2222);
+        assert_eq!(session, "work");
+    }
+
+    #[test]
+    fn parse_remote_ipv6_port_session() {
+        let (host, port, session) = parse_remote_target("[::1]:4444/test").unwrap();
+        assert_eq!(host, "::1");
+        assert_eq!(port, 4444);
+        assert_eq!(session, "test");
+    }
+
+    #[test]
+    fn parse_remote_empty_session() {
+        assert!(parse_remote_target("host/").is_none());
+    }
+
+    #[test]
+    fn parse_remote_empty_host() {
+        assert!(parse_remote_target("/session").is_none());
+    }
+
+    #[test]
+    fn parse_remote_no_slash() {
+        assert!(parse_remote_target("justhost").is_none());
+    }
+
+    // ── format_host_port_ssh tests ─────────────────────────────────────
+
+    #[test]
+    fn format_host_port_ssh_ipv4() {
+        assert_eq!(format_host_port_ssh("example.com", 22), "example.com:22");
+        assert_eq!(
+            format_host_port_ssh("192.168.1.1", 2222),
+            "192.168.1.1:2222"
+        );
+    }
+
+    #[test]
+    fn format_host_port_ssh_ipv6() {
+        assert_eq!(format_host_port_ssh("::1", 22), "[::1]:22");
+        assert_eq!(format_host_port_ssh("2001:db8::1", 22), "[2001:db8::1]:22");
+    }
+
+    #[test]
+    fn format_host_port_ssh_ipv6_already_bracketed() {
+        assert_eq!(format_host_port_ssh("[::1]", 22), "[::1]:22");
     }
 }
