@@ -5,7 +5,6 @@ pub mod clipboard_monitor;
 pub mod config;
 pub mod crypto;
 pub mod filer;
-pub mod peer;
 pub mod port_detection;
 pub mod port_forward;
 pub mod port_monitor;
@@ -26,7 +25,6 @@ use axum::{
 use config::Config;
 use pty::registry::SessionRegistry;
 use std::sync::Arc;
-use std::time::Duration;
 use store::Store;
 
 pub struct AppState {
@@ -36,15 +34,10 @@ pub struct AppState {
     pub hmac_secret: Vec<u8>,
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
-    pub peer_registry: Arc<peer::PeerRegistry>,
     pub remote_manager: Arc<remote::RemoteManager>,
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
-    /// Shared HTTP client for peer RPC (no default timeout — set per-request, connection pooling)
-    pub http_client: reqwest::Client,
-    /// HTTP client for loopback dispatch (60s timeout)
-    pub http_client_loopback: reqwest::Client,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -52,7 +45,6 @@ pub fn create_app(
     config: Config,
     registry: Arc<SessionRegistry>,
     store: Store,
-    peer_registry: Arc<peer::PeerRegistry>,
     tls_runtime: Option<&tls::TlsRuntime>,
 ) -> (Router, Arc<AppState>) {
     // 起動ごとにランダムな HMAC シークレットを生成
@@ -63,7 +55,6 @@ pub fn create_app(
         registry,
         hmac_secret,
         store,
-        peer_registry,
         tls_runtime,
     )
 }
@@ -74,7 +65,6 @@ pub fn create_app_with_secret(
     registry: Arc<SessionRegistry>,
     hmac_secret: Vec<u8>,
     store: Store,
-    peer_registry: Arc<peer::PeerRegistry>,
     tls_runtime: Option<&tls::TlsRuntime>,
 ) -> (Router, Arc<AppState>) {
     // NOTE: 永続化状態を追加する場合は、ここでスタートアップ時の整合性チェックを実装すること。
@@ -91,18 +81,6 @@ pub fn create_app_with_secret(
     }
     port_monitor.start(exclude_ports);
 
-    // No default timeout — each request sets its own via .timeout() on the RequestBuilder.
-    // Client-level timeout overrides per-request timeout in reqwest, so we must not set one here.
-    let http_client = reqwest::Client::builder()
-        .pool_max_idle_per_host(4)
-        .build()
-        .expect("Failed to build HTTP client");
-
-    let http_client_loopback = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .expect("Failed to build loopback HTTP client");
-
     let state = Arc::new(AppState {
         config,
         store,
@@ -110,13 +88,10 @@ pub fn create_app_with_secret(
         hmac_secret,
         rate_limiter: auth::LoginRateLimiter::new(),
         sftp_manager,
-        peer_registry,
         remote_manager,
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
-        http_client,
-        http_client_loopback,
     });
 
     // 認証不要のルート
@@ -164,7 +139,7 @@ pub fn create_app_with_secret(
             auth::user_auth_middleware,
         ));
 
-    // 認証必要のルート（Cookie / Authorization ヘッダー / peer token で認証）
+    // 認証必要のルート（Cookie / Authorization ヘッダーで認証）
     let protected_routes = Router::new()
         .route("/api/settings", get(store_api::get_settings))
         .route("/api/settings", put(store_api::put_settings))
