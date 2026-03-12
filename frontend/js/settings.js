@@ -23,6 +23,8 @@ const DenSettings = (() => {
 
   // スニペット設定で使用する一時配列
   let editingSnippets = [];
+  let tlsStatus = null;
+  let trustedTlsCerts = {};
 
   // unescapeSend は keybar.js の executeNormalKey 内で実行時に適用される。
   // 設定保存時にはエスケープ形式のまま保持する。
@@ -43,6 +45,131 @@ const DenSettings = (() => {
       console.warn('Failed to load settings:', e);
     }
     return current;
+  }
+
+  async function loadTlsStatus() {
+    const statusText = document.getElementById('tls-status-text');
+    const statusHint = document.getElementById('tls-status-hint');
+    const fingerprintSection = document.getElementById('tls-fingerprint-section');
+    const fingerprintEl = document.getElementById('tls-fingerprint');
+    const sanSection = document.getElementById('tls-san-section');
+    const sanList = document.getElementById('tls-san-list');
+    const downloadBtn = document.getElementById('tls-download-cert');
+
+    if (statusText) statusText.textContent = 'Loading...';
+    if (statusHint) { statusHint.hidden = true; statusHint.textContent = ''; }
+    if (fingerprintSection) fingerprintSection.hidden = true;
+    if (sanSection) sanSection.hidden = true;
+    if (downloadBtn) downloadBtn.hidden = true;
+    if (sanList) sanList.innerHTML = '';
+
+    try {
+      const resp = await fetch('/api/system/tls', { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      tlsStatus = await resp.json();
+    } catch (e) {
+      tlsStatus = null;
+      if (statusText) statusText.textContent = 'TLS status unavailable';
+      if (statusHint) {
+        statusHint.hidden = false;
+        statusHint.textContent = 'Could not load certificate information.';
+      }
+      console.warn('Failed to load TLS status:', e);
+      return;
+    }
+
+    if (!tlsStatus?.enabled) {
+      if (statusText) statusText.textContent = 'HTTP only';
+      if (statusHint) {
+        statusHint.hidden = false;
+        statusHint.textContent = 'Set DEN_TLS=true to enable HTTPS/WSS. Closed-network deployments can use the self-signed certificate flow.';
+      }
+      return;
+    }
+
+    if (statusText) {
+      statusText.textContent = tlsStatus.generated
+        ? 'HTTPS/WSS enabled (self-signed certificate)'
+        : 'HTTPS/WSS enabled';
+    }
+    if (statusHint) {
+      statusHint.hidden = false;
+      statusHint.textContent = 'Verify the fingerprint on first access. Browsers may show a warning until this certificate is trusted.';
+    }
+    if (fingerprintSection && fingerprintEl && tlsStatus.fingerprint) {
+      fingerprintSection.hidden = false;
+      fingerprintEl.textContent = tlsStatus.fingerprint;
+    }
+    if (sanSection && sanList && Array.isArray(tlsStatus.subject_alt_names) && tlsStatus.subject_alt_names.length > 0) {
+      sanSection.hidden = false;
+      sanList.innerHTML = tlsStatus.subject_alt_names
+        .map((name) => `<span class="tls-san-item">${escHtml(name)}</span>`)
+        .join('');
+    }
+    if (downloadBtn) downloadBtn.hidden = false;
+  }
+
+  function formatTlsTimestamp(timestamp) {
+    if (!timestamp) return 'unknown';
+    try {
+      return new Date(timestamp).toLocaleString();
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  function renderTrustedTls() {
+    const list = document.getElementById('tls-trust-list');
+    if (!list) return;
+
+    const entries = Object.entries(trustedTlsCerts || {}).sort(([a], [b]) => a.localeCompare(b));
+    if (entries.length === 0) {
+      list.innerHTML = '<div class="tls-trust-empty">No trusted remote certificates saved.</div>';
+      return;
+    }
+
+    list.innerHTML = entries.map(([hostPort, cert]) => `
+      <div class="tls-trust-item">
+        <div class="tls-trust-host">${escHtml(hostPort)}</div>
+        <div class="tls-trust-meta">
+          <code class="tls-trust-fingerprint">${escHtml(cert.fingerprint || '')}</code>
+          <span class="tls-trust-timestamp">First seen: ${escHtml(formatTlsTimestamp(cert.first_seen))} / Last seen: ${escHtml(formatTlsTimestamp(cert.last_seen))}</span>
+        </div>
+        <button class="modal-btn tls-trust-delete" type="button" data-host-port="${escHtml(hostPort)}">Remove</button>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.tls-trust-delete').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const hostPort = btn.dataset.hostPort;
+        if (!hostPort) return;
+        Spinner.button(btn, async () => {
+          const resp = await fetch(`/api/system/tls/trusted?host_port=${encodeURIComponent(hostPort)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          delete trustedTlsCerts[hostPort];
+          renderTrustedTls();
+          Toast.success(`Removed trusted certificate for ${hostPort}`);
+        }).catch(() => Toast.error('Failed to remove trusted certificate'));
+      });
+    });
+  }
+
+  async function loadTrustedTls() {
+    const list = document.getElementById('tls-trust-list');
+    if (list) list.innerHTML = '<div class="tls-trust-empty">Loading...</div>';
+    try {
+      const resp = await fetch('/api/system/tls/trusted', { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      trustedTlsCerts = await resp.json();
+      renderTrustedTls();
+    } catch (e) {
+      trustedTlsCerts = {};
+      if (list) list.innerHTML = '<div class="tls-trust-empty">Failed to load trusted certificates.</div>';
+      console.warn('Failed to load trusted TLS certificates:', e);
+    }
   }
 
   let saveInFlight = false;
@@ -444,6 +571,8 @@ const DenSettings = (() => {
     const updateApplyBtn = document.getElementById('update-apply-btn');
     if (updateStatus) { updateStatus.hidden = true; updateStatus.textContent = ''; }
     if (updateApplyBtn) updateApplyBtn.hidden = true;
+    loadTlsStatus();
+    loadTrustedTls();
 
     modal.hidden = false;
   }
@@ -540,6 +669,44 @@ const DenSettings = (() => {
     const modal = document.getElementById('settings-modal');
     if (modal) modal.addEventListener('click', (e) => {
       if (e.target === modal) closeModal();
+    });
+
+    const tlsUseLocalBtn = document.getElementById('tls-trust-use-local');
+    if (tlsUseLocalBtn) tlsUseLocalBtn.addEventListener('click', () => {
+      const input = document.getElementById('tls-trust-fingerprint');
+      if (input && tlsStatus?.fingerprint) input.value = tlsStatus.fingerprint;
+    });
+
+    const tlsTrustSaveBtn = document.getElementById('tls-trust-save');
+    if (tlsTrustSaveBtn) tlsTrustSaveBtn.addEventListener('click', () => {
+      const hostPortInput = document.getElementById('tls-trust-host-port');
+      const fingerprintInput = document.getElementById('tls-trust-fingerprint');
+      const hostPort = hostPortInput ? hostPortInput.value.trim() : '';
+      const fingerprint = fingerprintInput ? fingerprintInput.value.trim() : '';
+      if (!hostPort) {
+        Toast.error('host:port is required');
+        hostPortInput?.focus();
+        return;
+      }
+      if (!fingerprint) {
+        Toast.error('Fingerprint is required');
+        fingerprintInput?.focus();
+        return;
+      }
+
+      Spinner.button(tlsTrustSaveBtn, async () => {
+        const resp = await fetch('/api/system/tls/trusted', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ host_port: hostPort, fingerprint }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        await loadTrustedTls();
+        if (hostPortInput) hostPortInput.value = '';
+        if (fingerprintInput) fingerprintInput.value = '';
+        Toast.success(`Trusted certificate saved for ${hostPort}`);
+      }).catch(() => Toast.error('Failed to save trusted certificate'));
     });
 
     // --- Sleep prevention ---

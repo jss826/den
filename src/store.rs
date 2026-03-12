@@ -24,6 +24,8 @@ pub struct Store {
     clipboard_cache: Arc<Mutex<Option<Vec<ClipboardEntry>>>>,
     /// Write-through cache for SSH known hosts
     known_hosts_cache: Arc<Mutex<Option<HashMap<String, KnownHost>>>>,
+    /// Write-through cache for trusted TLS certificates
+    trusted_tls_cache: Arc<Mutex<Option<HashMap<String, TrustedTlsCert>>>>,
 }
 
 // --- データモデル ---
@@ -44,6 +46,15 @@ const CLIPBOARD_MAX_TEXT_BYTES: usize = 10_240; // 10KB
 pub struct KnownHost {
     pub fingerprint: String,
     pub algorithm: String,
+    /// Unix timestamp in milliseconds
+    pub first_seen: u64,
+    /// Unix timestamp in milliseconds
+    pub last_seen: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustedTlsCert {
+    pub fingerprint: String,
     /// Unix timestamp in milliseconds
     pub first_seen: u64,
     /// Unix timestamp in milliseconds
@@ -254,6 +265,7 @@ impl Store {
             settings_cache: Arc::new(Mutex::new(None)),
             clipboard_cache: Arc::new(Mutex::new(None)),
             known_hosts_cache: Arc::new(Mutex::new(None)),
+            trusted_tls_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -495,6 +507,92 @@ impl Store {
         }
 
         *cache = Some(hosts);
+        Ok(())
+    }
+
+    // --- Trusted TLS Certificates ---
+
+    pub fn load_trusted_tls(&self) -> HashMap<String, TrustedTlsCert> {
+        let mut cache = self.trusted_tls_cache.lock().unwrap();
+        if let Some(cached) = cache.as_ref() {
+            return cached.clone();
+        }
+        let certs = self.load_trusted_tls_from_disk();
+        *cache = Some(certs.clone());
+        certs
+    }
+
+    fn load_trusted_tls_from_disk(&self) -> HashMap<String, TrustedTlsCert> {
+        let path = self.root.join("trusted-tls-certs.json");
+        match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Corrupt trusted-tls-certs.json, using empty: {e}");
+                HashMap::new()
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => {
+                tracing::warn!("Failed to read trusted-tls-certs.json: {e}");
+                HashMap::new()
+            }
+        }
+    }
+
+    pub fn get_trusted_tls_cert(&self, host_port: &str) -> Option<TrustedTlsCert> {
+        let mut cache = self.trusted_tls_cache.lock().unwrap();
+        if cache.is_none() {
+            *cache = Some(self.load_trusted_tls_from_disk());
+        }
+        cache.as_ref().unwrap().get(host_port).cloned()
+    }
+
+    pub fn save_trusted_tls_cert(
+        &self,
+        host_port: &str,
+        entry: TrustedTlsCert,
+    ) -> std::io::Result<()> {
+        let mut cache = self.trusted_tls_cache.lock().unwrap();
+        let mut certs = cache
+            .take()
+            .unwrap_or_else(|| self.load_trusted_tls_from_disk());
+
+        let entry = if let Some(existing) = certs.get(host_port) {
+            TrustedTlsCert {
+                first_seen: existing.first_seen,
+                ..entry
+            }
+        } else {
+            entry
+        };
+
+        certs.insert(host_port.to_string(), entry);
+
+        let path = self.root.join("trusted-tls-certs.json");
+        let json = serde_json::to_string(&certs).map_err(std::io::Error::other)?;
+        if let Err(e) = fs::write(path, &json) {
+            *cache = Some(certs);
+            return Err(e);
+        }
+
+        *cache = Some(certs);
+        Ok(())
+    }
+
+    pub fn remove_trusted_tls_cert(&self, host_port: &str) -> std::io::Result<()> {
+        let mut cache = self.trusted_tls_cache.lock().unwrap();
+        let mut certs = cache
+            .take()
+            .unwrap_or_else(|| self.load_trusted_tls_from_disk());
+
+        certs.remove(host_port);
+
+        let path = self.root.join("trusted-tls-certs.json");
+        let json = serde_json::to_string(&certs).map_err(std::io::Error::other)?;
+        if let Err(e) = fs::write(path, &json) {
+            *cache = Some(certs);
+            return Err(e);
+        }
+
+        *cache = Some(certs);
         Ok(())
     }
 }
@@ -879,5 +977,69 @@ mod tests {
         *store.known_hosts_cache.lock().unwrap() = None;
         let loaded = store.get_known_host("example.com:22").unwrap();
         assert_eq!(loaded.fingerprint, "SHA256:abc123");
+    }
+
+    #[test]
+    fn trusted_tls_empty_when_missing() {
+        let (store, _tmp) = temp_store();
+        let certs = store.load_trusted_tls();
+        assert!(certs.is_empty());
+    }
+
+    #[test]
+    fn trusted_tls_save_and_get() {
+        let (store, _tmp) = temp_store();
+        let entry = TrustedTlsCert {
+            fingerprint: "SHA256:deadbeef".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store
+            .save_trusted_tls_cert("example.com:8443", entry)
+            .unwrap();
+        let loaded = store.get_trusted_tls_cert("example.com:8443").unwrap();
+        assert_eq!(loaded.fingerprint, "SHA256:deadbeef");
+    }
+
+    #[test]
+    fn trusted_tls_preserves_first_seen_on_update() {
+        let (store, _tmp) = temp_store();
+        let entry = TrustedTlsCert {
+            fingerprint: "SHA256:deadbeef".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store
+            .save_trusted_tls_cert("example.com:8443", entry)
+            .unwrap();
+
+        let updated = TrustedTlsCert {
+            fingerprint: "SHA256:beadfeed".to_string(),
+            first_seen: 2000,
+            last_seen: 3000,
+        };
+        store
+            .save_trusted_tls_cert("example.com:8443", updated)
+            .unwrap();
+
+        let loaded = store.get_trusted_tls_cert("example.com:8443").unwrap();
+        assert_eq!(loaded.first_seen, 1000);
+        assert_eq!(loaded.last_seen, 3000);
+        assert_eq!(loaded.fingerprint, "SHA256:beadfeed");
+    }
+
+    #[test]
+    fn trusted_tls_remove() {
+        let (store, _tmp) = temp_store();
+        let entry = TrustedTlsCert {
+            fingerprint: "SHA256:deadbeef".to_string(),
+            first_seen: 1000,
+            last_seen: 1000,
+        };
+        store
+            .save_trusted_tls_cert("example.com:8443", entry)
+            .unwrap();
+        store.remove_trusted_tls_cert("example.com:8443").unwrap();
+        assert!(store.get_trusted_tls_cert("example.com:8443").is_none());
     }
 }

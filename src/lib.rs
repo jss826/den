@@ -293,6 +293,12 @@ pub fn create_app_with_secret(
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))
         .route(
+            "/api/system/tls/trusted",
+            get(tls::list_trusted)
+                .post(tls::trust)
+                .delete(tls::remove_trusted),
+        )
+        .route(
             "/api/sftp/known-hosts",
             get(sftp::api::list_known_hosts)
                 .post(sftp::api::trust_host)

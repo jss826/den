@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Once;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -13,12 +13,14 @@ use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tower::Service;
 
 use crate::AppState;
 use crate::config::Config;
+use crate::store::TrustedTlsCert;
 
 const DEFAULT_CERT_FILENAME: &str = "server-cert.der";
 const DEFAULT_KEY_FILENAME: &str = "server-key.der";
@@ -51,6 +53,17 @@ pub struct TlsStatusResponse {
     pub subject_alt_names: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrustTlsRequest {
+    pub host_port: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RemoveTrustedTlsQuery {
+    pub host_port: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -288,6 +301,90 @@ pub async fn certificate(State(state): State<Arc<AppState>>) -> Response {
         HeaderValue::from_static("attachment; filename=\"den-self-signed.cer\""),
     );
     (StatusCode::OK, headers, cert_der.clone()).into_response()
+}
+
+pub async fn list_trusted(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<HashMap<String, TrustedTlsCert>> {
+    let certs = tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        move || store.load_trusted_tls()
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!("tls: list_trusted spawn_blocking failed: {e}");
+        HashMap::new()
+    });
+    axum::Json(certs)
+}
+
+pub async fn trust(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<TrustTlsRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let host_port = req.host_port.trim();
+    if host_port.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "host_port is required".to_string()));
+    }
+    if !req.fingerprint.starts_with("SHA256:") || req.fingerprint.len() < 16 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Invalid fingerprint format".to_string(),
+        ));
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let entry = TrustedTlsCert {
+        fingerprint: req.fingerprint,
+        first_seen: now,
+        last_seen: now,
+    };
+
+    tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        let host_port = host_port.to_string();
+        move || store.save_trusted_tls_cert(&host_port, entry)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("tls: trust spawn_blocking failed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?
+    .map_err(|e| {
+        tracing::error!("tls: trust save failed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+pub async fn remove_trusted(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<RemoveTrustedTlsQuery>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let host_port = q.host_port.trim().to_string();
+    if host_port.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "host_port is required".to_string()));
+    }
+
+    tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        move || store.remove_trusted_tls_cert(&host_port)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("tls: remove_trusted spawn_blocking failed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?
+    .map_err(|e| {
+        tracing::error!("tls: remove_trusted failed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+
+    Ok(StatusCode::OK)
 }
 
 pub async fn serve(

@@ -1176,6 +1176,88 @@ html, body {
 .update-error {
   color: var(--error, #ff5555);
 }
+.tls-status-text {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.tls-san-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.tls-san-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-family: monospace;
+}
+.tls-actions {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+.tls-trust-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(240px, 2fr) auto auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+.tls-trust-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.tls-trust-empty {
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 8px 0;
+}
+.tls-trust-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.tls-trust-host {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.tls-trust-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+.tls-trust-fingerprint {
+  font-size: 0.74rem;
+  font-family: monospace;
+  word-break: break-all;
+}
+.tls-trust-timestamp {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .tls-trust-form {
+    grid-template-columns: 1fr;
+  }
+
+  .tls-trust-item {
+    grid-template-columns: 1fr;
+  }
+}
 
 .modal-actions {
   display: flex;

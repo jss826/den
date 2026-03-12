@@ -372,6 +372,36 @@
             </div>
           </div>
         </details>
+        <details class="settings-group" id="sg-tls">
+          <summary class="settings-group-title">TLS</summary>
+          <div class="modal-section">
+            <label>Status</label>
+            <div id="tls-status-text" class="tls-status-text">Loading...</div>
+            <small id="tls-status-hint" class="setting-hint" hidden></small>
+          </div>
+          <div class="modal-section" id="tls-fingerprint-section" hidden>
+            <label>Certificate Fingerprint</label>
+            <code id="tls-fingerprint" class="hostkey-value"></code>
+          </div>
+          <div class="modal-section" id="tls-san-section" hidden>
+            <label>Subject Alternative Names</label>
+            <div id="tls-san-list" class="tls-san-list"></div>
+          </div>
+          <div class="modal-actions tls-actions">
+            <a id="tls-download-cert" class="modal-btn" href="/api/system/tls/certificate" download hidden>Download Certificate</a>
+          </div>
+          <div class="modal-section">
+            <label>Trusted Remote Certificates</label>
+            <small class="setting-hint">Store accepted self-signed fingerprints for remote Den endpoints.</small>
+            <div class="tls-trust-form">
+              <input type="text" id="tls-trust-host-port" class="settings-input" placeholder="host:port">
+              <input type="text" id="tls-trust-fingerprint" class="settings-input" placeholder="SHA256:...">
+              <button id="tls-trust-use-local" class="modal-btn" type="button">Use Local</button>
+              <button id="tls-trust-save" class="modal-btn primary" type="button">Trust</button>
+            </div>
+            <div id="tls-trust-list" class="tls-trust-list"></div>
+          </div>
+        </details>
         <details class="settings-group" id="sg-peers">
           <summary class="settings-group-title">Peers</summary>
           <div class="modal-section">

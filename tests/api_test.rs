@@ -162,6 +162,184 @@ async fn tls_status_omits_internal_paths() {
 }
 
 #[tokio::test]
+async fn tls_trusted_endpoints_require_auth() {
+    let app = test_app();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/tls/trusted")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"host_port":"den-a:8080","fingerprint":"SHA256:abc123abc123"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/system/tls/trusted?host_port=den-a:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn tls_trusted_roundtrip() {
+    let (app, _) = test_app_with_state();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json, serde_json::json!({}));
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"host_port":"den-a:8443","fingerprint":"SHA256:0123456789abcdef"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["den-a:8443"]["fingerprint"], "SHA256:0123456789abcdef");
+    assert!(json["den-a:8443"]["first_seen"].as_u64().is_some());
+    assert!(json["den-a:8443"]["last_seen"].as_u64().is_some());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/system/tls/trusted?host_port=den-a:8443")
+                .header(header::AUTHORIZATION, auth_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json, serde_json::json!({}));
+}
+
+#[tokio::test]
+async fn tls_trusted_rejects_invalid_payloads() {
+    let app = test_app();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"host_port":"","fingerprint":"SHA256:abc123abc123"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"host_port":"den-a:8443","fingerprint":"bad"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/system/tls/trusted?host_port=")
+                .header(header::AUTHORIZATION, auth_header())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn login_wrong_password() {
     let app = test_app();
     let req = Request::builder()
