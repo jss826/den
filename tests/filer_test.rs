@@ -25,6 +25,10 @@ fn test_config() -> Config {
         data_dir: tmp.to_string_lossy().to_string(),
         bind_address: "127.0.0.1".to_string(),
         ssh_port: None,
+        tls_enabled: false,
+        tls_cert_path: None,
+        tls_key_path: None,
+        tls_subject_alt_names: vec![],
     }
 }
 
@@ -42,7 +46,6 @@ fn test_app() -> axum::Router {
         registry,
         TEST_HMAC_SECRET.to_vec(),
         store,
-        std::sync::Arc::new(den::peer::PeerRegistry::new()),
         None,
     )
     .0
@@ -68,7 +71,6 @@ fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
         registry,
         TEST_HMAC_SECRET.to_vec(),
         store,
-        std::sync::Arc::new(den::peer::PeerRegistry::new()),
         None,
     );
     (app, dir)
