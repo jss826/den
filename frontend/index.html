@@ -274,10 +274,16 @@
 
     <!-- 設定モーダル -->
     <div id="settings-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Settings">
-      <div class="modal-content">
+      <div class="modal-content settings-modal-content">
         <h3>Settings</h3>
-        <details class="settings-group" id="sg-appearance" open>
-          <summary class="settings-group-title">Appearance</summary>
+        <div class="settings-tabs" role="tablist">
+          <button class="settings-tab active" role="tab" data-tab="sg-appearance" aria-selected="true">Appearance</button>
+          <button class="settings-tab" role="tab" data-tab="sg-terminal">Terminal</button>
+          <button class="settings-tab" role="tab" data-tab="sg-keybar">Keybar</button>
+          <button class="settings-tab" role="tab" data-tab="sg-snippets">Snippets</button>
+          <button class="settings-tab" role="tab" data-tab="sg-tls">TLS</button>
+        </div>
+        <div class="settings-tab-panel active" id="sg-appearance" role="tabpanel">
           <div class="modal-section">
             <label>Theme</label>
             <select id="setting-theme" class="settings-input">
@@ -299,9 +305,8 @@
             <label>Font Size</label>
             <input type="number" id="setting-font-size" class="settings-input" min="8" max="32" value="14">
           </div>
-        </details>
-        <details class="settings-group" id="sg-terminal" open>
-          <summary class="settings-group-title">Terminal</summary>
+        </div>
+        <div class="settings-tab-panel" id="sg-terminal" role="tabpanel" hidden>
           <div class="modal-section">
             <label>Terminal Scrollback</label>
             <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
@@ -326,9 +331,8 @@
               <input type="number" id="setting-sleep-timeout" class="settings-input" min="1" max="480" value="30">
             </div>
           </div>
-        </details>
-        <details class="settings-group" id="sg-keybar">
-          <summary class="settings-group-title">Keybar</summary>
+        </div>
+        <div class="settings-tab-panel" id="sg-keybar" role="tabpanel" hidden>
           <div class="modal-section">
             <label>Primary Row</label>
             <div id="keybar-editor" class="keybar-editor">
@@ -400,9 +404,8 @@
               </div>
             </div>
           </div>
-        </details>
-        <details class="settings-group" id="sg-snippets">
-          <summary class="settings-group-title">Snippets</summary>
+        </div>
+        <div class="settings-tab-panel" id="sg-snippets" role="tabpanel" hidden>
           <div class="modal-section">
             <div class="snippet-editor">
               <div id="snippet-list" class="snippet-list"></div>
@@ -430,9 +433,8 @@
               </div>
             </div>
           </div>
-        </details>
-        <details class="settings-group" id="sg-tls">
-          <summary class="settings-group-title">TLS</summary>
+        </div>
+        <div class="settings-tab-panel" id="sg-tls" role="tabpanel" hidden>
           <div class="modal-section">
             <label>Status</label>
             <div id="tls-status-text" class="tls-status-text">Loading...</div>
@@ -455,12 +457,14 @@
             <div class="tls-trust-form">
               <input type="text" id="tls-trust-host-port" class="settings-input" placeholder="host:port">
               <input type="text" id="tls-trust-fingerprint" class="settings-input" placeholder="SHA256:...">
-              <button id="tls-trust-use-local" class="modal-btn" type="button">Use Local</button>
-              <button id="tls-trust-save" class="modal-btn primary" type="button">Trust</button>
+              <div class="tls-trust-form-actions">
+                <button id="tls-trust-use-local" class="modal-btn" type="button">Use Local</button>
+                <button id="tls-trust-save" class="modal-btn primary" type="button">Trust</button>
+              </div>
             </div>
             <div id="tls-trust-list" class="tls-trust-list"></div>
           </div>
-        </details>
+        </div>
         <div class="settings-version" id="settings-version">
           <span id="settings-version-text"></span>
           <button id="update-check-btn" class="modal-btn update-btn" type="button">Check for Updates</button>

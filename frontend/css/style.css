@@ -1048,45 +1048,56 @@ html, body {
   margin-bottom: 16px;
 }
 
-/* Settings accordion groups */
-.settings-group {
-  border: 1px solid var(--border);
-  border-radius: 6px;
+/* Settings tabs */
+.settings-modal-content {
+  display: flex;
+  flex-direction: column;
+  max-width: 520px;
+}
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
-.settings-group-title {
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
   cursor: pointer;
-  padding: 10px 14px;
-  font-size: 0.85rem;
-  font-weight: 600;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.settings-tab:hover {
   color: var(--fg);
-  background: var(--input-bg);
-  user-select: none;
-  display: block;
 }
-.settings-group-title::before {
-  content: '\25B6';
-  display: inline-block;
-  margin-right: 8px;
-  font-size: 0.65rem;
-  transition: transform 0.15s;
-  vertical-align: middle;
+.settings-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
-.settings-group[open] > .settings-group-title::before {
-  transform: rotate(90deg);
+.settings-tab-panel {
+  min-height: 0;
 }
-.settings-group-title:hover {
-  background: var(--hover);
+.settings-tab-panel[hidden] {
+  display: none;
 }
-.settings-group > .modal-section {
-  padding: 0 14px;
+.settings-tab-panel > .modal-section {
+  padding: 0 2px;
 }
-.settings-group > .modal-section:first-of-type {
-  padding-top: 8px;
+.settings-tab-panel > .modal-section:first-of-type {
+  padding-top: 4px;
 }
-.settings-group > .modal-section:last-of-type {
-  padding-bottom: 8px;
+.settings-tab-panel > .modal-section:last-of-type {
+  padding-bottom: 4px;
 }
 
 .modal-section {
@@ -1190,10 +1201,14 @@ html, body {
   margin-top: 0;
 }
 .tls-trust-form {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(240px, 2fr) auto auto;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-top: 8px;
+}
+.tls-trust-form-actions {
+  display: flex;
+  gap: 8px;
 }
 .tls-trust-list {
   display: flex;
@@ -1237,10 +1252,6 @@ html, body {
 }
 
 @media (max-width: 640px) {
-  .tls-trust-form {
-    grid-template-columns: 1fr;
-  }
-
   .tls-trust-item {
     grid-template-columns: 1fr;
   }

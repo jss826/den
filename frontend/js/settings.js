@@ -455,43 +455,41 @@ const DenSettings = (() => {
   /**
    * 設定モーダルを開く。現在の設定値をフォームに反映する。
    */
-  // Module-level cache for accordion state (avoids repeated localStorage parse)
-  let accordionState = null;
-  let accordionBound = false;
+  // Tab state
+  let tabsBound = false;
 
-  function loadAccordionState() {
-    if (!accordionState) {
-      try { accordionState = JSON.parse(localStorage.getItem('den_settings_groups') || '{}'); }
-      catch { accordionState = {}; }
-    }
-    return accordionState;
+  function getActiveTab() {
+    try { return localStorage.getItem('den_settings_tab') || 'sg-appearance'; }
+    catch { return 'sg-appearance'; }
   }
 
-  function restoreAccordionState() {
-    const saved = loadAccordionState();
-    for (const [id, isOpen] of Object.entries(saved)) {
-      const el = document.getElementById(id);
-      if (el) el.open = !!isOpen;
+  function switchTab(tabId) {
+    const tabs = document.querySelectorAll('.settings-tab');
+    const panels = document.querySelectorAll('.settings-tab-panel');
+    for (const t of tabs) {
+      const active = t.dataset.tab === tabId;
+      t.classList.toggle('active', active);
+      t.setAttribute('aria-selected', active);
     }
+    for (const p of panels) {
+      p.hidden = p.id !== tabId;
+    }
+    try { localStorage.setItem('den_settings_tab', tabId); }
+    catch { /* ignore */ }
   }
 
-  function bindAccordionState() {
-    if (accordionBound) return;
-    accordionBound = true;
-    const groups = document.querySelectorAll('.settings-group');
-    for (const g of groups) {
-      g.addEventListener('toggle', () => {
-        const state = loadAccordionState();
-        state[g.id] = g.open;
-        try { localStorage.setItem('den_settings_groups', JSON.stringify(state)); }
-        catch { /* ignore */ }
-      });
+  function bindTabs() {
+    if (tabsBound) return;
+    tabsBound = true;
+    const tabs = document.querySelectorAll('.settings-tab');
+    for (const t of tabs) {
+      t.addEventListener('click', () => switchTab(t.dataset.tab));
     }
   }
 
   function openModal() {
     const modal = document.getElementById('settings-modal');
-    restoreAccordionState();
+    switchTab(getActiveTab());
     document.getElementById('setting-font-size').value = current.font_size;
     document.getElementById('setting-scrollback').value = current.terminal_scrollback;
     const themeSelect = document.getElementById('setting-theme');
@@ -583,7 +581,7 @@ const DenSettings = (() => {
    * DOMContentLoaded 後に一度だけ呼び出す。
    */
   function bindUI() {
-    bindAccordionState();
+    bindTabs();
 
     const btn = document.getElementById('settings-btn');
     if (btn) btn.addEventListener('click', openModal);
