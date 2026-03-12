@@ -66,6 +66,13 @@ pub struct RemoveTrustedTlsQuery {
     pub host_port: String,
 }
 
+fn is_valid_fingerprint(value: &str) -> bool {
+    let Some(hex_part) = value.strip_prefix("SHA256:") else {
+        return false;
+    };
+    hex_part.len() == 64 && hex_part.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredCertMeta {
     subject_alt_names: Vec<String>,
@@ -326,7 +333,7 @@ pub async fn trust(
     if host_port.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "host_port is required".to_string()));
     }
-    if !req.fingerprint.starts_with("SHA256:") || req.fingerprint.len() < 16 {
+    if !is_valid_fingerprint(&req.fingerprint) {
         return Err((
             StatusCode::BAD_REQUEST,
             "Invalid fingerprint format".to_string(),
@@ -531,5 +538,13 @@ mod tests {
         let sans = build_subject_alt_names(&config);
 
         assert!(!sans.iter().any(|san| san == "0.0.0.0"));
+    }
+
+    #[test]
+    fn fingerprint_validation_requires_full_sha256_hex() {
+        assert!(is_valid_fingerprint(&format!("SHA256:{}", "a".repeat(64))));
+        assert!(!is_valid_fingerprint("SHA256:abcd"));
+        assert!(!is_valid_fingerprint(&format!("SHA256:{}", "g".repeat(64))));
+        assert!(!is_valid_fingerprint(&"a".repeat(64)));
     }
 }

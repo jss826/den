@@ -264,6 +264,34 @@ pub async fn auth_middleware(
     }
 }
 
+/// User-only auth middleware.
+/// Accepts the local user token but explicitly rejects peer tokens.
+pub async fn user_auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+
+    let token = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| extract_cookie(req.headers(), TOKEN_COOKIE));
+
+    match token {
+        Some(t) if validate_token(&t, &state.config.password, &state.hmac_secret) => {
+            next.run(req).await
+        }
+        _ => {
+            tracing::debug!("User auth rejected: {path}");
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+}
+
 /// Validate a peer token against registered peers in settings.
 /// Peer tokens are stored as-is in PeerConfig.token (opaque strings).
 fn validate_peer_token(token: &str, store: &crate::store::Store) -> bool {

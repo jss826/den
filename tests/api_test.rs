@@ -207,6 +207,58 @@ async fn tls_trusted_endpoints_require_auth() {
 }
 
 #[tokio::test]
+async fn tls_trusted_rejects_peer_token() {
+    let (app, state) = test_app_with_state();
+
+    let (code, _token) = state.peer_registry.create_invite();
+    let body = serde_json::json!({
+        "code": code,
+        "name": "tls-peer",
+        "url": "http://peer:8080",
+        "token": "peer-token-for-tls",
+        "public_key": test_public_key()
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/peers/pair")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, "Bearer peer-token-for-tls")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, "Bearer peer-token-for-tls")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    format!(r#"{{"host_port":"den-a:8443","fingerprint":"SHA256:{}"}}"#, "a".repeat(64)),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn tls_trusted_roundtrip() {
     let (app, _) = test_app_with_state();
 
@@ -235,7 +287,10 @@ async fn tls_trusted_roundtrip() {
                 .header(header::AUTHORIZATION, auth_header())
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"host_port":"den-a:8443","fingerprint":"SHA256:0123456789abcdef"}"#,
+                    format!(
+                        r#"{{"host_port":"den-a:8443","fingerprint":"SHA256:{}"}}"#,
+                        "0123456789abcdef".repeat(4)
+                    ),
                 ))
                 .unwrap(),
         )
@@ -257,7 +312,10 @@ async fn tls_trusted_roundtrip() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["den-a:8443"]["fingerprint"], "SHA256:0123456789abcdef");
+    assert_eq!(
+        json["den-a:8443"]["fingerprint"],
+        format!("SHA256:{}", "0123456789abcdef".repeat(4))
+    );
     assert!(json["den-a:8443"]["first_seen"].as_u64().is_some());
     assert!(json["den-a:8443"]["last_seen"].as_u64().is_some());
 
@@ -319,6 +377,36 @@ async fn tls_trusted_rejects_invalid_payloads() {
                 .header(header::AUTHORIZATION, auth_header())
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(r#"{"host_port":"den-a:8443","fingerprint":"bad"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"host_port":"den-a:8443","fingerprint":"SHA256:abcd"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/tls/trusted")
+                .header(header::AUTHORIZATION, auth_header())
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"host_port":"den-a:8443","fingerprint":"SHA256:gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"}"#))
                 .unwrap(),
         )
         .await

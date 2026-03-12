@@ -172,6 +172,10 @@ const DenSettings = (() => {
     }
   }
 
+  function isValidTlsFingerprint(value) {
+    return /^SHA256:[0-9a-fA-F]{64}$/.test(value);
+  }
+
   let saveInFlight = false;
   let savePending = false;
 
@@ -690,6 +694,11 @@ const DenSettings = (() => {
       }
       if (!fingerprint) {
         Toast.error('Fingerprint is required');
+        fingerprintInput?.focus();
+        return;
+      }
+      if (!isValidTlsFingerprint(fingerprint)) {
+        Toast.error('Fingerprint must be SHA256: followed by 64 hex characters');
         fingerprintInput?.focus();
         return;
       }

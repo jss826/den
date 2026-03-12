@@ -130,6 +130,18 @@ pub fn create_app_with_secret(
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
+    let user_only_routes = Router::new()
+        .route(
+            "/api/system/tls/trusted",
+            get(tls::list_trusted)
+                .post(tls::trust)
+                .delete(tls::remove_trusted),
+        )
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::user_auth_middleware,
+        ));
+
     // 認証必要のルート（Cookie / Authorization ヘッダー / peer token で認証）
     let protected_routes = Router::new()
         .route("/api/settings", get(store_api::get_settings))
@@ -293,12 +305,6 @@ pub fn create_app_with_secret(
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))
         .route(
-            "/api/system/tls/trusted",
-            get(tls::list_trusted)
-                .post(tls::trust)
-                .delete(tls::remove_trusted),
-        )
-        .route(
             "/api/sftp/known-hosts",
             get(sftp::api::list_known_hosts)
                 .post(sftp::api::trust_host)
@@ -310,6 +316,7 @@ pub fn create_app_with_secret(
         ));
 
     let router = Router::new()
+        .merge(user_only_routes)
         .merge(protected_routes)
         .merge(public_routes)
         // CSP ヘッダーを全レスポンスに付与（XSS 防止）
