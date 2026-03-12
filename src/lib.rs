@@ -49,13 +49,7 @@ pub fn create_app(
     // 起動ごとにランダムな HMAC シークレットを生成
     // 再起動で全トークンが無効化される（セキュリティ上望ましい）
     let hmac_secret: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
-    create_app_with_secret(
-        config,
-        registry,
-        hmac_secret,
-        store,
-        tls_runtime,
-    )
+    create_app_with_secret(config, registry, hmac_secret, store, tls_runtime)
 }
 
 /// テスト用: 固定シークレットで Router を構築
@@ -109,10 +103,7 @@ pub fn create_app_with_secret(
                 .post(tls::trust)
                 .delete(tls::remove_trusted),
         )
-        .route(
-            "/api/remote/connect",
-            post(remote::connect),
-        )
+        .route("/api/remote/connect", post(remote::connect))
         .route("/api/remote/status", get(remote::status))
         .route("/api/remote/disconnect", post(remote::disconnect))
         .route(
@@ -130,8 +121,14 @@ pub fn create_app_with_secret(
         .route("/api/remote/filer/mkdir", post(remote::proxy_filer_mkdir))
         .route("/api/remote/filer/rename", post(remote::proxy_filer_rename))
         .route("/api/remote/filer/upload", post(remote::proxy_filer_upload))
-        .route("/api/remote/filer/download", get(remote::proxy_filer_download))
-        .route("/api/remote/filer/delete", delete(remote::proxy_filer_delete))
+        .route(
+            "/api/remote/filer/download",
+            get(remote::proxy_filer_download),
+        )
+        .route(
+            "/api/remote/filer/delete",
+            delete(remote::proxy_filer_delete),
+        )
         .route("/api/remote/filer/search", get(remote::proxy_filer_search))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),

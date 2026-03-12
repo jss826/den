@@ -87,37 +87,38 @@ pub fn setup(config: &Config) -> Result<Option<TlsRuntime>, String> {
 
     let requested_sans = build_subject_alt_names(config);
     let data_dir = PathBuf::from(&config.data_dir);
-    let (cert_path, key_path, meta_path, generated) = match (&config.tls_cert_path, &config.tls_key_path) {
-        (Some(cert), Some(key)) => (
-            PathBuf::from(cert),
-            PathBuf::from(key),
-            None,
-            false,
-        ),
-        (None, None) => {
-            let tls_dir = data_dir.join("tls");
-            (
-                tls_dir.join(DEFAULT_CERT_FILENAME),
-                tls_dir.join(DEFAULT_KEY_FILENAME),
-                Some(tls_dir.join(DEFAULT_META_FILENAME)),
-                true,
-            )
-        }
-        _ => {
-            return Err(
-                "DEN_TLS_CERT_PATH and DEN_TLS_KEY_PATH must be set together".to_string(),
-            );
-        }
-    };
+    let (cert_path, key_path, meta_path, generated) =
+        match (&config.tls_cert_path, &config.tls_key_path) {
+            (Some(cert), Some(key)) => (PathBuf::from(cert), PathBuf::from(key), None, false),
+            (None, None) => {
+                let tls_dir = data_dir.join("tls");
+                (
+                    tls_dir.join(DEFAULT_CERT_FILENAME),
+                    tls_dir.join(DEFAULT_KEY_FILENAME),
+                    Some(tls_dir.join(DEFAULT_META_FILENAME)),
+                    true,
+                )
+            }
+            _ => {
+                return Err(
+                    "DEN_TLS_CERT_PATH and DEN_TLS_KEY_PATH must be set together".to_string(),
+                );
+            }
+        };
 
     let (certificate_der, private_key_der) = if generated {
         load_or_generate_self_signed(&cert_path, &key_path, meta_path.as_deref(), &requested_sans)?
     } else {
         (
-            std::fs::read(&cert_path)
-                .map_err(|e| format!("failed to read TLS certificate {}: {e}", cert_path.display()))?,
-            std::fs::read(&key_path)
-                .map_err(|e| format!("failed to read TLS private key {}: {e}", key_path.display()))?,
+            std::fs::read(&cert_path).map_err(|e| {
+                format!(
+                    "failed to read TLS certificate {}: {e}",
+                    cert_path.display()
+                )
+            })?,
+            std::fs::read(&key_path).map_err(|e| {
+                format!("failed to read TLS private key {}: {e}", key_path.display())
+            })?,
         )
     };
 
@@ -159,8 +160,12 @@ fn load_or_generate_self_signed(
     requested_sans: &[String],
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     if cert_path.exists() && key_path.exists() {
-        let certificate_der = std::fs::read(cert_path)
-            .map_err(|e| format!("failed to read TLS certificate {}: {e}", cert_path.display()))?;
+        let certificate_der = std::fs::read(cert_path).map_err(|e| {
+            format!(
+                "failed to read TLS certificate {}: {e}",
+                cert_path.display()
+            )
+        })?;
         let private_key_der = std::fs::read(key_path)
             .map_err(|e| format!("failed to read TLS private key {}: {e}", key_path.display()))?;
 
@@ -209,10 +214,18 @@ fn load_or_generate_self_signed(
     let certificate_der = certified.cert.der().to_vec();
     let private_key_der = certified.signing_key.serialize_der();
 
-    std::fs::write(cert_path, &certificate_der)
-        .map_err(|e| format!("failed to write TLS certificate {}: {e}", cert_path.display()))?;
-    std::fs::write(key_path, &private_key_der)
-        .map_err(|e| format!("failed to write TLS private key {}: {e}", key_path.display()))?;
+    std::fs::write(cert_path, &certificate_der).map_err(|e| {
+        format!(
+            "failed to write TLS certificate {}: {e}",
+            cert_path.display()
+        )
+    })?;
+    std::fs::write(key_path, &private_key_der).map_err(|e| {
+        format!(
+            "failed to write TLS private key {}: {e}",
+            key_path.display()
+        )
+    })?;
 
     if let Some(meta_path) = meta_path {
         write_cert_metadata(meta_path, requested_sans)?;
@@ -253,7 +266,10 @@ fn build_subject_alt_names(config: &Config) -> Vec<String> {
     push("127.0.0.1".to_string());
     push("::1".to_string());
 
-    let hostname = gethostname::gethostname().to_string_lossy().trim().to_string();
+    let hostname = gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_string();
     if !hostname.is_empty() {
         push(hostname);
     }
@@ -472,8 +488,18 @@ mod tests {
 
         assert!(runtime.info.enabled);
         assert!(runtime.info.generated);
-        assert!(runtime.info.subject_alt_names.contains(&"localhost".to_string()));
-        assert!(runtime.info.subject_alt_names.contains(&"10.0.0.2".to_string()));
+        assert!(
+            runtime
+                .info
+                .subject_alt_names
+                .contains(&"localhost".to_string())
+        );
+        assert!(
+            runtime
+                .info
+                .subject_alt_names
+                .contains(&"10.0.0.2".to_string())
+        );
         assert!(Path::new(&runtime.info.cert_path).exists());
         assert!(Path::new(&runtime.info.key_path).exists());
         assert!(runtime.info.fingerprint.starts_with("SHA256:"));
@@ -510,7 +536,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = base_config(dir.path());
         let _ = setup(&config).unwrap().unwrap();
-        std::fs::write(dir.path().join("tls").join(DEFAULT_META_FILENAME), b"{broken").unwrap();
+        std::fs::write(
+            dir.path().join("tls").join(DEFAULT_META_FILENAME),
+            b"{broken",
+        )
+        .unwrap();
 
         let err = setup(&config).unwrap_err();
         assert!(err.contains("refusing to rotate existing certificate automatically"));

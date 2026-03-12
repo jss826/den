@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode, header};
 use den::auth::generate_token;
 use den::config::{Config, Environment};
 use den::pty::registry::SessionRegistry;
-use den::store::SleepPreventionMode;
+use den::store::{SleepPreventionMode, TrustedTlsCert};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -44,13 +44,7 @@ fn test_app_from_config(config: Config) -> (axum::Router, std::sync::Arc<den::Ap
         30,
         None,
     );
-    den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    )
+    den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None)
 }
 
 fn test_app_with_state() -> (axum::Router, std::sync::Arc<den::AppState>) {
@@ -114,8 +108,16 @@ async fn login_sets_secure_cookie_when_tls_enabled() {
         .iter()
         .filter_map(|v| v.to_str().ok())
         .collect();
-    assert!(cookies.iter().any(|c| c.starts_with("den_token=") && c.contains("; Secure")));
-    assert!(cookies.iter().any(|c| c.starts_with("den_logged_in=") && c.contains("; Secure")));
+    assert!(
+        cookies
+            .iter()
+            .any(|c| c.starts_with("den_token=") && c.contains("; Secure"))
+    );
+    assert!(
+        cookies
+            .iter()
+            .any(|c| c.starts_with("den_logged_in=") && c.contains("; Secure"))
+    );
 }
 
 #[tokio::test]
@@ -140,7 +142,12 @@ async fn tls_status_omits_internal_paths() {
     );
 
     let resp = app
-        .oneshot(Request::builder().uri("/api/system/tls").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/tls")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -226,12 +233,10 @@ async fn tls_trusted_roundtrip() {
                 .uri("/api/system/tls/trusted")
                 .header(header::AUTHORIZATION, auth_header())
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    format!(
-                        r#"{{"host_port":"den-a:8443","fingerprint":"SHA256:{}"}}"#,
-                        "0123456789abcdef".repeat(4)
-                    ),
-                ))
+                .body(Body::from(format!(
+                    r#"{{"host_port":"den-a:8443","fingerprint":"SHA256:{}"}}"#,
+                    "0123456789abcdef".repeat(4)
+                )))
                 .unwrap(),
         )
         .await
@@ -301,7 +306,9 @@ async fn tls_trusted_rejects_invalid_payloads() {
                 .uri("/api/system/tls/trusted")
                 .header(header::AUTHORIZATION, auth_header())
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"host_port":"","fingerprint":"SHA256:abc123abc123"}"#))
+                .body(Body::from(
+                    r#"{"host_port":"","fingerprint":"SHA256:abc123abc123"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -316,7 +323,9 @@ async fn tls_trusted_rejects_invalid_payloads() {
                 .uri("/api/system/tls/trusted")
                 .header(header::AUTHORIZATION, auth_header())
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"host_port":"den-a:8443","fingerprint":"bad"}"#))
+                .body(Body::from(
+                    r#"{"host_port":"den-a:8443","fingerprint":"bad"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -331,7 +340,9 @@ async fn tls_trusted_rejects_invalid_payloads() {
                 .uri("/api/system/tls/trusted")
                 .header(header::AUTHORIZATION, auth_header())
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"host_port":"den-a:8443","fingerprint":"SHA256:abcd"}"#))
+                .body(Body::from(
+                    r#"{"host_port":"den-a:8443","fingerprint":"SHA256:abcd"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -604,13 +615,8 @@ async fn settings_put_and_get() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     // PUT
     let req = Request::builder()
@@ -684,13 +690,8 @@ async fn settings_put_partial_json() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     // PUT with only some fields -- serde should use defaults for missing fields
     let req = Request::builder()
@@ -736,13 +737,8 @@ async fn settings_ssh_bookmarks_roundtrip() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     let req = Request::builder()
         .method("PUT")
@@ -1405,13 +1401,8 @@ async fn clipboard_history_post_and_get() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     // POST
     let req = Request::builder()
@@ -1457,13 +1448,8 @@ async fn clipboard_history_dedup() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     // Add two entries
     for text in ["first", "second"] {
@@ -1510,13 +1496,8 @@ async fn clipboard_history_delete() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     // Add an entry
     let req = Request::builder()
@@ -1667,13 +1648,8 @@ async fn keep_awake_put_and_get() {
         30,
         None,
     );
-    let (app, _state) = den::create_app_with_secret(
-        config,
-        registry,
-        TEST_HMAC_SECRET.to_vec(),
-        store,
-        None,
-    );
+    let (app, _state) =
+        den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
 
     // PUT true -- response body should confirm the state
     let req = Request::builder()
@@ -1750,3 +1726,188 @@ async fn keep_awake_requires_auth() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
+// ============================================================
+// Quick Connect (remote) integration tests (#43)
+// ============================================================
+
+/// Start a minimal TLS server on a random port. Returns (addr, cert_der_bytes).
+async fn start_tls_server() -> (std::net::SocketAddr, Vec<u8>) {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio_rustls::TlsAcceptor;
+
+    // Ensure rustls crypto provider is installed (idempotent)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let key_pair = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    params
+        .subject_alt_names
+        .push(rcgen::SanType::IpAddress(std::net::IpAddr::V4(
+            std::net::Ipv4Addr::LOCALHOST,
+        )));
+    let cert = params.self_signed(&key_pair).unwrap();
+    let cert_der = cert.der().to_vec();
+    let key_der = key_pair.serialize_der();
+
+    let server_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(cert_der.clone())],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
+        )
+        .unwrap();
+    let acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok((stream, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    // Accept TLS handshake, then drop
+                    let _ = acceptor.accept(stream).await;
+                });
+            }
+        }
+    });
+
+    (addr, cert_der)
+}
+
+fn sha256_fingerprint(cert_der: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(cert_der);
+    format!("SHA256:{}", hex::encode(digest))
+}
+
+#[tokio::test]
+async fn remote_connect_returns_409_when_fingerprint_unknown() {
+    let (addr, _cert_der) = start_tls_server().await;
+    let app = test_app();
+
+    let body = serde_json::json!({
+        "url": format!("https://127.0.0.1:{}", addr.port()),
+        "password": "dummy"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/remote/connect")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "untrusted_tls_certificate");
+    assert!(json["fingerprint"].as_str().unwrap().starts_with("SHA256:"));
+    assert!(json["expected_fingerprint"].is_null());
+}
+
+#[tokio::test]
+async fn remote_connect_returns_409_when_fingerprint_changed() {
+    let (addr, cert_der) = start_tls_server().await;
+    let (app, state) = test_app_with_state();
+
+    // Pre-populate trust store with a different fingerprint
+    let host_port = format!("127.0.0.1:{}", addr.port());
+    let fake_fingerprint =
+        "SHA256:0000000000000000000000000000000000000000000000000000000000000000";
+    state
+        .store
+        .save_trusted_tls_cert(
+            &host_port,
+            TrustedTlsCert {
+                fingerprint: fake_fingerprint.to_string(),
+                first_seen: 1000,
+                last_seen: 1000,
+            },
+        )
+        .unwrap();
+
+    let body = serde_json::json!({
+        "url": format!("https://127.0.0.1:{}", addr.port()),
+        "password": "dummy"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/remote/connect")
+        .header(header::AUTHORIZATION, auth_header())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"], "tls_fingerprint_mismatch");
+    // actual fingerprint from server
+    let actual_fp = sha256_fingerprint(&cert_der);
+    assert_eq!(json["fingerprint"], actual_fp);
+    // expected_fingerprint is the one from trust store
+    assert_eq!(json["expected_fingerprint"], fake_fingerprint);
+}
+
+#[tokio::test]
+async fn remote_proxy_returns_428_when_not_connected() {
+    let app = test_app();
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/remote/terminal/sessions")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_REQUIRED);
+}
+
+#[tokio::test]
+async fn remote_disconnect_clears_state() {
+    let (app, _state) = test_app_with_state();
+
+    // Verify initially not connected
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/remote/status")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["connected"], false);
+
+    // Call disconnect (idempotent — no error even when not connected)
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/remote/disconnect")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Status should still show not connected
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/remote/status")
+        .header(header::AUTHORIZATION, auth_header())
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["connected"], false);
+}

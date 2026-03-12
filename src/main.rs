@@ -84,14 +84,9 @@ async fn main() {
         let ssh_data_dir = app_state.config.data_dir.clone();
         let ssh_bind = app_state.config.bind_address.clone();
         tokio::spawn(async move {
-            if let Err(e) = den::ssh::server::run(
-                ssh_registry,
-                ssh_password,
-                ssh_port,
-                ssh_data_dir,
-                ssh_bind,
-            )
-            .await
+            if let Err(e) =
+                den::ssh::server::run(ssh_registry, ssh_password, ssh_port, ssh_data_dir, ssh_bind)
+                    .await
             {
                 tracing::error!("SSH server error: {e}");
             }

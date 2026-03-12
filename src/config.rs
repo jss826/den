@@ -105,7 +105,12 @@ impl Config {
             env::var("DEN_BIND_ADDRESS").unwrap_or_else(|_| default_bind.to_string());
         let tls_enabled = env::var("DEN_TLS")
             .ok()
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false);
         let tls_cert_path = env::var("DEN_TLS_CERT_PATH")
             .ok()

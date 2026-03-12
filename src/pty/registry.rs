@@ -337,7 +337,9 @@ impl SessionRegistry {
     }
 
     fn load_saved_record(&self, name: &str) -> Option<crate::store::SessionRecord> {
-        self.load_saved_records().into_iter().find(|record| record.name == name)
+        self.load_saved_records()
+            .into_iter()
+            .find(|record| record.name == name)
     }
 
     async fn upsert_saved_record(
@@ -734,7 +736,10 @@ impl SessionRegistry {
 
         self.evaluate_sleep_prevention(session_count);
         tracing::info!("Session created: {name}");
-        if let Err(e) = self.upsert_saved_record(name, session.ssh_config.clone()).await {
+        if let Err(e) = self
+            .upsert_saved_record(name, session.ssh_config.clone())
+            .await
+        {
             tracing::warn!("Failed to persist saved session '{name}': {e}");
         }
         Ok((session, first_rx))

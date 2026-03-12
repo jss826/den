@@ -284,8 +284,15 @@ pub async fn disconnect(State(state): State<Arc<AppState>>) -> StatusCode {
 pub async fn proxy_list_sessions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
-    proxy_remote_request(&state, reqwest::Method::GET, "/api/terminal/sessions", None, None, vec![])
-        .await
+    proxy_remote_request(
+        &state,
+        reqwest::Method::GET,
+        "/api/terminal/sessions",
+        None,
+        None,
+        vec![],
+    )
+    .await
 }
 
 pub async fn proxy_create_session(
@@ -426,7 +433,10 @@ pub async fn proxy_filer_upload(
     body: Bytes,
 ) -> Result<Response, StatusCode> {
     let mut forwarded = HashMap::new();
-    if let Some(content_type) = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()) {
+    if let Some(content_type) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    {
         forwarded.insert("content-type".to_string(), content_type.to_string());
     }
     proxy_remote_request(
@@ -519,15 +529,19 @@ async fn probe_server_certificate(url: &Url) -> Result<ProbedCertificate, String
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
 
-    let tcp = tokio::time::timeout(REMOTE_CONNECT_TIMEOUT, TcpStream::connect((host.as_str(), port)))
-        .await
-        .map_err(|_| format!("timed out connecting to {host}:{port}"))?
-        .map_err(|e| format!("failed to connect to {host}:{port}: {e}"))?;
+    let tcp = tokio::time::timeout(
+        REMOTE_CONNECT_TIMEOUT,
+        TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| format!("timed out connecting to {host}:{port}"))?
+    .map_err(|e| format!("failed to connect to {host}:{port}: {e}"))?;
 
-    let tls_stream = tokio::time::timeout(REMOTE_CONNECT_TIMEOUT, connector.connect(server_name, tcp))
-        .await
-        .map_err(|_| format!("timed out during TLS handshake with {host}:{port}"))?
-        .map_err(|e| format!("TLS handshake failed for {host}:{port}: {e}"))?;
+    let tls_stream =
+        tokio::time::timeout(REMOTE_CONNECT_TIMEOUT, connector.connect(server_name, tcp))
+            .await
+            .map_err(|_| format!("timed out during TLS handshake with {host}:{port}"))?
+            .map_err(|e| format!("TLS handshake failed for {host}:{port}: {e}"))?;
 
     let certs = tls_stream
         .get_ref()
@@ -588,7 +602,9 @@ async fn login_remote(
         .json(&LoginRequest { password })
         .send()
         .await
-        .map_err(|e| RemoteConnectError::Message(format!("failed to reach remote login API: {e}")))?;
+        .map_err(|e| {
+            RemoteConnectError::Message(format!("failed to reach remote login API: {e}"))
+        })?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err(RemoteConnectError::Unauthorized);
@@ -654,13 +670,10 @@ async fn proxy_remote_request(
         request = request.body(body);
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::warn!("remote proxy request failed: {e}");
-            StatusCode::BAD_GATEWAY
-        })?;
+    let response = request.send().await.map_err(|e| {
+        tracing::warn!("remote proxy request failed: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
 
     let status = response.status();
     let content_type = response
@@ -718,8 +731,7 @@ async fn handle_remote_ws(browser_ws: WebSocket, remote: RemoteSession, query: O
             let (mut browser_tx, _) = browser_ws.split();
             let _ = browser_tx
                 .send(AxumWsMessage::Text(
-                    r#"{"type":"relay_error","message":"Failed to connect to remote Den"}"#
-                        .into(),
+                    r#"{"type":"relay_error","message":"Failed to connect to remote Den"}"#.into(),
                 ))
                 .await;
             return;
@@ -733,23 +745,38 @@ async fn handle_remote_ws(browser_ws: WebSocket, remote: RemoteSession, query: O
         while let Some(Ok(msg)) = browser_rx.next().await {
             match msg {
                 AxumWsMessage::Text(text) => {
-                    if remote_tx.send(TungsteniteMessage::Text(text.to_string().into())).await.is_err()
+                    if remote_tx
+                        .send(TungsteniteMessage::Text(text.to_string().into()))
+                        .await
+                        .is_err()
                     {
                         break;
                     }
                 }
                 AxumWsMessage::Binary(data) => {
-                    if remote_tx.send(TungsteniteMessage::Binary(data)).await.is_err() {
+                    if remote_tx
+                        .send(TungsteniteMessage::Binary(data))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
                 AxumWsMessage::Ping(data) => {
-                    if remote_tx.send(TungsteniteMessage::Ping(data)).await.is_err() {
+                    if remote_tx
+                        .send(TungsteniteMessage::Ping(data))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
                 AxumWsMessage::Pong(data) => {
-                    if remote_tx.send(TungsteniteMessage::Pong(data)).await.is_err() {
+                    if remote_tx
+                        .send(TungsteniteMessage::Pong(data))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -810,9 +837,7 @@ async fn connect_remote_ws_client(
     client_config: Arc<ClientConfig>,
 ) -> Result<
     (
-        tokio_tungstenite::WebSocketStream<
-            tokio_rustls::client::TlsStream<TcpStream>,
-        >,
+        tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>,
         tokio_tungstenite::tungstenite::handshake::client::Response,
     ),
     tokio_tungstenite::tungstenite::Error,
@@ -828,19 +853,23 @@ async fn connect_remote_ws_client(
         })?
         .to_string();
     let port = uri.port_u16().unwrap_or(443);
-    let server_name = ServerName::try_from(host.clone())
-        .map_err(|_| tokio_tungstenite::tungstenite::Error::Url(
+    let server_name = ServerName::try_from(host.clone()).map_err(|_| {
+        tokio_tungstenite::tungstenite::Error::Url(
             tokio_tungstenite::tungstenite::error::UrlError::NoHostName,
-        ))?;
+        )
+    })?;
 
     let socket = tokio::time::timeout(
         REMOTE_CONNECT_TIMEOUT,
         TcpStream::connect((host.as_str(), port)),
     )
     .await
-    .map_err(|_| tokio_tungstenite::tungstenite::Error::Io(
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "WS relay TCP connect timeout"),
-    ))?
+    .map_err(|_| {
+        tokio_tungstenite::tungstenite::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "WS relay TCP connect timeout",
+        ))
+    })?
     .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
     let connector = TlsConnector::from(client_config);
     let tls_stream = tokio::time::timeout(
@@ -848,9 +877,12 @@ async fn connect_remote_ws_client(
         connector.connect(server_name, socket),
     )
     .await
-    .map_err(|_| tokio_tungstenite::tungstenite::Error::Io(
-        std::io::Error::new(std::io::ErrorKind::TimedOut, "WS relay TLS handshake timeout"),
-    ))?
+    .map_err(|_| {
+        tokio_tungstenite::tungstenite::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "WS relay TLS handshake timeout",
+        ))
+    })?
     .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
 
     tokio_tungstenite::client_async(request, tls_stream).await

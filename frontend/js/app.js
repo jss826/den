@@ -8,24 +8,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginError = document.getElementById('login-error');
 
   let filerInitialized = false;
-  let remoteDisconnectBound = false;
-
-  function sendRemoteDisconnectKeepalive() {
-    try {
-      fetch('/api/remote/disconnect', {
-        method: 'POST',
-        credentials: 'same-origin',
-        keepalive: true,
-      }).catch(() => {});
-    } catch { /* ignore */ }
-  }
-
-  function ensureRemoteDisconnectHooks() {
-    if (remoteDisconnectBound) return;
-    remoteDisconnectBound = true;
-    window.addEventListener('pagehide', sendRemoteDisconnectKeepalive);
-    window.addEventListener('beforeunload', sendRemoteDisconnectKeepalive);
-  }
 
   // ログイン処理
   loginForm.addEventListener('submit', async (e) => {
@@ -216,11 +198,6 @@ document.addEventListener('DOMContentLoaded', () => {
   async function showMain() {
     loginScreen.hidden = true;
     mainScreen.hidden = false;
-
-    // Quick Connect state is memory-only. A fresh page load should not inherit
-    // any previous remote Den attachment from the server process.
-    sendRemoteDisconnectKeepalive();
-    ensureRemoteDisconnectHooks();
 
     // ツールチップ初期化
     initTooltip();
