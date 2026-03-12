@@ -16,6 +16,8 @@
 - **12 テーマ** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
 - **スニペット** — カスタマイズ可能なリストからワンクリックでコマンド入力
 - **クリップボード履歴** — 利用可能な環境ではシステムクリップボード監視による自動追跡
+- **Quick Connect** — 別の Den インスタンスのターミナルとファイルに TLS 経由で接続
+- **自己署名 TLS** — HTTPS/WSS オプション対応、証明書自動生成＋フィンガープリントベースの信頼モデル
 - **認証** — HttpOnly Cookie (HMAC-SHA256 トークン, 24時間有効期限) + レートリミット + CSP
 - **セルフアップデート** — 設定画面からアップデート確認・適用（GitHub Releases からダウンロード）
 - **セッション永続化** — 再起動後もターミナルセッションを復元、SSH ブックマークセッションは自動再接続
@@ -100,6 +102,32 @@ just prod strongpw    # パスワード上書き指定も可
 | `DEN_LOG_LEVEL` | `debug` | `info` | ログレベル |
 | `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | 同左 | ターミナルのシェル |
 | `DEN_SSH_PORT` | *（無効）* | *（無効）* | SSH サーバーポート（opt-in） |
+| `DEN_TLS` | `false` | `false` | HTTPS/WSS 有効化（`1`, `true`, `yes`, `on`） |
+| `DEN_TLS_CERT_PATH` | *（自動生成）* | *（自動生成）* | サーバー証明書パス（DER 形式） |
+| `DEN_TLS_KEY_PATH` | *（自動生成）* | *（自動生成）* | 秘密鍵パス（PKCS#8 DER 形式） |
+| `DEN_TLS_SAN` | *（なし）* | *（なし）* | Subject Alternative Names（カンマ区切り） |
+
+## TLS
+
+`DEN_TLS=true` に設定すると HTTPS/WSS で配信されます。証明書を指定しない場合、`DEN_DATA_DIR/tls/` に自己署名証明書が自動生成されます。
+
+```powershell
+$env:DEN_TLS="true"
+$env:DEN_TLS_SAN="den-a,10.0.0.2"  # 自己署名証明書の SAN（任意）
+```
+
+サーバーの TLS フィンガープリントは設定画面に表示されます。リモート Den への接続時、初回はフィンガープリントの確認が求められます（TOFU モデル）。フィンガープリントが変更された場合は警告が表示されます。
+
+## Quick Connect
+
+ブラウザから別の Den インスタンスのターミナルとファイルに接続できます。リモート側の Den で TLS が有効である必要があります。
+
+1. ファイルマネージャ（またはセッションバー）の **Remote** ドロップダウンを開く
+2. リモート Den の URL とパスワードを入力
+3. 初回接続時に TLS フィンガープリントを確認
+4. リモート Den のターミナルセッションとファイルがローカルと並んで表示される
+
+接続はローカル Den 経由でプロキシされるため、ブラウザは localhost のみと通信します。
 
 ## SSH サーバー
 
@@ -146,26 +174,27 @@ cat ~/.ssh/id_ed25519.pub >> ./data-dev/ssh/authorized_keys
 ## アーキテクチャ
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Browser (iPad mini / Desktop)                        │
-│  ┌──────────────────────┐ ┌────────────┐ ┌─────────┐ │
-│  │ Terminal + Floating   │ │File Manager│ │  SFTP   │ │
-│  │ (xterm.js)            │ │(CM6 + tree)│ │ connect │ │
-│  └──────────┬────────────┘ └─────┬──────┘ └────┬────┘ │
-└─────────────┼────────────────────┼─────────────┼──────┘
-              │ WebSocket          │ REST API     │ REST
-┌─────────────┼────────────────────┼─────────────┼──────┐
-│  Axum       │                    │             │      │
-│  ┌──────────┴──────────┐  ┌──────┴──────┐  ┌──┴────┐ │
-│  │ PTY (shell, ConPTY) │  │  Filer API  │  │ SFTP  │ │
-│  └─────────────────────┘  └─────────────┘  │ API   │ │
-│                                            └──┬────┘ │
-│  Static files (rust-embed)              ┌─────┴────┐ │
-│  Store (JSON persistence)               │ russh +  │ │
-│  SSH Server (russh)                     │ russh-   │ │
-│  Job Object (ConPTY cleanup)            │ sftp     │ │
-│                                         └──────────┘ │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Browser (iPad mini / Desktop)                            │
+│  ┌──────────────────────┐ ┌────────────┐ ┌─────────────┐ │
+│  │ Terminal + Floating   │ │File Manager│ │ SFTP / Quick│ │
+│  │ (xterm.js)            │ │(CM6 + tree)│ │   Connect   │ │
+│  └──────────┬────────────┘ └─────┬──────┘ └──────┬──────┘ │
+└─────────────┼────────────────────┼───────────────┼────────┘
+              │ WebSocket          │ REST API       │ REST
+┌─────────────┼────────────────────┼───────────────┼────────┐
+│  Axum (HTTP or HTTPS/WSS)        │               │        │
+│  ┌──────────┴──────────┐  ┌──────┴──────┐  ┌────┴──────┐ │
+│  │ PTY (shell, ConPTY) │  │  Filer API  │  │ SFTP API  │ │
+│  └─────────────────────┘  └─────────────┘  └───────────┘ │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │ Quick Connect Relay  →  Remote Den (HTTPS)           │ │
+│  │ (terminal + filer + WS proxy)                        │ │
+│  └──────────────────────────────────────────────────────┘ │
+│  Static files (rust-embed)    TLS (self-signed / custom)  │
+│  Store (JSON persistence)     SSH Server (russh)          │
+│  Job Object (ConPTY cleanup)  SFTP Client (russh-sftp)    │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## プロジェクト構成
@@ -181,6 +210,9 @@ den/
 │   ├── store.rs            # JSON ファイル永続化
 │   ├── store_api.rs        # 設定 REST API
 │   ├── assets.rs           # 静的ファイル配信 (rust-embed)
+│   ├── remote.rs           # Quick Connect リレー (ターミナル, ファイラー, WS)
+│   ├── tls.rs              # TLS 設定, フィンガープリント信頼 API
+│   ├── update.rs           # セルフアップデート (GitHub Releases)
 │   ├── filer/              # ファイルマネージャ API
 │   │   └── api.rs          # ツリー, 読取, 書込, 検索, アップロード, ダウンロード
 │   ├── sftp/               # SFTP リモートファイル操作
@@ -194,7 +226,8 @@ den/
 │   │   └── job.rs          # Windows Job Object (ゾンビプロセス防止)
 │   └── ssh/                # 内蔵 SSH サーバー
 │       ├── server.rs       # russh ハンドラ + ターミナル出力フィルタ
-│       └── keys.rs         # ホストキー生成 + authorized_keys
+│       ├── keys.rs         # ホストキー生成 + authorized_keys
+│       └── loopback.rs     # SSH 自己接続検出
 ├── frontend/               # ブラウザ UI
 │   ├── index.html
 │   ├── js/                 # アプリモジュール (IIFE パターン)

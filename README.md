@@ -16,6 +16,8 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **12 Themes** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
 - **Snippets** — one-click command input from customizable snippet list
 - **Clipboard History** — automatic clipboard tracking with system clipboard monitoring where available
+- **Quick Connect** — connect to another Den instance's terminal and files through TLS-secured relay
+- **Self-Signed TLS** — optional HTTPS/WSS with auto-generated certificates and fingerprint-based trust
 - **Authentication** — HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
 - **Self-Update** — check for updates and apply from the Settings panel (downloads from GitHub Releases)
 - **Session Persistence** — terminal sessions survive restarts; SSH bookmark sessions auto-reconnect
@@ -100,6 +102,32 @@ In development builds, `rust-embed` reads directly from the filesystem — chang
 | `DEN_LOG_LEVEL` | `debug` | `info` | Log level filter |
 | `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | same | Shell for terminal |
 | `DEN_SSH_PORT` | *(disabled)* | *(disabled)* | SSH server port (opt-in) |
+| `DEN_TLS` | `false` | `false` | Enable HTTPS/WSS (`1`, `true`, `yes`, `on`) |
+| `DEN_TLS_CERT_PATH` | *(auto-generate)* | *(auto-generate)* | Server certificate path (DER) |
+| `DEN_TLS_KEY_PATH` | *(auto-generate)* | *(auto-generate)* | Private key path (PKCS#8 DER) |
+| `DEN_TLS_SAN` | *(none)* | *(none)* | Subject Alternative Names (comma-separated) |
+
+## TLS
+
+Set `DEN_TLS=true` to serve over HTTPS/WSS. If no certificate is provided, a self-signed certificate is auto-generated in `DEN_DATA_DIR/tls/`.
+
+```powershell
+$env:DEN_TLS="true"
+$env:DEN_TLS_SAN="den-a,10.0.0.2"  # optional SANs for the self-signed cert
+```
+
+The server's TLS fingerprint is shown in Settings. When connecting to a remote Den, the fingerprint is presented for confirmation on first use (trust-on-first-use model). A fingerprint change triggers a warning.
+
+## Quick Connect
+
+Connect to another Den instance's terminal and files from your browser. Requires TLS on the remote Den.
+
+1. Open the **Remote** dropdown in the file manager (or session bar)
+2. Enter the remote Den's URL and password
+3. Confirm the TLS fingerprint on first connection
+4. Terminal sessions and files from the remote Den appear alongside local ones
+
+The connection is proxied through the local Den — your browser only talks to localhost.
 
 ## SSH Server
 
@@ -146,26 +174,27 @@ Falls back to password auth when no keys are set up.
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Browser (iPad mini / Desktop)                        │
-│  ┌──────────────────────┐ ┌────────────┐ ┌─────────┐ │
-│  │ Terminal + Floating   │ │File Manager│ │  SFTP   │ │
-│  │ (xterm.js)            │ │(CM6 + tree)│ │ connect │ │
-│  └──────────┬────────────┘ └─────┬──────┘ └────┬────┘ │
-└─────────────┼────────────────────┼─────────────┼──────┘
-              │ WebSocket          │ REST API     │ REST
-┌─────────────┼────────────────────┼─────────────┼──────┐
-│  Axum       │                    │             │      │
-│  ┌──────────┴──────────┐  ┌──────┴──────┐  ┌──┴────┐ │
-│  │ PTY (shell, ConPTY) │  │  Filer API  │  │ SFTP  │ │
-│  └─────────────────────┘  └─────────────┘  │ API   │ │
-│                                            └──┬────┘ │
-│  Static files (rust-embed)              ┌─────┴────┐ │
-│  Store (JSON persistence)               │ russh +  │ │
-│  SSH Server (russh)                     │ russh-   │ │
-│  Job Object (ConPTY cleanup)            │ sftp     │ │
-│                                         └──────────┘ │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Browser (iPad mini / Desktop)                            │
+│  ┌──────────────────────┐ ┌────────────┐ ┌─────────────┐ │
+│  │ Terminal + Floating   │ │File Manager│ │ SFTP / Quick│ │
+│  │ (xterm.js)            │ │(CM6 + tree)│ │   Connect   │ │
+│  └──────────┬────────────┘ └─────┬──────┘ └──────┬──────┘ │
+└─────────────┼────────────────────┼───────────────┼────────┘
+              │ WebSocket          │ REST API       │ REST
+┌─────────────┼────────────────────┼───────────────┼────────┐
+│  Axum (HTTP or HTTPS/WSS)        │               │        │
+│  ┌──────────┴──────────┐  ┌──────┴──────┐  ┌────┴──────┐ │
+│  │ PTY (shell, ConPTY) │  │  Filer API  │  │ SFTP API  │ │
+│  └─────────────────────┘  └─────────────┘  └───────────┘ │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │ Quick Connect Relay  →  Remote Den (HTTPS)           │ │
+│  │ (terminal + filer + WS proxy)                        │ │
+│  └──────────────────────────────────────────────────────┘ │
+│  Static files (rust-embed)    TLS (self-signed / custom)  │
+│  Store (JSON persistence)     SSH Server (russh)          │
+│  Job Object (ConPTY cleanup)  SFTP Client (russh-sftp)    │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -181,6 +210,9 @@ den/
 │   ├── store.rs            # JSON file persistence
 │   ├── store_api.rs        # Settings REST API
 │   ├── assets.rs           # Static file serving (rust-embed)
+│   ├── remote.rs           # Quick Connect relay (terminal, filer, WS)
+│   ├── tls.rs              # TLS setup, fingerprint trust API
+│   ├── update.rs           # Self-update from GitHub Releases
 │   ├── filer/              # File manager API
 │   │   └── api.rs          # Tree, read, write, search, upload, download
 │   ├── sftp/               # SFTP remote file operations
@@ -194,7 +226,8 @@ den/
 │   │   └── job.rs          # Windows Job Object (zombie prevention)
 │   └── ssh/                # Built-in SSH server
 │       ├── server.rs       # russh handler + terminal output filter
-│       └── keys.rs         # Host key generation + authorized_keys
+│       ├── keys.rs         # Host key generation + authorized_keys
+│       └── loopback.rs     # SSH self-connection detection
 ├── frontend/               # Browser UI
 │   ├── index.html
 │   ├── js/                 # App modules (IIFE pattern)
