@@ -8,7 +8,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
-    // Load .env from the executable's directory (if present)
+    // Load .env: CWD first, then executable's directory as fallback.
+    // Later values do NOT override earlier ones, so CWD takes precedence.
+    let _ = dotenvy::dotenv();
     if let Some(exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
