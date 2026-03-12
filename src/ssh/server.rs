@@ -40,6 +40,13 @@ const LOOPBACK_WARN_THRESHOLD: usize = 10;
 /// Set high enough (50) to never interfere with legitimate local SSH usage.
 const LOOPBACK_HARD_LIMIT: usize = 50;
 
+/// Default SSH port for remote Den instances.
+const DEFAULT_REMOTE_SSH_PORT: u16 = 2222;
+
+/// Username used when connecting to remote Den SSH servers.
+/// Den SSH server accepts any username (password-only auth).
+const REMOTE_SSH_USERNAME: &str = "den";
+
 /// Message type for communicating with the remote bridge task.
 enum RemoteMsg {
     Data(Vec<u8>),
@@ -73,11 +80,17 @@ fn parse_remote_target(target: &str) -> Option<(&str, u16, &str)> {
         // IPv6: [addr]:port or [addr]
         let bracket_end = host_part.find(']')?;
         let host = &host_part[1..bracket_end];
+        if host.is_empty() {
+            return None;
+        }
         let rest = &host_part[bracket_end + 1..];
-        let port = if let Some(port_str) = rest.strip_prefix(':') {
+        let port = if rest.is_empty() {
+            DEFAULT_REMOTE_SSH_PORT
+        } else if let Some(port_str) = rest.strip_prefix(':') {
             port_str.parse().ok()?
         } else {
-            2222
+            // Invalid: characters after ']' that aren't ':port'
+            return None;
         };
         Some((host, port, session_name))
     } else if let Some(colon_pos) = host_part.rfind(':') {
@@ -87,10 +100,10 @@ fn parse_remote_target(target: &str) -> Option<(&str, u16, &str)> {
             Some((&host_part[..colon_pos], port, session_name))
         } else {
             // No valid port, treat whole thing as host
-            Some((host_part, 2222, session_name))
+            Some((host_part, DEFAULT_REMOTE_SSH_PORT, session_name))
         }
     } else {
-        Some((host_part, 2222, session_name))
+        Some((host_part, DEFAULT_REMOTE_SSH_PORT, session_name))
     }
 }
 
@@ -564,6 +577,12 @@ impl DenSshHandler {
         remote_session: &str,
         session: &mut Session,
     ) -> Result<(), anyhow::Error> {
+        // Cleanup any existing bridge before starting a new one
+        self.remote_input_tx.take();
+        if let Some(task) = self.remote_bridge_task.take() {
+            task.abort();
+        }
+
         let channel_id = self
             .channel_id
             .ok_or_else(|| anyhow::anyhow!("No channel"))?;
@@ -687,7 +706,9 @@ impl russh::client::Handler for RemoteSshHandler {
                         first_seen: now,
                         last_seen: now,
                     };
-                    let _ = store.save_known_host(&hp, entry);
+                    if let Err(e) = store.save_known_host(&hp, entry) {
+                        tracing::warn!("ssh-remote: failed to save known host {hp}: {e}");
+                    }
                 });
                 Ok(true)
             }
@@ -743,7 +764,7 @@ async fn remote_bridge_task(
     let host_port = format_host_port_ssh(host, port);
 
     let config = russh::client::Config {
-        inactivity_timeout: Some(std::time::Duration::from_secs(300)),
+        inactivity_timeout: Some(SSH_INACTIVITY_TIMEOUT),
         keepalive_interval: Some(std::time::Duration::from_secs(30)),
         keepalive_max: 5,
         ..Default::default()
@@ -779,7 +800,10 @@ async fn remote_bridge_task(
     };
 
     // Try password auth first (most common: same DEN_PASSWORD on both instances)
-    let password_ok = match remote.authenticate_password("den", password).await {
+    let password_ok = match remote
+        .authenticate_password(REMOTE_SSH_USERNAME, password)
+        .await
+    {
         Ok(result) => result.success(),
         Err(e) => {
             tracing::debug!("ssh-remote: password auth error: {e}");
@@ -795,7 +819,10 @@ async fn remote_bridge_task(
                 .enable_all()
                 .build();
             let result = match rt {
-                Ok(rt) => rt.block_on(authenticate_remote_agent(remote, "den".to_string())),
+                Ok(rt) => rt.block_on(authenticate_remote_agent(
+                    remote,
+                    REMOTE_SSH_USERNAME.to_string(),
+                )),
                 Err(e) => Err(anyhow::anyhow!("{e}")),
             };
             let _ = tx.send(result);
@@ -2169,6 +2196,17 @@ mod tests {
         assert_eq!(host, "::1");
         assert_eq!(port, 4444);
         assert_eq!(session, "test");
+    }
+
+    #[test]
+    fn parse_remote_ipv6_invalid_after_bracket() {
+        // Garbage after ']' that isn't ':port'
+        assert!(parse_remote_target("[::1]garbage/session").is_none());
+    }
+
+    #[test]
+    fn parse_remote_ipv6_empty_brackets() {
+        assert!(parse_remote_target("[]/session").is_none());
     }
 
     #[test]
