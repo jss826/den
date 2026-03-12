@@ -33,13 +33,13 @@ Den currently optimizes for:
 
 Den does not assume:
 
-- a multi-user trust domain with fine-grained peer-to-peer delegation as the primary case
+- a multi-user trust domain with fine-grained delegation as the primary case
 - publicly trusted certificates for every deployment
 - automatic trust establishment without user confirmation
 
 ## Design Consequences
 
-- The old trusted-peer model is being phased out in favor of Quick Connect.
+- The old trusted-peer model has been replaced by Quick Connect.
 - Self-signed TLS is acceptable, but certificate fingerprints must be surfaced clearly.
 - Remote access flows should be explicit and user-directed.
 - Relay, when added, should be explicit and constrained rather than automatic.

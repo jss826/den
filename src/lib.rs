@@ -3,7 +3,6 @@ pub mod auth;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
-pub mod crypto;
 pub mod filer;
 pub mod port_detection;
 pub mod port_forward;

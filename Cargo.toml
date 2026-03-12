@@ -42,9 +42,6 @@ dotenvy = "0.15"
 gethostname = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio-tungstenite = "0.26"
-x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
 urlencoding = "2"
 hyper-util = { version = "0.1.20", features = ["server-auto", "http1", "http2", "tokio"] }
 tower = { version = "0.5", features = ["util"] }

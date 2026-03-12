@@ -10,7 +10,7 @@ const FloatTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentPeer = null; // remote host:port (null for local sessions)
+  let currentRemote = null; // remote host:port (null for local sessions)
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
 
@@ -19,18 +19,18 @@ const FloatTerminal = (() => {
     return info && info.mode === 'den' ? info : null;
   }
 
-  function encodeSessionTarget(name, peer) {
-    return JSON.stringify({ name, peer: peer || null });
+  function encodeSessionTarget(name, remote) {
+    return JSON.stringify({ name, remote: remote || null });
   }
 
   function decodeSessionTarget(value) {
     try {
       const parsed = JSON.parse(value);
       if (parsed && typeof parsed.name === 'string') {
-        return { name: parsed.name, peer: parsed.peer || null };
+        return { name: parsed.name, remote: parsed.remote || null };
       }
     } catch (_) { /* ignore */ }
-    return { name: value, peer: null };
+    return { name: value, remote: null };
   }
 
   /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
@@ -270,7 +270,7 @@ const FloatTerminal = (() => {
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     // Route WS through remote proxy if connected to another Den
-    const wsPath = currentPeer
+    const wsPath = currentRemote
       ? '/api/remote/ws'
       : '/api/ws';
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
@@ -464,7 +464,7 @@ const FloatTerminal = (() => {
       const target = alive.length > 0 ? alive[0] : (sessions.length > 0 ? sessions[0] : null);
       if (target) {
         currentSession = target.name;
-        currentPeer = target.peer || null;
+        currentRemote = target.remote || null;
       }
     }
 
@@ -527,10 +527,10 @@ const FloatTerminal = (() => {
   // --- Session management ---
   function switchSession(value) {
     if (!value) return;
-    const { name, peer } = decodeSessionTarget(value);
-    if (name === currentSession && peer === currentPeer) return;
+    const { name, remote } = decodeSessionTarget(value);
+    if (name === currentSession && remote === currentRemote) return;
     currentSession = name;
-    currentPeer = peer;
+    currentRemote = remote;
     if (term) term.clear();
     if (visible && !minimized) doConnect(0);
   }
@@ -552,22 +552,22 @@ const FloatTerminal = (() => {
 
   async function onKillSession() {
     if (!currentSession) return;
-    const displayName = currentPeer ? `${currentPeer}:${currentSession}` : currentSession;
+    const displayName = currentRemote ? `${currentRemote}:${currentSession}` : currentSession;
     if (!(await Toast.confirm(`Kill session "${displayName}"?`))) return;
-    const ok = await DenTerminal.destroySession(currentSession, currentPeer);
+    const ok = await DenTerminal.destroySession(currentSession, currentRemote);
     if (!ok) { Toast.error('Failed to kill session'); return; }
     currentSession = null;
-    currentPeer = null;
+    currentRemote = null;
     await DenTerminal.refreshSessionList();
   }
 
   /** Build a composite key for session identity */
   function sessionKey(s) {
-    return s.peer ? `${s.peer} / ${s.name}` : s.name;
+    return s.remote ? `${s.remote} / ${s.name}` : s.name;
   }
 
   function isCurrentSession(s) {
-    return s.name === currentSession && (s.peer || null) === currentPeer;
+    return s.name === currentSession && (s.remote || null) === currentRemote;
   }
 
   async function refreshSessionList(sessions) {
@@ -593,7 +593,7 @@ const FloatTerminal = (() => {
       sessionSelect.appendChild(opt);
       if (currentSession !== null) {
         currentSession = null;
-        currentPeer = null;
+        currentRemote = null;
         disconnect();
         if (term) term.clear();
       }
@@ -602,7 +602,7 @@ const FloatTerminal = (() => {
       const alive = sessions.filter(s => s.alive);
       const target = alive.length > 0 ? alive[0] : sessions[0];
       currentSession = target.name;
-      currentPeer = target.peer || null;
+      currentRemote = target.remote || null;
       if (term) term.clear();
       if (visible && !minimized) doConnect(0);
     }
@@ -610,17 +610,17 @@ const FloatTerminal = (() => {
     // If current session was renamed, follow DenTerminal's active session
     if (currentSession && sessions.length > 0 && !sessions.find(s => isCurrentSession(s))) {
       const mainSession = DenTerminal.getCurrentSession();
-      const mainPeer = DenTerminal.getCurrentPeer();
-      if (mainSession && sessions.find(s => s.name === mainSession && (s.peer || null) === mainPeer)) {
+      const mainRemote = DenTerminal.getCurrentRemote();
+      if (mainSession && sessions.find(s => s.name === mainSession && (s.remote || null) === mainRemote)) {
         currentSession = mainSession;
-        currentPeer = mainPeer;
+        currentRemote = mainRemote;
       }
     }
 
     if (sessions.length > 0) {
       for (const s of sessions) {
         const opt = document.createElement('option');
-        opt.value = encodeSessionTarget(s.name, s.peer);
+        opt.value = encodeSessionTarget(s.name, s.remote);
         const status = s.alive ? '' : ' (dead)';
         opt.textContent = `${sessionKey(s)}${status}`;
         if (isCurrentSession(s)) opt.selected = true;

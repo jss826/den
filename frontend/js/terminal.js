@@ -5,7 +5,7 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentPeer = null; // remote host:port (null for local sessions)
+  let currentRemote = null; // remote host:port (null for local sessions)
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
@@ -268,9 +268,9 @@ const DenTerminal = (() => {
     return term;
   }
 
-  function connect(sessionName, peerName) {
+  function connect(sessionName, remoteName) {
     currentSession = sessionName || null;
-    currentPeer = peerName || null;
+    currentRemote = remoteName || null;
     if (!currentSession) {
       disconnect();
       showEmptyState();
@@ -278,7 +278,7 @@ const DenTerminal = (() => {
       return;
     }
     hideEmptyState();
-    const displayName = currentPeer ? `${currentPeer}:${currentSession}` : currentSession;
+    const displayName = currentRemote ? `${currentRemote}:${currentSession}` : currentSession;
     DenSettings.setTitleTab('terminal', displayName);
     doConnect();
   }
@@ -303,7 +303,7 @@ const DenTerminal = (() => {
   /** Transition to sessionless (null) state */
   function enterNullState() {
     currentSession = null;
-    currentPeer = null;
+    currentRemote = null;
     DenSettings.setOscTitle('');
     DenSettings.setTitleTab('terminal', null);
     disconnect();
@@ -332,7 +332,7 @@ const DenTerminal = (() => {
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     // Route WS through remote proxy if connected to another Den
-    const wsPath = currentPeer
+    const wsPath = currentRemote
       ? '/api/remote/ws'
       : '/api/ws';
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
@@ -478,19 +478,19 @@ const DenTerminal = (() => {
   }
 
   /** セッションを切り替え */
-  function switchSession(name, peer) {
-    peer = peer || null;
-    if (!name || (name === currentSession && peer === currentPeer)) return;
+  function switchSession(name, remote) {
+    remote = remote || null;
+    if (!name || (name === currentSession && remote === currentRemote)) return;
     currentSession = name;
-    currentPeer = peer;
+    currentRemote = remote;
     hideEmptyState();
     DenSettings.setOscTitle('');
-    const displayName = peer ? `${peer}:${name}` : name;
+    const displayName = remote ? `${remote}:${name}` : name;
     DenSettings.setTitleTab('terminal', displayName);
     scheduleSessionTabsLayout({ scrollActive: true });
     term.reset();
     doConnect();
-    window.DenApp?.updateSessionHash(peer ? `${peer}:${name}` : name);
+    window.DenApp?.updateSessionHash(remote ? `${remote}:${name}` : name);
   }
 
   function sendResize() {
@@ -665,7 +665,7 @@ const DenTerminal = (() => {
     if (!sessionTabsEl) return;
     for (const tab of sessionTabsEl.querySelectorAll('.session-tab')) {
       const isActive = tab.dataset.session === currentSession
-        && (tab.dataset.peer || null) === currentPeer;
+        && (tab.dataset.remote || null) === currentRemote;
       tab.classList.toggle('active', isActive);
       tab.setAttribute('tabindex', isActive ? '0' : '-1');
       tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
@@ -714,14 +714,14 @@ const DenTerminal = (() => {
     const remoteInfo = getRemoteDenInfo();
 
     // Mark local sessions
-    const all = local.map(s => ({ ...s, peer: null }));
+    const all = local.map(s => ({ ...s, remote: null }));
     if (remoteInfo?.hostPort) {
       try {
         const r = await fetch('/api/remote/terminal/sessions', {
           credentials: 'same-origin',
         });
         if (r.ok) {
-          all.push(...(await r.json()).map(s => ({ ...s, peer: remoteInfo.hostPort, detected_ports: [] })));
+          all.push(...(await r.json()).map(s => ({ ...s, remote: remoteInfo.hostPort, detected_ports: [] })));
         }
       } catch { /* ignore */ }
     }
@@ -729,16 +729,16 @@ const DenTerminal = (() => {
   }
 
   /** Get API base path for session operations */
-  function sessionApiBase(peer) {
-    if (!peer) return '';
-    return isRemoteDenTarget(peer) ? '/api/remote' : '';
+  function sessionApiBase(remote) {
+    if (!remote) return '';
+    return isRemoteDenTarget(remote) ? '/api/remote' : '';
   }
 
-  async function createSession(name, sshConfig, peer) {
+  async function createSession(name, sshConfig, remote) {
     try {
       const body = { name };
       if (sshConfig) body.ssh = sshConfig;
-      const base = sessionApiBase(peer);
+      const base = sessionApiBase(remote);
       const resp = await fetch(`${base}/api/terminal/sessions`, {
         method: 'POST',
         credentials: 'same-origin',
@@ -751,9 +751,9 @@ const DenTerminal = (() => {
     }
   }
 
-  async function renameSession(oldName, newName, peer) {
+  async function renameSession(oldName, newName, remote) {
     try {
-      const base = sessionApiBase(peer);
+      const base = sessionApiBase(remote);
       const resp = await fetch(`${base}/api/terminal/sessions/${encodeURIComponent(oldName)}`, {
         method: 'PUT',
         credentials: 'same-origin',
@@ -766,9 +766,9 @@ const DenTerminal = (() => {
     }
   }
 
-  async function destroySession(name, peer) {
+  async function destroySession(name, remote) {
     try {
-      const base = sessionApiBase(peer);
+      const base = sessionApiBase(remote);
       const resp = await fetch(`${base}/api/terminal/sessions/${encodeURIComponent(name)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
@@ -781,7 +781,7 @@ const DenTerminal = (() => {
 
   /** Check if a session matches the current selection */
   function isCurrentSession(s) {
-    return s.name === currentSession && (s.peer || null) === currentPeer;
+    return s.name === currentSession && (s.remote || null) === currentRemote;
   }
 
   async function refreshSessionList() {
@@ -790,7 +790,7 @@ const DenTerminal = (() => {
     const sessions = await fetchAllSessions();
 
     // F004: Skip DOM rebuild when sessions haven't changed
-    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession + '|' + currentPeer;
+    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession + '|' + currentRemote;
     if (sessionsKey === lastSessionsKey) return;
     lastSessionsKey = sessionsKey;
 
@@ -803,19 +803,19 @@ const DenTerminal = (() => {
       // Recovery: sessions appeared while in empty state
       const alive = sessions.filter(s => s.alive);
       const target = alive.length > 0 ? alive[0] : sessions[0];
-      switchSession(target.name, target.peer);
+      switchSession(target.name, target.remote);
     } else if (currentSession && !sessions.find(s => isCurrentSession(s))) {
       // Current session no longer exists: switch to first alive session
       const alive = sessions.filter(s => s.alive);
       const target = alive.length > 0 ? alive[0] : sessions[0];
-      switchSession(target.name, target.peer);
+      switchSession(target.name, target.remote);
     }
 
     for (const s of sessions) {
       const tab = document.createElement('div');
       tab.className = 'session-tab';
       tab.dataset.session = s.name;
-      tab.dataset.peer = s.peer || '';
+      tab.dataset.remote = s.remote || '';
       tab.setAttribute('role', 'tab');
       const isActive = isCurrentSession(s);
       tab.setAttribute('tabindex', isActive ? '0' : '-1');
@@ -825,10 +825,10 @@ const DenTerminal = (() => {
 
       const label = document.createElement('span');
       label.className = 'session-tab-label';
-      const displayName = s.peer ? `${s.peer}:${s.name}` : s.name;
+      const displayName = s.remote ? `${s.remote}:${s.name}` : s.name;
       label.textContent = displayName;
-      label.title = s.peer
-        ? `${s.peer} — session: ${s.name}`
+      label.title = s.remote
+        ? `${s.remote} — session: ${s.name}`
         : s.name;
       tab.appendChild(label);
 
@@ -869,13 +869,13 @@ const DenTerminal = (() => {
     for (const s of sessions) {
       if (!s.detected_ports || s.detected_ports.length === 0) continue;
       // Only show ports from SSH sessions (local ports are directly accessible)
-      if (!s.ssh_host && !s.peer) continue;
-      const sessionKey = s.peer ? `${s.peer}:${s.name}` : s.name;
+      if (!s.ssh_host && !s.remote) continue;
+      const sessionKey = s.remote ? `${s.remote}:${s.name}` : s.name;
       for (const p of s.detected_ports) {
-        const key = `${s.peer || ''}:${p.port}`;
+        const key = `${s.remote || ''}:${p.port}`;
         if (!seenPorts.has(key)) {
           seenPorts.add(key);
-          allPorts.push({ ...p, session: s.name, peer: s.peer, sessionKey });
+          allPorts.push({ ...p, session: s.name, remote: s.remote, sessionKey });
         }
       }
     }
@@ -885,7 +885,7 @@ const DenTerminal = (() => {
       if (!lastKnownPorts[p.sessionKey]) lastKnownPorts[p.sessionKey] = new Set();
       if (!lastKnownPorts[p.sessionKey].has(p.port)) {
         lastKnownPorts[p.sessionKey].add(p.port);
-        const label = p.peer ? `${p.peer}:${p.port}` : `Port ${p.port}`;
+        const label = p.remote ? `${p.remote}:${p.port}` : `Port ${p.port}`;
         Toast.show(`${label} detected — click to open`, 'info', 5000, {
           onClick: () => openPort(p),
         });
@@ -899,7 +899,7 @@ const DenTerminal = (() => {
     const tab = window.open('about:blank', '_blank', 'noopener,noreferrer');
 
     // For SSH sessions, start tunnel first
-    if (!portInfo.forwarded && portInfo.peer === null && portInfo.session) {
+    if (!portInfo.forwarded && portInfo.remote === null && portInfo.session) {
       try {
         const resp = await fetch(
           `/api/terminal/sessions/${encodeURIComponent(portInfo.session)}/ports/${portInfo.port}/forward`,
@@ -938,15 +938,15 @@ const DenTerminal = (() => {
           const tab = closeBtn.closest('.session-tab');
           if (!tab) return; // F008: null guard
           const name = tab.dataset.session;
-          const peer = tab.dataset.peer || null;
-          const displayName = peer ? `${peer}:${name}` : name;
+          const remote = tab.dataset.remote || null;
+          const displayName = remote ? `${remote}:${name}` : name;
           if (!(await Toast.confirm(`Kill session "${displayName}"?`))) return;
-          const ok = await destroySession(name, peer);
+          const ok = await destroySession(name, remote);
           if (!ok) {
             Toast.error('Failed to kill session');
             return;
           }
-          if (name === currentSession && peer === currentPeer) {
+          if (name === currentSession && remote === currentRemote) {
             enterNullState();
           }
           lastSessionsKey = ''; // Force refresh
@@ -954,7 +954,7 @@ const DenTerminal = (() => {
           return;
         }
         const tab = e.target.closest('.session-tab');
-        if (tab) switchSession(tab.dataset.session, tab.dataset.peer || null);
+        if (tab) switchSession(tab.dataset.session, tab.dataset.remote || null);
       });
 
       // Rename session on double-click
@@ -962,7 +962,7 @@ const DenTerminal = (() => {
         const tab = e.target.closest('.session-tab');
         if (!tab || e.target.closest('.session-tab-close')) return;
         const oldName = tab.dataset.session;
-        const peer = tab.dataset.peer || null;
+        const remote = tab.dataset.remote || null;
         const newName = await Toast.prompt('Rename session:', oldName);
         if (!newName || !newName.trim() || newName.trim() === oldName) return;
         const trimmed = newName.trim();
@@ -971,14 +971,14 @@ const DenTerminal = (() => {
           Toast.error(validationError);
           return;
         }
-        const ok = await renameSession(oldName, trimmed, peer);
+        const ok = await renameSession(oldName, trimmed, remote);
         if (!ok) {
           Toast.error('Failed to rename session');
           return;
         }
-        if (oldName === currentSession && peer === currentPeer) {
+        if (oldName === currentSession && remote === currentRemote) {
           currentSession = trimmed;
-          const hash = peer ? `${peer}:${trimmed}` : trimmed;
+          const hash = remote ? `${remote}:${trimmed}` : trimmed;
           window.DenApp?.updateSessionHash(hash);
         }
         lastSessionsKey = '';
@@ -1000,7 +1000,7 @@ const DenTerminal = (() => {
           target = tabs[(idx - 1 + tabs.length) % tabs.length];
         } else if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          switchSession(tab.dataset.session, tab.dataset.peer || null);
+          switchSession(tab.dataset.session, tab.dataset.remote || null);
           return;
         } else {
           return;
@@ -1054,7 +1054,7 @@ const DenTerminal = (() => {
           nextIdx = (activeIdx - 1 + tabs.length) % tabs.length;
         }
         const target = tabs[nextIdx];
-        switchSession(target.dataset.session, target.dataset.peer || null);
+        switchSession(target.dataset.session, target.dataset.remote || null);
       }, { passive: true });
     }
 
@@ -1243,13 +1243,13 @@ const DenTerminal = (() => {
     return null;
   }
 
-  function getCurrentPeer() {
-    return currentPeer;
+  function getCurrentRemote() {
+    return currentRemote;
   }
 
   return {
     init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
-    getCurrentSession, getCurrentPeer, switchSession, refreshSessionList, initSessionBar,
+    getCurrentSession, getCurrentRemote, switchSession, refreshSessionList, initSessionBar,
     fetchSessions, fetchAllSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,
     validateSessionName,

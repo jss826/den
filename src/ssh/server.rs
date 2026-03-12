@@ -666,7 +666,7 @@ impl Handler for DenSshHandler {
                     session.data(
                         channel,
                         CryptoVec::from_slice(
-                            b"Remote peer attach has been removed. Use Quick Connect from the UI.\r\n",
+                            b"Remote attach has been removed. Use Quick Connect from the UI.\r\n",
                         ),
                     )?;
                     session.close(channel)?;
