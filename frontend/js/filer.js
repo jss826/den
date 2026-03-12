@@ -81,6 +81,13 @@ const DenFiler = (() => {
     const sftpSubmit = document.getElementById('sftp-connect-submit');
     if (sftpSubmit) sftpSubmit.addEventListener('click', doSftpConnect);
 
+    const denCancel = document.getElementById('den-connect-cancel');
+    if (denCancel) denCancel.addEventListener('click', () => {
+      document.getElementById('den-connect-modal').hidden = true;
+    });
+    const denSubmit = document.getElementById('den-connect-submit');
+    if (denSubmit) denSubmit.addEventListener('click', doDenConnect);
+
     // SSH Bookmarks
     const bookmarkSelect = document.getElementById('sftp-bookmark-select');
     if (bookmarkSelect) bookmarkSelect.addEventListener('change', onBookmarkSelect);
@@ -216,7 +223,11 @@ const DenFiler = (() => {
     const btn = document.getElementById('filer-remote-btn');
     if (!btn) return;
     const info = FilerRemote.getInfo();
-    if (info.mode === 'peer') {
+    if (info.mode === 'den') {
+      btn.textContent = info.hostPort || 'Remote Den';
+      btn.classList.add('active');
+      btn.setAttribute('data-tooltip', 'Connected to remote Den');
+    } else if (info.mode === 'peer') {
       btn.textContent = info.peerName;
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', 'Connected to peer');
@@ -247,7 +258,9 @@ const DenFiler = (() => {
     // Disconnect option if connected
     if (FilerRemote.isRemote()) {
       const info = FilerRemote.getInfo();
-      const label = info.mode === 'peer' ? info.peerName : `${info.username}@${info.host}`;
+      const label = info.mode === 'den'
+        ? (info.hostPort || 'remote Den')
+        : (info.mode === 'peer' ? info.peerName : `${info.username}@${info.host}`);
       const disconnItem = document.createElement('div');
       disconnItem.className = 'new-session-menu-item disconnect';
       disconnItem.textContent = `Disconnect ${label}`;
@@ -255,6 +268,8 @@ const DenFiler = (() => {
         closeRemoteDropdown();
         if (info.mode === 'sftp') {
           doDisconnect();
+        } else if (info.mode === 'den') {
+          doDenDisconnect();
         } else {
           FilerRemote.disconnectPeer();
         }
@@ -265,6 +280,19 @@ const DenFiler = (() => {
       sep.className = 'new-session-menu-separator';
       menu.appendChild(sep);
     }
+
+    const denItem = document.createElement('div');
+    denItem.className = 'new-session-menu-item';
+    denItem.textContent = 'Quick Connect Den\u2026';
+    denItem.addEventListener('click', () => {
+      closeRemoteDropdown();
+      showDenModal();
+    });
+    menu.appendChild(denItem);
+
+    const denSep = document.createElement('div');
+    denSep.className = 'new-session-menu-separator';
+    menu.appendChild(denSep);
 
     // SFTP Connect
     const sftpItem = document.createElement('div');
@@ -433,6 +461,17 @@ const DenFiler = (() => {
     document.getElementById('sftp-host').focus();
   }
 
+  function showDenModal(defaultUrl) {
+    const modal = document.getElementById('den-connect-modal');
+    if (!modal) return;
+    const urlInput = document.getElementById('den-connect-url');
+    const passwordInput = document.getElementById('den-connect-password');
+    urlInput.value = defaultUrl || '';
+    passwordInput.value = '';
+    modal.hidden = false;
+    urlInput.focus();
+  }
+
   function updateAuthFields() {
     const authType = document.getElementById('sftp-auth-type').value;
     document.getElementById('sftp-password-field').hidden = authType !== 'password';
@@ -466,9 +505,37 @@ const DenFiler = (() => {
     });
   }
 
+  async function doDenConnect() {
+    const url = document.getElementById('den-connect-url').value.trim();
+    const password = document.getElementById('den-connect-password').value;
+    if (!url || !password) {
+      Toast.error('URL and password are required');
+      return;
+    }
+
+    const submitBtn = document.getElementById('den-connect-submit');
+    await Spinner.button(submitBtn, async () => {
+      try {
+        const data = await FilerRemote.connectDen(url, password);
+        document.getElementById('den-connect-modal').hidden = true;
+        Toast.success(`Connected to ${data.host_port || url}`);
+      } catch (e) {
+        if (e.message !== 'Connection cancelled') {
+          Toast.error(e.message || 'Connection failed');
+        }
+      }
+    });
+  }
+
   async function doDisconnect() {
     if (!(await Toast.confirm('Disconnect from remote SFTP?'))) return;
     await FilerRemote.disconnect();
+    Toast.success('Disconnected');
+  }
+
+  async function doDenDisconnect() {
+    if (!(await Toast.confirm('Disconnect from remote Den?'))) return;
+    await FilerRemote.disconnectDen();
     Toast.success('Disconnected');
   }
 

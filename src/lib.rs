@@ -10,6 +10,7 @@ pub mod port_detection;
 pub mod port_forward;
 pub mod port_monitor;
 pub mod pty;
+pub mod remote;
 pub mod sftp;
 pub mod ssh;
 pub mod store;
@@ -36,6 +37,7 @@ pub struct AppState {
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
     pub peer_registry: Arc<peer::PeerRegistry>,
+    pub remote_manager: Arc<remote::RemoteManager>,
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
@@ -82,6 +84,7 @@ pub fn create_app_with_secret(
     let sftp_manager = sftp::client::SftpManager::new(store.clone());
 
     let port_monitor = Arc::new(port_monitor::PortMonitor::new());
+    let remote_manager = Arc::new(remote::RemoteManager::default());
     let mut exclude_ports = vec![config.port];
     if let Some(ssh_port) = config.ssh_port {
         exclude_ports.push(ssh_port);
@@ -108,6 +111,7 @@ pub fn create_app_with_secret(
         rate_limiter: auth::LoginRateLimiter::new(),
         sftp_manager,
         peer_registry,
+        remote_manager,
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
@@ -137,6 +141,30 @@ pub fn create_app_with_secret(
                 .post(tls::trust)
                 .delete(tls::remove_trusted),
         )
+        .route(
+            "/api/remote/connect",
+            post(remote::connect),
+        )
+        .route("/api/remote/status", get(remote::status))
+        .route("/api/remote/disconnect", post(remote::disconnect))
+        .route(
+            "/api/remote/terminal/sessions",
+            get(remote::proxy_list_sessions).post(remote::proxy_create_session),
+        )
+        .route(
+            "/api/remote/terminal/sessions/{session}",
+            put(remote::proxy_rename_session).delete(remote::proxy_delete_session),
+        )
+        .route("/api/remote/ws", get(remote::ws_relay_handler))
+        .route("/api/remote/filer/list", get(remote::proxy_filer_list))
+        .route("/api/remote/filer/read", get(remote::proxy_filer_read))
+        .route("/api/remote/filer/write", put(remote::proxy_filer_write))
+        .route("/api/remote/filer/mkdir", post(remote::proxy_filer_mkdir))
+        .route("/api/remote/filer/rename", post(remote::proxy_filer_rename))
+        .route("/api/remote/filer/upload", post(remote::proxy_filer_upload))
+        .route("/api/remote/filer/download", get(remote::proxy_filer_download))
+        .route("/api/remote/filer/delete", delete(remote::proxy_filer_delete))
+        .route("/api/remote/filer/search", get(remote::proxy_filer_search))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::user_auth_middleware,

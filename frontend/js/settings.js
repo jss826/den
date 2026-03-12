@@ -548,15 +548,7 @@ const DenSettings = (() => {
     const snippetAddForm = document.getElementById('snippet-add-form');
     if (snippetAddForm) snippetAddForm.hidden = true;
 
-    // Peers settings
-    const peerNameInput = document.getElementById('setting-peer-name');
-    if (peerNameInput) peerNameInput.value = current.peer_name || '';
-    const peerInviteDisplay = document.getElementById('peer-invite-display');
-    if (peerInviteDisplay) peerInviteDisplay.hidden = true;
-    const peerJoinForm = document.getElementById('peer-join-form');
-    if (peerJoinForm) peerJoinForm.hidden = true;
     latestVersion = null; // refetch on each modal open
-    loadPeerList().then(peers => initSettingsSync(peers));
 
     const verText = document.getElementById('settings-version-text');
     if (verText && current.version) verText.textContent = 'Den v' + current.version;
@@ -620,9 +612,6 @@ const DenSettings = (() => {
       const sleepTimeoutEl = document.getElementById('setting-sleep-timeout');
       const sleepTimeout = sleepTimeoutEl ? Math.max(1, Math.min(480, parseInt(sleepTimeoutEl.value, 10) || 30)) : 30;
 
-      const peerNameEl = document.getElementById('setting-peer-name');
-      const peerName = peerNameEl ? (peerNameEl.value.trim() || null) : null;
-
       Spinner.button(saveBtn, async () => {
         const ok = await save({
           font_size: Math.max(8, Math.min(32, fontSize)),
@@ -634,7 +623,6 @@ const DenSettings = (() => {
           snippets: snippets,
           sleep_prevention_mode: sleepMode,
           sleep_prevention_timeout: sleepTimeout,
-          peer_name: peerName,
         });
         if (!ok) return;
         apply();
@@ -1013,8 +1001,6 @@ const DenSettings = (() => {
       snippetAddForm.hidden = true;
     });
 
-    // --- Peer management ---
-    bindPeerUI();
   }
 
   // --- Peer management functions ---

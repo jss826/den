@@ -8,6 +8,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginError = document.getElementById('login-error');
 
   let filerInitialized = false;
+  let remoteDisconnectBound = false;
+
+  function sendRemoteDisconnectKeepalive() {
+    try {
+      fetch('/api/remote/disconnect', {
+        method: 'POST',
+        credentials: 'same-origin',
+        keepalive: true,
+      }).catch(() => {});
+    } catch { /* ignore */ }
+  }
+
+  function ensureRemoteDisconnectHooks() {
+    if (remoteDisconnectBound) return;
+    remoteDisconnectBound = true;
+    window.addEventListener('pagehide', sendRemoteDisconnectKeepalive);
+    window.addEventListener('beforeunload', sendRemoteDisconnectKeepalive);
+  }
 
   // ログイン処理
   loginForm.addEventListener('submit', async (e) => {
@@ -53,7 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal'];
+  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
   const allModals = ['confirm-modal', 'prompt-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
@@ -198,6 +216,11 @@ document.addEventListener('DOMContentLoaded', () => {
   async function showMain() {
     loginScreen.hidden = true;
     mainScreen.hidden = false;
+
+    // Quick Connect state is memory-only. A fresh page load should not inherit
+    // any previous remote Den attachment from the server process.
+    sendRemoteDisconnectKeepalive();
+    ensureRemoteDisconnectHooks();
 
     // ツールチップ初期化
     initTooltip();

@@ -1,3 +1,4 @@
+/* global FilerRemote */
 // Den - ターミナルモジュール
 const DenTerminal = (() => {
   let term = null;
@@ -12,6 +13,16 @@ const DenTerminal = (() => {
   let peerColorMap = {}; // peer name → color
   let cachedPeers = []; // last fetched peer list
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
+
+  function getRemoteDenInfo() {
+    const info = window.FilerRemote?.getInfo?.();
+    return info && info.mode === 'den' ? info : null;
+  }
+
+  function isRemoteDenTarget(target) {
+    const info = getRemoteDenInfo();
+    return !!info && target === info.hostPort;
+  }
 
   /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
   function mergeChunks(chunks) {
@@ -327,7 +338,9 @@ const DenTerminal = (() => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     // Route WS through peer proxy if remote session
     const wsPath = currentPeer
-      ? `/api/peers/${encodeURIComponent(currentPeer)}/ws`
+      ? (isRemoteDenTarget(currentPeer)
+        ? '/api/remote/ws'
+        : `/api/peers/${encodeURIComponent(currentPeer)}/ws`)
       : '/api/ws';
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
@@ -710,6 +723,7 @@ const DenTerminal = (() => {
   async function fetchAllSessions() {
     const [local, peers] = await Promise.all([fetchSessions(), fetchPeers()]);
     cachedPeers = peers;
+    const remoteInfo = getRemoteDenInfo();
 
     // Update peer color map
     const connected = peers.filter(p => p.status === 'connected');
@@ -730,12 +744,23 @@ const DenTerminal = (() => {
       } catch { return []; }
     }));
     for (const rs of remotes) all.push(...rs);
+    if (remoteInfo?.hostPort) {
+      try {
+        const r = await fetch('/api/remote/terminal/sessions', {
+          credentials: 'same-origin',
+        });
+        if (r.ok) {
+          all.push(...(await r.json()).map(s => ({ ...s, peer: remoteInfo.hostPort, detected_ports: [] })));
+        }
+      } catch { /* ignore */ }
+    }
     return all;
   }
 
   /** Get API base path for session operations */
   function sessionApiBase(peer) {
     if (!peer) return '';
+    if (isRemoteDenTarget(peer)) return '/api/remote';
     return `/api/peers/${encodeURIComponent(peer)}`;
   }
 
@@ -1111,6 +1136,11 @@ const DenTerminal = (() => {
         sessionRefreshTimer = setInterval(refreshSessionList, 5000);
       }
     });
+
+    document.addEventListener('den:remote-changed', () => {
+      lastSessionsKey = '';
+      refreshSessionList();
+    });
   }
 
   /** Generate a unique session name from a base, appending -2, -3, etc. if needed. */
@@ -1188,6 +1218,48 @@ const DenTerminal = (() => {
         });
         menu.appendChild(newItem);
       }
+    }
+
+    const remoteInfo = getRemoteDenInfo();
+    if (remoteInfo?.hostPort) {
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      sep.textContent = `Remote ${remoteInfo.hostPort}`;
+      menu.appendChild(sep);
+
+      const newItem = document.createElement('div');
+      newItem.className = 'new-session-menu-item';
+      newItem.textContent = 'New Terminal';
+      newItem.addEventListener('click', async () => {
+        closeMenu();
+        const name = await Toast.prompt('Session name:');
+        if (!name || !name.trim()) return;
+        const trimmed = name.trim();
+        const validationError = validateSessionName(trimmed);
+        if (validationError) { Toast.error(validationError); return; }
+        const ok = await createSession(trimmed, null, remoteInfo.hostPort);
+        if (!ok) { Toast.error('Failed to create remote session'); return; }
+        lastSessionsKey = '';
+        await refreshSessionList();
+        switchSession(trimmed, remoteInfo.hostPort);
+      });
+      menu.appendChild(newItem);
+    } else {
+      const quickItem = document.createElement('div');
+      quickItem.className = 'new-session-menu-item';
+      quickItem.textContent = 'Quick Connect Den…';
+      quickItem.addEventListener('click', () => {
+        closeMenu();
+        const modal = document.getElementById('den-connect-modal');
+        const urlInput = document.getElementById('den-connect-url');
+        const passwordInput = document.getElementById('den-connect-password');
+        if (!modal || !urlInput || !passwordInput) return;
+        urlInput.value = '';
+        passwordInput.value = '';
+        modal.hidden = false;
+        urlInput.focus();
+      });
+      menu.appendChild(quickItem);
     }
 
     // SSH bookmarks

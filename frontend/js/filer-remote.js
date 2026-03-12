@@ -1,13 +1,15 @@
-// Den - Remote file source management (SFTP + Peer)
+// Den - Remote file source management (SFTP + Remote Den + Peer legacy)
 // eslint-disable-next-line no-unused-vars
 const FilerRemote = (() => {
-  // mode: 'local' | 'sftp' | 'peer'
+  // mode: 'local' | 'sftp' | 'den' | 'peer'
   let mode = 'local';
   let hostInfo = null; // { host, username } for SFTP
+  let denInfo = null; // { url, hostPort, fingerprint } for Quick Connect
   let peerName = null; // peer name when mode === 'peer'
 
   /** Current API base path */
   function getApiBase() {
+    if (mode === 'den') return '/api/remote/filer';
     if (mode === 'peer') return `/api/peers/${encodeURIComponent(peerName)}/filer`;
     if (mode === 'sftp') return '/api/sftp';
     return '/api/filer';
@@ -20,6 +22,18 @@ const FilerRemote = (() => {
 
   /** Current connection info */
   function getInfo() {
+    if (mode === 'den') {
+      return {
+        connected: true,
+        mode: 'den',
+        url: denInfo?.url || null,
+        hostPort: denInfo?.hostPort || null,
+        fingerprint: denInfo?.fingerprint || null,
+        peerName: null,
+        host: null,
+        username: null,
+      };
+    }
     if (mode === 'peer') {
       return { connected: true, mode: 'peer', peerName, host: null, username: null };
     }
@@ -29,9 +43,74 @@ const FilerRemote = (() => {
     return { connected: false, mode: 'local', peerName: null, host: null, username: null };
   }
 
+  /** Connect to another Den over HTTPS/WSS */
+  async function connectDen(url, password) {
+    if (mode === 'sftp') await disconnectSftpSilent();
+    if (mode === 'peer') disconnectPeer();
+    if (mode === 'den') await disconnectDenSilent();
+
+    let resp = await doDenConnectFetch(url, password);
+    if (resp.status === 409) {
+      const errData = await resp.json().catch(() => ({}));
+      if (errData.host_port && errData.fingerprint
+          && (errData.error === 'untrusted_tls_certificate' || errData.error === 'tls_fingerprint_mismatch')) {
+        const accepted = await DenTlsTrust.confirmAndStore({
+          hostPort: errData.host_port,
+          fingerprint: errData.fingerprint,
+          expectedFingerprint: errData.expected_fingerprint || null,
+        });
+        if (!accepted) throw new Error('Connection cancelled');
+        resp = await doDenConnectFetch(url, password);
+      }
+    }
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'Connection failed' }));
+      throw new Error(err.error || 'Connection failed');
+    }
+
+    const data = await resp.json();
+    mode = 'den';
+    denInfo = {
+      url: data.url || url,
+      hostPort: data.host_port || null,
+      fingerprint: data.fingerprint || null,
+    };
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
+    return data;
+  }
+
+  function doDenConnectFetch(url, password) {
+    return fetch('/api/remote/connect', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, password }),
+    });
+  }
+
+  async function disconnectDenSilent() {
+    await fetch('/api/remote/disconnect', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+    mode = 'local';
+    denInfo = null;
+  }
+
+  async function disconnectDen() {
+    try {
+      await fetch('/api/remote/disconnect', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+    } catch { /* ignore */ }
+    mode = 'local';
+    denInfo = null;
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
+  }
+
   /** Connect to a peer's file system */
   async function connectPeer(name) {
     if (mode === 'sftp') await disconnectSftpSilent();
+    if (mode === 'den') await disconnectDenSilent();
     mode = 'peer';
     peerName = name;
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'peer', peerName: name } }));
@@ -41,12 +120,14 @@ const FilerRemote = (() => {
   function disconnectPeer() {
     mode = 'local';
     peerName = null;
+    denInfo = null;
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
   /** SFTP connect */
   async function connect(host, port, username, authType, password, keyPath) {
     if (mode === 'peer') disconnectPeer();
+    if (mode === 'den') await disconnectDenSilent();
     const body = { host, port: port || 22, username, auth_type: authType };
     if (authType === 'password') body.password = password;
     if (authType === 'key') body.key_path = keyPath;
@@ -169,6 +250,7 @@ const FilerRemote = (() => {
     await fetch('/api/sftp/disconnect', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
     mode = 'local';
     hostInfo = null;
+    denInfo = null;
   }
 
   /** SFTP disconnect */
@@ -181,6 +263,7 @@ const FilerRemote = (() => {
     } catch { /* ignore */ }
     mode = 'local';
     hostInfo = null;
+    denInfo = null;
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
@@ -198,5 +281,16 @@ const FilerRemote = (() => {
     } catch { /* ignore */ }
   }
 
-  return { getApiBase, isRemote, getInfo, connect, disconnect, connectPeer, disconnectPeer, checkStatus };
+  return {
+    getApiBase,
+    isRemote,
+    getInfo,
+    connect,
+    disconnect,
+    connectDen,
+    disconnectDen,
+    connectPeer,
+    disconnectPeer,
+    checkStatus,
+  };
 })();
