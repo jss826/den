@@ -123,12 +123,6 @@ pub fn create_app_with_secret(
     let public_routes = Router::new()
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
-        // Peer pairing endpoint: authenticated by invite code, not user token
-        .route("/api/peers/pair", post(peer::pair))
-        // Peer RPC endpoint: authenticated by encryption, not user token
-        .route("/api/peer-rpc", post(peer::peer_rpc))
-        // Peer encrypted WebSocket: authenticated by encryption
-        .route("/api/peer-ws", get(peer::peer_ws))
         .route("/api/system/tls", get(tls::status))
         .route("/api/system/tls/certificate", get(tls::certificate))
         .route("/", get(assets::serve_index))
@@ -219,65 +213,8 @@ pub fn create_app_with_secret(
         .route("/api/sftp/download", get(sftp::api::download))
         .route("/api/sftp/upload", post(sftp::api::upload))
         .route("/api/sftp/search", get(sftp::api::search))
-        // Peer management API
-        .route("/api/peers/invite", post(peer::create_invite))
-        .route("/api/peers/join", post(peer::join))
-        .route("/api/peers", get(peer::list_peers))
-        .route("/api/peers/{name}", delete(peer::delete_peer))
-        .route("/api/peers/{name}/scope", put(peer::update_peer_scope))
-        // Peer settings proxy API
-        .route(
-            "/api/peers/{name}/settings",
-            get(peer::proxy_get_settings).put(peer::proxy_put_settings),
-        )
-        // Peer terminal proxy API
-        .route(
-            "/api/peers/{name}/terminal/sessions",
-            get(peer::proxy_list_sessions).post(peer::proxy_create_session),
-        )
-        .route(
-            "/api/peers/{name}/terminal/sessions/{session}",
-            put(peer::proxy_rename_session).delete(peer::proxy_delete_session),
-        )
-        .route("/api/peers/{name}/ws", get(peer::ws_relay_handler))
-        // Peer filer proxy API
-        .route("/api/peers/{name}/filer/list", get(peer::proxy_filer_list))
-        .route("/api/peers/{name}/filer/read", get(peer::proxy_filer_read))
-        .route(
-            "/api/peers/{name}/filer/write",
-            put(peer::proxy_filer_write),
-        )
-        .route(
-            "/api/peers/{name}/filer/upload",
-            post(peer::proxy_filer_upload),
-        )
-        .route(
-            "/api/peers/{name}/filer/download",
-            get(peer::proxy_filer_download),
-        )
-        .route(
-            "/api/peers/{name}/filer/mkdir",
-            post(peer::proxy_filer_mkdir),
-        )
-        .route(
-            "/api/peers/{name}/filer/rename",
-            post(peer::proxy_filer_rename),
-        )
-        .route(
-            "/api/peers/{name}/filer/delete",
-            delete(peer::proxy_filer_delete),
-        )
-        .route(
-            "/api/peers/{name}/filer/search",
-            get(peer::proxy_filer_search),
-        )
         // Port detection API (system-level + PTY combined)
         .route("/api/ports", get(ws::list_all_ports))
-        // Peer port proxy API
-        .route("/api/peers/{name}/ports", get(peer::proxy_list_ports))
-        // Peer system proxy API (version check + update)
-        .route("/api/peers/{name}/system/version", get(peer::proxy_version))
-        .route("/api/peers/{name}/system/update", post(peer::proxy_update))
         // Port forwarding API
         .route("/api/terminal/sessions/{name}/ports", get(ws::list_ports))
         .route(
@@ -304,31 +241,6 @@ pub fn create_app_with_secret(
         // WebSocket proxy for forwarded ports
         .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
         .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
-        // Remote peer port proxy (HTTP + WebSocket)
-        .route(
-            "/fwd/peer/{peer}/{port}",
-            get(port_forward::fwd_peer_proxy_root)
-                .post(port_forward::fwd_peer_proxy_root)
-                .put(port_forward::fwd_peer_proxy_root)
-                .delete(port_forward::fwd_peer_proxy_root)
-                .patch(port_forward::fwd_peer_proxy_root),
-        )
-        .route(
-            "/fwd/peer/{peer}/{port}/{*path}",
-            get(port_forward::fwd_peer_proxy)
-                .post(port_forward::fwd_peer_proxy)
-                .put(port_forward::fwd_peer_proxy)
-                .delete(port_forward::fwd_peer_proxy)
-                .patch(port_forward::fwd_peer_proxy),
-        )
-        .route(
-            "/fwd-ws/peer/{peer}/{port}",
-            get(port_forward::fwd_peer_ws_proxy_root),
-        )
-        .route(
-            "/fwd-ws/peer/{peer}/{port}/{*path}",
-            get(port_forward::fwd_peer_ws_proxy),
-        )
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

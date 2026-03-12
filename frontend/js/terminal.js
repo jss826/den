@@ -5,13 +5,8 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentPeer = null; // peer name (null for local sessions)
+  let currentPeer = null; // remote host:port (null for local sessions)
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
-
-  // Peer color palette for remote session tab indicators
-  const PEER_COLORS = ['#7aa2f7','#9ece6a','#e0af68','#bb9af7','#7dcfff','#f7768e','#ff9e64','#73daca'];
-  let peerColorMap = {}; // peer name → color
-  let cachedPeers = []; // last fetched peer list
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
   function getRemoteDenInfo() {
@@ -336,11 +331,9 @@ const DenTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Route WS through peer proxy if remote session
+    // Route WS through remote proxy if connected to another Den
     const wsPath = currentPeer
-      ? (isRemoteDenTarget(currentPeer)
-        ? '/api/remote/ws'
-        : `/api/peers/${encodeURIComponent(currentPeer)}/ws`)
+      ? '/api/remote/ws'
       : '/api/ws';
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
@@ -715,35 +708,13 @@ const DenTerminal = (() => {
     return [];
   }
 
-  async function fetchPeers() {
-    return PeerCache.get();
-  }
-
-  /** Fetch sessions from local + all connected peers */
+  /** Fetch sessions from local + current remote Den */
   async function fetchAllSessions() {
-    const [local, peers] = await Promise.all([fetchSessions(), fetchPeers()]);
-    cachedPeers = peers;
+    const local = await fetchSessions();
     const remoteInfo = getRemoteDenInfo();
-
-    // Update peer color map
-    const connected = peers.filter(p => p.status === 'connected');
-    peerColorMap = {};
-    connected.forEach((p, i) => { peerColorMap[p.name] = PEER_COLORS[i % PEER_COLORS.length]; });
 
     // Mark local sessions
     const all = local.map(s => ({ ...s, peer: null }));
-
-    // Fetch remote sessions in parallel
-    const remotes = await Promise.all(connected.map(async (p) => {
-      try {
-        const r = await fetch(`/api/peers/${encodeURIComponent(p.name)}/terminal/sessions`, {
-          credentials: 'same-origin',
-        });
-        if (!r.ok) return [];
-        return (await r.json()).map(s => ({ ...s, peer: p.name }));
-      } catch { return []; }
-    }));
-    for (const rs of remotes) all.push(...rs);
     if (remoteInfo?.hostPort) {
       try {
         const r = await fetch('/api/remote/terminal/sessions', {
@@ -760,8 +731,7 @@ const DenTerminal = (() => {
   /** Get API base path for session operations */
   function sessionApiBase(peer) {
     if (!peer) return '';
-    if (isRemoteDenTarget(peer)) return '/api/remote';
-    return `/api/peers/${encodeURIComponent(peer)}`;
+    return isRemoteDenTarget(peer) ? '/api/remote' : '';
   }
 
   async function createSession(name, sshConfig, peer) {
@@ -853,12 +823,6 @@ const DenTerminal = (() => {
       if (isActive) tab.classList.add('active');
       if (!s.alive) tab.classList.add('dead');
 
-      // Peer color indicator
-      if (s.peer && peerColorMap[s.peer]) {
-        tab.classList.add('peer-session');
-        tab.style.setProperty('--peer-color', peerColorMap[s.peer]);
-      }
-
       const label = document.createElement('span');
       label.className = 'session-tab-label';
       const displayName = s.peer ? `${s.peer}:${s.name}` : s.name;
@@ -916,26 +880,6 @@ const DenTerminal = (() => {
       }
     }
 
-    // Fetch remote peer ports in parallel (F001)
-    const connectedPeers = (cachedPeers || []).filter(p => p.status === 'connected');
-    const peerResults = await Promise.all(connectedPeers.map(async (peer) => {
-      try {
-        const resp = await fetch(`/api/peers/${encodeURIComponent(peer.name)}/ports`, { credentials: 'same-origin' });
-        if (resp.ok) return { peer: peer.name, ports: await resp.json() };
-      } catch { /* ignore */ }
-      return null;
-    }));
-    for (const result of peerResults) {
-      if (!result) continue;
-      for (const rp of result.ports) {
-        const key = `${result.peer}:${rp.port}`;
-        if (!seenPorts.has(key)) {
-          seenPorts.add(key);
-          allPorts.push({ port: rp.port, forwarded: false, session: rp.session || null, peer: result.peer, sessionKey: `${result.peer}:${rp.session || 'system'}`, source: rp.source || 'system' });
-        }
-      }
-    }
-
     // Show clickable toast for newly detected ports
     for (const p of allPorts) {
       if (!lastKnownPorts[p.sessionKey]) lastKnownPorts[p.sessionKey] = new Set();
@@ -951,9 +895,7 @@ const DenTerminal = (() => {
 
   async function openPort(portInfo) {
     // Open tab first to avoid popup blocker after await (F004)
-    const url = portInfo.peer
-      ? `/fwd/peer/${encodeURIComponent(portInfo.peer)}/${portInfo.port}/`
-      : `/fwd/${portInfo.port}/`;
+    const url = `/fwd/${portInfo.port}/`;
     const tab = window.open('about:blank', '_blank', 'noopener,noreferrer');
 
     // For SSH sessions, start tunnel first
@@ -1186,39 +1128,6 @@ const DenTerminal = (() => {
       switchSession(trimmed);
     });
     menu.appendChild(localItem);
-
-    // Connected peers
-    const connectedPeers = cachedPeers.filter(p => p.status === 'connected');
-    if (connectedPeers.length > 0) {
-      for (const p of connectedPeers) {
-        const sep = document.createElement('div');
-        sep.className = 'new-session-menu-separator';
-        const dot = document.createElement('span');
-        dot.className = 'peer-color-dot';
-        dot.style.background = peerColorMap[p.name] || PEER_COLORS[0];
-        sep.appendChild(dot);
-        sep.appendChild(document.createTextNode(` ${p.name}`));
-        menu.appendChild(sep);
-
-        const newItem = document.createElement('div');
-        newItem.className = 'new-session-menu-item';
-        newItem.textContent = 'New Terminal';
-        newItem.addEventListener('click', async () => {
-          closeMenu();
-          const name = await Toast.prompt('Session name:');
-          if (!name || !name.trim()) return;
-          const trimmed = name.trim();
-          const validationError = validateSessionName(trimmed);
-          if (validationError) { Toast.error(validationError); return; }
-          const ok = await createSession(trimmed, null, p.name);
-          if (!ok) { Toast.error('Failed to create remote session'); return; }
-          lastSessionsKey = '';
-          await refreshSessionList();
-          switchSession(trimmed, p.name);
-        });
-        menu.appendChild(newItem);
-      }
-    }
 
     const remoteInfo = getRemoteDenInfo();
     if (remoteInfo?.hostPort) {

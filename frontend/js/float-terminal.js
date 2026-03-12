@@ -10,9 +10,28 @@ const FloatTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentPeer = null; // peer name (null for local sessions)
+  let currentPeer = null; // remote host:port (null for local sessions)
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
+
+  function getRemoteDenInfo() {
+    const info = window.FilerRemote?.getInfo?.();
+    return info && info.mode === 'den' ? info : null;
+  }
+
+  function encodeSessionTarget(name, peer) {
+    return JSON.stringify({ name, peer: peer || null });
+  }
+
+  function decodeSessionTarget(value) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed.name === 'string') {
+        return { name: parsed.name, peer: parsed.peer || null };
+      }
+    } catch (_) { /* ignore */ }
+    return { name: value, peer: null };
+  }
 
   /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
   function mergeChunks(chunks) {
@@ -250,9 +269,9 @@ const FloatTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Route WS through peer proxy if remote session
+    // Route WS through remote proxy if connected to another Den
     const wsPath = currentPeer
-      ? `/api/peers/${encodeURIComponent(currentPeer)}/ws`
+      ? '/api/remote/ws'
       : '/api/ws';
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
@@ -508,16 +527,7 @@ const FloatTerminal = (() => {
   // --- Session management ---
   function switchSession(value) {
     if (!value) return;
-    // Parse "peer:session" or "session" format
-    let name, peer;
-    const idx = value.indexOf(':');
-    if (idx > 0 && value.substring(0, idx).match(/^[a-zA-Z0-9_-]+$/)) {
-      peer = value.substring(0, idx);
-      name = value.substring(idx + 1);
-    } else {
-      peer = null;
-      name = value;
-    }
+    const { name, peer } = decodeSessionTarget(value);
     if (name === currentSession && peer === currentPeer) return;
     currentSession = name;
     currentPeer = peer;
@@ -553,7 +563,7 @@ const FloatTerminal = (() => {
 
   /** Build a composite key for session identity */
   function sessionKey(s) {
-    return s.peer ? `${s.peer}:${s.name}` : s.name;
+    return s.peer ? `${s.peer} / ${s.name}` : s.name;
   }
 
   function isCurrentSession(s) {
@@ -610,10 +620,9 @@ const FloatTerminal = (() => {
     if (sessions.length > 0) {
       for (const s of sessions) {
         const opt = document.createElement('option');
-        const key = sessionKey(s);
-        opt.value = key;
+        opt.value = encodeSessionTarget(s.name, s.peer);
         const status = s.alive ? '' : ' (dead)';
-        opt.textContent = `${key}${status}`;
+        opt.textContent = `${sessionKey(s)}${status}`;
         if (isCurrentSession(s)) opt.selected = true;
         sessionSelect.appendChild(opt);
       }

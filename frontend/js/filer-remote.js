@@ -1,16 +1,14 @@
-// Den - Remote file source management (SFTP + Remote Den + Peer legacy)
+// Den - Remote file source management (SFTP + Remote Den)
 // eslint-disable-next-line no-unused-vars
 const FilerRemote = (() => {
-  // mode: 'local' | 'sftp' | 'den' | 'peer'
+  // mode: 'local' | 'sftp' | 'den'
   let mode = 'local';
   let hostInfo = null; // { host, username } for SFTP
   let denInfo = null; // { url, hostPort, fingerprint } for Quick Connect
-  let peerName = null; // peer name when mode === 'peer'
 
   /** Current API base path */
   function getApiBase() {
     if (mode === 'den') return '/api/remote/filer';
-    if (mode === 'peer') return `/api/peers/${encodeURIComponent(peerName)}/filer`;
     if (mode === 'sftp') return '/api/sftp';
     return '/api/filer';
   }
@@ -29,24 +27,19 @@ const FilerRemote = (() => {
         url: denInfo?.url || null,
         hostPort: denInfo?.hostPort || null,
         fingerprint: denInfo?.fingerprint || null,
-        peerName: null,
         host: null,
         username: null,
       };
     }
-    if (mode === 'peer') {
-      return { connected: true, mode: 'peer', peerName, host: null, username: null };
-    }
     if (mode === 'sftp') {
-      return { connected: true, mode: 'sftp', peerName: null, host: hostInfo?.host || null, username: hostInfo?.username || null };
+      return { connected: true, mode: 'sftp', host: hostInfo?.host || null, username: hostInfo?.username || null };
     }
-    return { connected: false, mode: 'local', peerName: null, host: null, username: null };
+    return { connected: false, mode: 'local', host: null, username: null };
   }
 
   /** Connect to another Den over HTTPS/WSS */
   async function connectDen(url, password) {
     if (mode === 'sftp') await disconnectSftpSilent();
-    if (mode === 'peer') disconnectPeer();
     if (mode === 'den') await disconnectDenSilent();
 
     let resp = await doDenConnectFetch(url, password);
@@ -107,26 +100,8 @@ const FilerRemote = (() => {
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
-  /** Connect to a peer's file system */
-  async function connectPeer(name) {
-    if (mode === 'sftp') await disconnectSftpSilent();
-    if (mode === 'den') await disconnectDenSilent();
-    mode = 'peer';
-    peerName = name;
-    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'peer', peerName: name } }));
-  }
-
-  /** Disconnect from peer (back to local) */
-  function disconnectPeer() {
-    mode = 'local';
-    peerName = null;
-    denInfo = null;
-    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
-  }
-
   /** SFTP connect */
   async function connect(host, port, username, authType, password, keyPath) {
-    if (mode === 'peer') disconnectPeer();
     if (mode === 'den') await disconnectDenSilent();
     const body = { host, port: port || 22, username, auth_type: authType };
     if (authType === 'password') body.password = password;
@@ -289,8 +264,6 @@ const FilerRemote = (() => {
     disconnect,
     connectDen,
     disconnectDen,
-    connectPeer,
-    disconnectPeer,
     checkStatus,
   };
 })();

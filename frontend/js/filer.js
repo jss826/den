@@ -177,7 +177,7 @@ const DenFiler = (() => {
     }
   }
 
-  // --- Remote source selector (SFTP + Peers) ---
+  // --- Remote source selector (SFTP + Remote Den) ---
 
   let remoteDropdown = null;
 
@@ -227,10 +227,6 @@ const DenFiler = (() => {
       btn.textContent = info.hostPort || 'Remote Den';
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', 'Connected to remote Den');
-    } else if (info.mode === 'peer') {
-      btn.textContent = info.peerName;
-      btn.classList.add('active');
-      btn.setAttribute('data-tooltip', 'Connected to peer');
     } else if (info.mode === 'sftp') {
       btn.textContent = `${info.username}@${info.host}`;
       btn.classList.add('active');
@@ -260,7 +256,7 @@ const DenFiler = (() => {
       const info = FilerRemote.getInfo();
       const label = info.mode === 'den'
         ? (info.hostPort || 'remote Den')
-        : (info.mode === 'peer' ? info.peerName : `${info.username}@${info.host}`);
+        : `${info.username}@${info.host}`;
       const disconnItem = document.createElement('div');
       disconnItem.className = 'new-session-menu-item disconnect';
       disconnItem.textContent = `Disconnect ${label}`;
@@ -268,10 +264,8 @@ const DenFiler = (() => {
         closeRemoteDropdown();
         if (info.mode === 'sftp') {
           doDisconnect();
-        } else if (info.mode === 'den') {
-          doDenDisconnect();
         } else {
-          FilerRemote.disconnectPeer();
+          doDenDisconnect();
         }
       });
       menu.appendChild(disconnItem);
@@ -304,7 +298,6 @@ const DenFiler = (() => {
     });
     menu.appendChild(sftpItem);
 
-    // Position and attach the dropdown before async fetch
     const rect = anchorBtn.getBoundingClientRect();
     menu.style.position = 'fixed';
     menu.style.top = `${rect.bottom + 2}px`;
@@ -312,28 +305,6 @@ const DenFiler = (() => {
     menu.style.zIndex = '1000';
     document.body.appendChild(menu);
     remoteDropdown = menu;
-
-    // Fetch connected peers (async — append after DOM attach)
-    const peers = await PeerCache.get();
-    if (remoteDropdown !== menu) return; // closed during fetch
-    const connected = peers.filter((p) => p.status === 'connected');
-    if (connected.length > 0) {
-      const header = document.createElement('div');
-      header.className = 'new-session-menu-separator';
-      header.textContent = 'Peers';
-      menu.appendChild(header);
-
-      for (const p of connected) {
-        const item = document.createElement('div');
-        item.className = 'new-session-menu-item';
-        item.textContent = p.name;
-        item.addEventListener('click', () => {
-          closeRemoteDropdown();
-          FilerRemote.connectPeer(p.name);
-        });
-        menu.appendChild(item);
-      }
-    }
   }
 
   // --- SSH Bookmarks ---
