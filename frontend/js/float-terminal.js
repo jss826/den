@@ -27,7 +27,9 @@ const FloatTerminal = (() => {
     try {
       const parsed = JSON.parse(value);
       if (parsed && typeof parsed.name === 'string') {
-        return { name: parsed.name, remote: parsed.remote || null };
+        // backward compat: renamed from 'peer' to 'remote'
+        const remote = parsed.remote || parsed.peer || null;
+        return { name: parsed.name, remote };
       }
     } catch (_) { /* ignore */ }
     return { name: value, remote: null };

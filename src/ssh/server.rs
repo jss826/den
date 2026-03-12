@@ -635,6 +635,7 @@ impl Handler for DenSshHandler {
                 if sessions.is_empty() {
                     output.push_str("No active sessions\r\n");
                 }
+                output.push_str("\r\nNote: remote sessions via SSH have been removed. Use Quick Connect in the browser UI.\r\n");
 
                 session.data(channel, CryptoVec::from_slice(output.as_bytes()))?;
                 session.close(channel)?;

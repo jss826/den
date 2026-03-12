@@ -248,10 +248,21 @@ impl Store {
     fn load_settings_from_disk(&self) -> Settings {
         let path = self.root.join("settings.json");
         match fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-                tracing::warn!("Corrupt settings.json, using defaults: {e}");
-                Settings::default()
-            }),
+            Ok(content) => {
+                // Detect and warn about legacy peer fields (removed in Quick Connect migration)
+                if let Ok(raw) = serde_json::from_str::<serde_json::Value>(&content)
+                    && (raw.get("peer_name").is_some() || raw.get("peers").is_some())
+                {
+                    tracing::warn!(
+                        "Legacy peer config fields found in settings.json \
+                         — peer_name and peers will be dropped (removed in this version)"
+                    );
+                }
+                serde_json::from_str(&content).unwrap_or_else(|e| {
+                    tracing::warn!("Corrupt settings.json, using defaults: {e}");
+                    Settings::default()
+                })
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
             Err(e) => {
                 tracing::warn!("Failed to read settings.json, using defaults: {e}");

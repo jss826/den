@@ -264,6 +264,9 @@ pub async fn auth_middleware(
 }
 
 /// User-only auth middleware.
+/// Applied to /api/remote/* so that only interactive browser sessions
+/// can access the relay — future non-interactive tokens (API keys, etc.)
+/// should not be able to proxy through Quick Connect.
 pub async fn user_auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request<axum::body::Body>,

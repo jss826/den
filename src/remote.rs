@@ -833,14 +833,25 @@ async fn connect_remote_ws_client(
             tokio_tungstenite::tungstenite::error::UrlError::NoHostName,
         ))?;
 
-    let socket = TcpStream::connect((host.as_str(), port))
-        .await
-        .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+    let socket = tokio::time::timeout(
+        REMOTE_CONNECT_TIMEOUT,
+        TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| tokio_tungstenite::tungstenite::Error::Io(
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "WS relay TCP connect timeout"),
+    ))?
+    .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
     let connector = TlsConnector::from(client_config);
-    let tls_stream = connector
-        .connect(server_name, socket)
-        .await
-        .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+    let tls_stream = tokio::time::timeout(
+        REMOTE_CONNECT_TIMEOUT,
+        connector.connect(server_name, socket),
+    )
+    .await
+    .map_err(|_| tokio_tungstenite::tungstenite::Error::Io(
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "WS relay TLS handshake timeout"),
+    ))?
+    .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
 
     tokio_tungstenite::client_async(request, tls_stream).await
 }

@@ -570,11 +570,6 @@ html, body {
 }
 .session-tab.dead { opacity: 0.5; }
 
-/* Remote session color indicator */
-.session-tab.remote-session {
-  border-bottom: 2px solid var(--remote-color, var(--accent));
-  border-radius: 6px 6px 0 0;
-}
 
 .session-tab-label {
   overflow: hidden;

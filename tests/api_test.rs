@@ -692,7 +692,7 @@ async fn settings_put_partial_json() {
         None,
     );
 
-    // PUT with only some fields  Eserde should use defaults for missing fields
+    // PUT with only some fields -- serde should use defaults for missing fields
     let req = Request::builder()
         .method("PUT")
         .uri("/api/settings")
@@ -863,7 +863,7 @@ async fn settings_ssh_bookmarks_invalid_auth_type() {
         .body(Body::from(body))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    // auth_type is now an enum  Einvalid values are rejected by serde (422)
+    // auth_type is now an enum -- invalid values are rejected by serde (422)
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
@@ -931,7 +931,7 @@ async fn terminal_sessions_destroy_nonexistent() {
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
-    // destroy is idempotent  Ereturns 204 even if not found
+    // destroy is idempotent -- returns 204 even if not found
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }
 
@@ -1479,7 +1479,7 @@ async fn clipboard_history_dedup() {
         app.clone().oneshot(req).await.unwrap();
     }
 
-    // Add "first" again  Eshould deduplicate
+    // Add "first" again -- should deduplicate
     let req = Request::builder()
         .method("POST")
         .uri("/api/clipboard-history")
@@ -1675,7 +1675,7 @@ async fn keep_awake_put_and_get() {
         None,
     );
 
-    // PUT true  Eresponse body should confirm the state
+    // PUT true -- response body should confirm the state
     let req = Request::builder()
         .method("PUT")
         .uri("/api/keep-awake")
@@ -1689,7 +1689,7 @@ async fn keep_awake_put_and_get() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["enabled"], true);
 
-    // GET  Eshould be true
+    // GET -- should be true
     let req = Request::builder()
         .uri("/api/keep-awake")
         .header(header::AUTHORIZATION, auth_header())
@@ -1701,7 +1701,7 @@ async fn keep_awake_put_and_get() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["enabled"], true);
 
-    // PUT false  Eresponse body should confirm the state
+    // PUT false -- response body should confirm the state
     let req = Request::builder()
         .method("PUT")
         .uri("/api/keep-awake")
@@ -1715,7 +1715,7 @@ async fn keep_awake_put_and_get() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["enabled"], false);
 
-    // GET  Eshould be false
+    // GET -- should be false
     let req = Request::builder()
         .uri("/api/keep-awake")
         .header(header::AUTHORIZATION, auth_header())
