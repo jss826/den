@@ -90,7 +90,15 @@ impl Config {
         };
         let log_level = env::var("DEN_LOG_LEVEL").unwrap_or_else(|_| default_log_level.to_string());
 
-        let data_dir = env::var("DEN_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+        let data_dir = env::var("DEN_DATA_DIR").unwrap_or_else(|_| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| {
+                    p.parent()
+                        .map(|d| d.join("data").to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| "./data".to_string())
+        });
 
         let ssh_port = env::var("DEN_SSH_PORT")
             .ok()

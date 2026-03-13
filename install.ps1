@@ -11,16 +11,36 @@ switch ($Arch) {
     default { Write-Error "Unsupported architecture: $Arch"; exit 1 }
 }
 
-# Fetch latest release tag
-Write-Host "Fetching latest release..."
-$Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-$Tag = $Release.tag_name
+# Fetch releases (include pre-releases)
+Write-Host "Fetching releases..."
+$Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=10"
 
-if (-not $Tag) {
-    Write-Error "Failed to fetch latest release."
+if (-not $Releases -or $Releases.Count -eq 0) {
+    Write-Error "Failed to fetch releases."
     exit 1
 }
 
+# Display version menu
+Write-Host ""
+for ($i = 0; $i -lt $Releases.Count; $i++) {
+    $r = $Releases[$i]
+    $label = $r.tag_name
+    if ($r.prerelease) { $label += " (pre-release)" }
+    if ($i -eq 0) { $label += " *" }
+    Write-Host "  [$i] $label"
+}
+Write-Host ""
+
+$Choice = Read-Host "Select version [0]"
+if ([string]::IsNullOrWhiteSpace($Choice)) { $Choice = "0" }
+$Index = [int]$Choice
+
+if ($Index -lt 0 -or $Index -ge $Releases.Count) {
+    Write-Error "Invalid selection: $Choice"
+    exit 1
+}
+
+$Tag = $Releases[$Index].tag_name
 $Asset = "den-$Target.zip"
 $Url = "https://github.com/$Repo/releases/download/$Tag/$Asset"
 
@@ -39,7 +59,7 @@ try {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Move-Item -Path (Join-Path $TmpDir "den.exe") -Destination (Join-Path $InstallDir "den.exe") -Force
 
-    Write-Host "Installed den to $InstallDir\den.exe"
+    Write-Host "Installed den $Tag to $InstallDir\den.exe"
 } finally {
     Remove-Item -Path $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
 }

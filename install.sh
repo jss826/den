@@ -22,13 +22,40 @@ esac
 
 TARGET="${target_arch}-${target_os}"
 
-# Fetch latest release tag
-printf "Fetching latest release...\n"
-TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+# Fetch releases (include pre-releases)
+printf "Fetching releases...\n"
+RELEASES_JSON=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=10")
+
+# Parse tag names and pre-release flags
+TAGS=$(printf '%s' "$RELEASES_JSON" | grep '"tag_name"' | cut -d'"' -f4)
+PRERELEASE=$(printf '%s' "$RELEASES_JSON" | grep '"prerelease"' | head -10 | sed 's/.*: //;s/,//')
+
+if [ -z "$TAGS" ]; then
+  printf "Failed to fetch releases.\n" >&2
+  exit 1
+fi
+
+# Display version menu
+printf "\n"
+i=0
+printf '%s\n' "$TAGS" | while IFS= read -r tag; do
+  flag=$(printf '%s\n' "$PRERELEASE" | sed -n "$((i+1))p")
+  label="$tag"
+  if [ "$flag" = "true" ]; then label="$label (pre-release)"; fi
+  if [ "$i" -eq 0 ]; then label="$label *"; fi
+  printf "  [%d] %s\n" "$i" "$label"
+  i=$((i+1))
+done
+
+printf "\n"
+printf "Select version [0]: "
+read -r CHOICE
+CHOICE=${CHOICE:-0}
+
+TAG=$(printf '%s\n' "$TAGS" | sed -n "$((CHOICE+1))p")
 
 if [ -z "$TAG" ]; then
-  printf "Failed to fetch latest release.\n" >&2
+  printf "Invalid selection: %s\n" "$CHOICE" >&2
   exit 1
 fi
 
@@ -49,7 +76,7 @@ mkdir -p "$INSTALL_DIR"
 mv "${TMPDIR}/den" "${INSTALL_DIR}/den"
 chmod +x "${INSTALL_DIR}/den"
 
-printf "Installed den to %s/den\n" "$INSTALL_DIR"
+printf "Installed den %s to %s/den\n" "$TAG" "$INSTALL_DIR"
 
 # PATH check
 case ":${PATH}:" in
