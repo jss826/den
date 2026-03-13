@@ -1319,12 +1319,19 @@ const DenTerminal = (() => {
       }
     }
 
-    // Position menu above the button
+    // Position menu relative to the button, anchored to right edge
     const rect = anchorEl.getBoundingClientRect();
     menu.style.position = 'fixed';
-    menu.style.left = rect.left + 'px';
-    menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
     document.body.appendChild(menu);
+
+    // Prefer opening above, fall back to below if not enough space
+    const menuHeight = menu.offsetHeight;
+    if (rect.top >= menuHeight + 4) {
+      menu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+    } else {
+      menu.style.top = (rect.bottom + 4) + 'px';
+    }
 
     const closeHandler = (e) => {
       if (!menu.contains(e.target) && e.target !== anchorEl) closeMenu();

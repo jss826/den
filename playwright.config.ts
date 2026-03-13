@@ -11,14 +11,16 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
 
   use: {
-    baseURL: 'http://localhost:3940',
+    baseURL: 'https://localhost:3940',
+    ignoreHTTPSErrors: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
 
   webServer: {
     command: 'cargo run',
-    port: 3940,
+    url: 'https://localhost:3940',
+    ignoreHTTPSErrors: true,
     timeout: 120_000,
     reuseExistingServer: true,
     env: {

@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { login, getToken, filerApi } from './helpers';
+import { login, loginApiContext, filerApi } from './helpers';
 import * as path from 'path';
 
 const TEST_DIR = path.resolve(__dirname, '..', '..', 'data-e2e', 'filer-ui-test');
 
 test.describe('Filer UI', () => {
   test.beforeAll(async ({ request }) => {
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     // テスト用ディレクトリとファイルを作成
     await api.mkdir(TEST_DIR);
     await api.write(path.join(TEST_DIR, 'hello.txt'), 'Hello World');
@@ -17,8 +17,8 @@ test.describe('Filer UI', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     await api.del(TEST_DIR);
   });
 
@@ -77,8 +77,8 @@ test.describe('Filer UI', () => {
     await page.click('.tab[data-tab="filer"]');
 
     // テスト用ファイルのパスをブラウザに渡すため、API 経由でファイルの絶対パスを取得
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path; // 正規化されたパス
@@ -104,8 +104,8 @@ test.describe('Filer UI', () => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');
 
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path;
@@ -123,8 +123,8 @@ test.describe('Filer UI', () => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');
 
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path;
@@ -154,8 +154,8 @@ test.describe('Filer UI', () => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');
 
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path;
@@ -213,8 +213,8 @@ test.describe('Filer UI', () => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');
 
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path;
@@ -222,7 +222,7 @@ test.describe('Filer UI', () => {
     // Navigate tree to the test directory
     await page.evaluate(async (dirPath) => {
       // @ts-expect-error global
-      await FilerTree.navigateTo(dirPath);
+      FilerTree.setRoot(dirPath);
     }, resolvedDir);
 
     // Wait for tree to load the test dir entries
@@ -243,8 +243,8 @@ test.describe('Filer UI', () => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');
 
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path;
@@ -252,7 +252,7 @@ test.describe('Filer UI', () => {
     // Navigate to test dir
     await page.evaluate(async (dirPath) => {
       // @ts-expect-error global
-      await FilerTree.navigateTo(dirPath);
+      FilerTree.setRoot(dirPath);
     }, resolvedDir);
 
     // Type in search input
@@ -270,8 +270,8 @@ test.describe('Filer UI', () => {
     await login(page);
     await page.click('.tab[data-tab="filer"]');
 
-    const token = await getToken(request);
-    const api = filerApi(request, token);
+    const ctx = await loginApiContext(request);
+    const api = filerApi(ctx);
     const listResp = await api.list(TEST_DIR);
     const listing = await listResp.json();
     const resolvedDir = listing.path;

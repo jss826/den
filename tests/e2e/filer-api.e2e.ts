@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { getToken, filerApi } from './helpers';
+import { loginApiContext, filerApi } from './helpers';
+import type { APIRequestContext } from '@playwright/test';
 import * as path from 'path';
 
 // テスト用ディレクトリ（プロジェクトルート配下）
@@ -7,9 +8,9 @@ const TEST_DIR = path.resolve(__dirname, '..', '..', 'data-e2e', 'filer-test');
 
 test.describe('Filer API', () => {
   // 各テストで request を取得して API を使う
-  async function setup(request: Parameters<typeof getToken>[0]) {
-    const token = await getToken(request);
-    return filerApi(request, token);
+  async function setup(request: APIRequestContext) {
+    const ctx = await loginApiContext(request);
+    return filerApi(ctx);
   }
 
   // 全テストの前にテストディレクトリを作成
