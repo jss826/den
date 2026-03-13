@@ -14,7 +14,7 @@ use futures::{SinkExt, StreamExt};
 use reqwest::Url;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
@@ -159,6 +159,70 @@ impl ServerCertVerifier for AcceptAnyServerCertVerifier {
     }
 }
 
+/// Certificate verifier that accepts only a specific fingerprint (TOFU pin).
+/// Skips hostname validation — the pinned fingerprint is the trust anchor.
+#[derive(Debug)]
+struct PinnedCertVerifier {
+    expected_fingerprint: String,
+}
+
+impl ServerCertVerifier for PinnedCertVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let actual = sha256_fingerprint(end_entity.as_ref());
+        if actual == self.expected_fingerprint {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(format!(
+                "certificate fingerprint mismatch: expected {}, got {actual}",
+                self.expected_fingerprint
+            )))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA1,
+            SignatureScheme::ECDSA_SHA1_Legacy,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+            SignatureScheme::ED448,
+        ]
+    }
+}
+
 pub async fn connect(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<ConnectRemoteRequest>,
@@ -210,10 +274,11 @@ pub async fn connect(
             .into_response();
     }
 
-    let (http_client, ws_client_config) = match build_pinned_clients(&probed.cert_der) {
-        Ok(clients) => clients,
-        Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
-    };
+    let (http_client, ws_client_config) =
+        match build_pinned_clients(&probed.cert_der, &probed.fingerprint) {
+            Ok(clients) => clients,
+            Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+        };
 
     let cookie_header = match login_remote(&http_client, normalized.as_str(), &req.password).await {
         Ok(cookie) => cookie,
@@ -561,29 +626,30 @@ async fn probe_server_certificate(url: &Url) -> Result<ProbedCertificate, String
     })
 }
 
-fn build_pinned_clients(cert_der: &[u8]) -> Result<(reqwest::Client, Arc<ClientConfig>), String> {
+fn build_pinned_clients(
+    _cert_der: &[u8],
+    fingerprint: &str,
+) -> Result<(reqwest::Client, Arc<ClientConfig>), String> {
     install_crypto_provider();
 
-    let certificate = reqwest::Certificate::from_der(cert_der)
-        .map_err(|e| format!("failed to parse remote certificate: {e}"))?;
+    // Use pinned verifier for both HTTP and WS — skips hostname validation
+    // since the fingerprint match is the trust anchor (self-signed TOFU model).
+    let pinned_config = Arc::new(
+        ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
+                expected_fingerprint: fingerprint.to_string(),
+            }))
+            .with_no_client_auth(),
+    );
 
     let http_client = reqwest::Client::builder()
-        .add_root_certificate(certificate)
+        .use_preconfigured_tls(pinned_config.clone())
         .https_only(true)
         .build()
         .map_err(|e| format!("failed to build remote HTTP client: {e}"))?;
 
-    let mut roots = RootCertStore::empty();
-    roots
-        .add(CertificateDer::from(cert_der.to_vec()))
-        .map_err(|e| format!("failed to trust remote certificate: {e}"))?;
-    let ws_config = Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    );
-
-    Ok((http_client, ws_config))
+    Ok((http_client, pinned_config))
 }
 
 enum RemoteConnectError {
@@ -1105,7 +1171,8 @@ async fn relay_connect_two_hop(state: Arc<AppState>, req: RelayConnectRequest) -
     }
 
     // 3. Build pinned clients for relay
-    let (relay_http, relay_ws_config) = match build_pinned_clients(&relay_probed.cert_der) {
+    let (relay_http, relay_ws_config) =
+        match build_pinned_clients(&relay_probed.cert_der, &relay_probed.fingerprint) {
         Ok(c) => c,
         Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     };
@@ -1300,10 +1367,11 @@ async fn relay_connect_one_hop(state: Arc<AppState>, req: RelayConnectRequest) -
     }
 
     // Build pinned clients and login to target
-    let (http_client, ws_client_config) = match build_pinned_clients(&probed.cert_der) {
-        Ok(c) => c,
-        Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
-    };
+    let (http_client, ws_client_config) =
+        match build_pinned_clients(&probed.cert_der, &probed.fingerprint) {
+            Ok(c) => c,
+            Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+        };
 
     let cookie_header = match login_remote(&http_client, normalized.as_str(), &req.password).await {
         Ok(c) => c,
