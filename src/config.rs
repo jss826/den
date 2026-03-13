@@ -91,13 +91,27 @@ impl Config {
         let log_level = env::var("DEN_LOG_LEVEL").unwrap_or_else(|_| default_log_level.to_string());
 
         let data_dir = env::var("DEN_DATA_DIR").unwrap_or_else(|_| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| {
-                    p.parent()
-                        .map(|d| d.join("data").to_string_lossy().into_owned())
-                })
-                .unwrap_or_else(|| "./data".to_string())
+            if cfg!(windows) {
+                // Windows: exe directory's data subfolder (e.g. AppData\Local\den\data)
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| {
+                        p.parent()
+                            .map(|d| d.join("data").to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| "./data".to_string())
+            } else {
+                // Linux/macOS: XDG_DATA_HOME/den (default ~/.local/share/den)
+                env::var("XDG_DATA_HOME")
+                    .ok()
+                    .map(|d| format!("{d}/den"))
+                    .or_else(|| {
+                        env::var("HOME")
+                            .ok()
+                            .map(|h| format!("{h}/.local/share/den"))
+                    })
+                    .unwrap_or_else(|| "./data".to_string())
+            }
         });
 
         let ssh_port = env::var("DEN_SSH_PORT")

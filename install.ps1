@@ -31,11 +31,9 @@ for ($i = 0; $i -lt $Releases.Count; $i++) {
 }
 Write-Host ""
 
-try {
-    $Choice = Read-Host "Select version [0]"
-} catch {
-    $Choice = ""
-}
+# Read selection from console (works even in irm | iex)
+Write-Host -NoNewline "Select version [0]: "
+$Choice = [Console]::ReadLine()
 if ([string]::IsNullOrWhiteSpace($Choice)) { $Choice = "0" }
 $Index = [int]$Choice
 
@@ -71,7 +69,8 @@ try {
 # Add to user PATH if not already present
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$InstallDir*") {
-    $Answer = Read-Host "Add $InstallDir to your PATH? (Y/n)"
+    Write-Host -NoNewline "Add $InstallDir to your PATH? (Y/n): "
+    $Answer = [Console]::ReadLine()
     if ($Answer -ne "n") {
         [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
         $env:Path = "$env:Path;$InstallDir"

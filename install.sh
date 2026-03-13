@@ -47,9 +47,11 @@ printf '%s\n' "$TAGS" | while IFS= read -r tag; do
   i=$((i+1))
 done
 
-printf "\n"
-printf "Select version [0]: "
-if [ -t 0 ]; then
+# Read selection (use /dev/tty for curl | sh compatibility)
+printf "\nSelect version [0]: "
+if [ -e /dev/tty ]; then
+  read -r CHOICE </dev/tty || CHOICE=""
+elif [ -t 0 ]; then
   read -r CHOICE
 else
   CHOICE=""

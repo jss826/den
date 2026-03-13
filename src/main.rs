@@ -8,14 +8,30 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
-    // Load .env: CWD first, then executable's directory as fallback.
+    // Load .env: CWD first, then platform-specific config directory as fallback.
     // Later values do NOT override earlier ones, so CWD takes precedence.
     let _ = dotenvy::dotenv();
-    if let Some(exe_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-    {
-        let _ = dotenvy::from_path(exe_dir.join(".env"));
+    if cfg!(windows) {
+        // Windows: exe directory (e.g. AppData\Local\den\.env)
+        if let Some(exe_dir) = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
+            let _ = dotenvy::from_path(exe_dir.join(".env"));
+        }
+    } else {
+        // Linux/macOS: XDG_CONFIG_HOME/den/.env (default ~/.config/den/.env)
+        let config_dir = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".config"))
+            });
+        if let Some(dir) = config_dir {
+            let _ = dotenvy::from_path(dir.join("den").join(".env"));
+        }
     }
 
     let config = Config::from_env();
