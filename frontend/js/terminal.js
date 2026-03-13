@@ -774,12 +774,12 @@ const DenTerminal = (() => {
 
   /** Get API base path for session operations */
   function sessionApiBase(remote) {
-    if (!remote) return '';
+    if (!remote) return '/api';
     if (isRelayTarget(remote)) {
       const info = getRelayInfo();
       return `/api/relay/${info.relaySessionId}`;
     }
-    return isRemoteDenTarget(remote) ? '/api/remote' : '';
+    return isRemoteDenTarget(remote) ? '/api/remote' : '/api';
   }
 
   async function createSession(name, sshConfig, remote) {
@@ -787,7 +787,7 @@ const DenTerminal = (() => {
       const body = { name };
       if (sshConfig) body.ssh = sshConfig;
       const base = sessionApiBase(remote);
-      const resp = await fetch(`${base}/api/terminal/sessions`, {
+      const resp = await fetch(`${base}/terminal/sessions`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -802,7 +802,7 @@ const DenTerminal = (() => {
   async function renameSession(oldName, newName, remote) {
     try {
       const base = sessionApiBase(remote);
-      const resp = await fetch(`${base}/api/terminal/sessions/${encodeURIComponent(oldName)}`, {
+      const resp = await fetch(`${base}/terminal/sessions/${encodeURIComponent(oldName)}`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -817,7 +817,7 @@ const DenTerminal = (() => {
   async function destroySession(name, remote) {
     try {
       const base = sessionApiBase(remote);
-      const resp = await fetch(`${base}/api/terminal/sessions/${encodeURIComponent(name)}`, {
+      const resp = await fetch(`${base}/terminal/sessions/${encodeURIComponent(name)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });

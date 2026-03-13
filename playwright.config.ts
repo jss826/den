@@ -28,6 +28,7 @@ export default defineConfig({
       DEN_PORT: '3940',
       DEN_DATA_DIR: './data-e2e',
       DEN_BIND_ADDRESS: '127.0.0.1',
+      DEN_TLS: 'true',
     },
   },
 

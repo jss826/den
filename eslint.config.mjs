@@ -48,6 +48,10 @@ export default [
         caughtErrorsIgnorePattern: '^_',
       }],
       'no-console': 'off',
+      'no-restricted-syntax': ['error', {
+        selector: "MemberExpression[object.name='window'][property.name=/^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|Toast|Spinner|DenIcons|DenClipboard|ClipboardHistory|FloatTerminal|DenSnippet|DenDragList|DenKeyPresets|DenFiler|FilerTree|FilerEditor|FilerRemote|DenTlsTrust|CM)$/]",
+        message: "Do not access IIFE modules via window.X — const declarations are not window properties. Use the name directly or typeof guard.",
+      }],
     },
   },
   {
