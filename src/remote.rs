@@ -627,14 +627,26 @@ async fn probe_server_certificate(url: &Url) -> Result<ProbedCertificate, String
 }
 
 fn build_pinned_clients(
-    _cert_der: &[u8],
+    cert_der: &[u8],
     fingerprint: &str,
 ) -> Result<(reqwest::Client, Arc<ClientConfig>), String> {
     install_crypto_provider();
 
-    // Use pinned verifier for both HTTP and WS — skips hostname validation
-    // since the fingerprint match is the trust anchor (self-signed TOFU model).
-    let pinned_config = Arc::new(
+    let certificate = reqwest::Certificate::from_der(cert_der)
+        .map_err(|e| format!("failed to parse remote certificate: {e}"))?;
+
+    // reqwest: pin the probed certificate and skip hostname validation.
+    // The fingerprint was already verified in the trust flow (TOFU model).
+    let http_client = reqwest::Client::builder()
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(certificate)
+        .danger_accept_invalid_hostnames(true)
+        .https_only(true)
+        .build()
+        .map_err(|e| format!("failed to build remote HTTP client: {e}"))?;
+
+    // rustls config for WebSocket: pinned verifier skips hostname check.
+    let ws_config = Arc::new(
         ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
@@ -643,13 +655,7 @@ fn build_pinned_clients(
             .with_no_client_auth(),
     );
 
-    let http_client = reqwest::Client::builder()
-        .use_preconfigured_tls(pinned_config.clone())
-        .https_only(true)
-        .build()
-        .map_err(|e| format!("failed to build remote HTTP client: {e}"))?;
-
-    Ok((http_client, pinned_config))
+    Ok((http_client, ws_config))
 }
 
 enum RemoteConnectError {
