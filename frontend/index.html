@@ -132,7 +132,7 @@
     </div>
 
     <!-- SFTP 接続モーダル -->
-    <div id="sftp-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="SFTP Connection">
+    <div id="sftp-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="SFTP Connection" data-1p-ignore>
       <div class="modal-content">
         <h3>Remote SFTP Connection</h3>
         <div class="sftp-bookmark-row">
@@ -182,12 +182,13 @@
       </div>
     </div>
 
-    <div id="den-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Remote Den Connection">
+    <div id="den-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Remote Den Connection" data-1p-ignore>
       <div class="modal-content">
         <h3>Quick Connect to Den</h3>
         <div class="modal-section">
           <label>Target URL</label>
-          <input type="text" id="den-connect-url" class="settings-input" placeholder="https://den-b:8080" autocomplete="off" />
+          <input type="text" id="den-connect-url" class="settings-input" placeholder="https://den-b:8080" autocomplete="off" list="den-connect-url-list" />
+          <datalist id="den-connect-url-list"></datalist>
         </div>
         <div class="modal-section">
           <label>Target Password</label>

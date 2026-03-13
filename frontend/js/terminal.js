@@ -1272,14 +1272,7 @@ const DenTerminal = (() => {
       quickItem.textContent = 'Quick Connect Den…';
       quickItem.addEventListener('click', () => {
         closeMenu();
-        const modal = document.getElementById('den-connect-modal');
-        const urlInput = document.getElementById('den-connect-url');
-        const passwordInput = document.getElementById('den-connect-password');
-        if (!modal || !urlInput || !passwordInput) return;
-        urlInput.value = '';
-        passwordInput.value = '';
-        modal.hidden = false;
-        urlInput.focus();
+        DenFiler.showDenModal();
       });
       menu.appendChild(quickItem);
     }

@@ -455,6 +455,19 @@ const DenFiler = (() => {
     });
   }
 
+  function populateDenUrlDatalist() {
+    const datalist = document.getElementById('den-connect-url-list');
+    if (!datalist) return;
+    DenTlsTrust.list().then((certs) => {
+      datalist.innerHTML = '';
+      for (const hostPort of Object.keys(certs).sort()) {
+        const opt = document.createElement('option');
+        opt.value = 'https://' + hostPort;
+        datalist.appendChild(opt);
+      }
+    }).catch(() => {});
+  }
+
   function showDenModal(defaultUrl) {
     const modal = document.getElementById('den-connect-modal');
     if (!modal) return;
@@ -471,6 +484,8 @@ const DenFiler = (() => {
     if (relayUrl) relayUrl.value = '';
     const relayPassword = document.getElementById('den-relay-password');
     if (relayPassword) relayPassword.value = '';
+    // Populate URL datalist from trusted certificates
+    populateDenUrlDatalist();
     modal.hidden = false;
     urlInput.focus();
   }
@@ -1190,5 +1205,5 @@ const DenFiler = (() => {
     quickOpenCleanup = cleanup;
   }
 
-  return { init, initDenConnectModal, focusSearch, showQuickOpen };
+  return { init, initDenConnectModal, showDenModal, focusSearch, showQuickOpen };
 })();
