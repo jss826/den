@@ -48,7 +48,13 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, TaskGet, TaskUpdate, T
 
 1. Task ツールで checker エージェントを起動し自動検証を実行
 2. 失敗がある場合は修正して再検証（最大3回）
-3. 全パス後:
+3. フロントエンド変更がある場合は e2e テストも実行:
+   ```
+   npx playwright test --project=chromium
+   ```
+   - 失敗したテストが今回の変更に起因する場合は修正する
+   - 既存の `test.fixme` テストの失敗は無視してよい
+4. 全パス後:
    - 手動確認が必要な項目があればチェックリストで提示
 
 → **完了報告**
@@ -65,3 +71,4 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, TaskGet, TaskUpdate, T
 - [ ] `cargo build` 成功
 - [ ] `cargo clippy` 警告なし
 - [ ] `cargo test` 通過（テストがある場合）
+- [ ] `npx playwright test` 通過（フロントエンド変更がある場合）
