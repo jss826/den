@@ -1,6 +1,12 @@
 /* global DenDragList, DenKeyPresets, Keybar, DenTerminal, FloatTerminal, DenSnippet, Toast */
 // Den - 設定管理モジュール
 const DenSettings = (() => {
+  function escHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
   let current = {
     font_size: 14,
     theme: 'dark',
