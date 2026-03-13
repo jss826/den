@@ -99,6 +99,15 @@ const DenSettings = (() => {
     if (fingerprintSection && fingerprintEl && tlsStatus.fingerprint) {
       fingerprintSection.hidden = false;
       fingerprintEl.textContent = tlsStatus.fingerprint;
+      const copyBtn = document.getElementById('tls-fingerprint-copy');
+      if (copyBtn) {
+        copyBtn.innerHTML = DenIcons.clipboard(16);
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(tlsStatus.fingerprint).then(() => {
+            Toast.success('Fingerprint copied');
+          }).catch(() => Toast.error('Copy failed'));
+        };
+      }
     }
     if (sanSection && sanList && Array.isArray(tlsStatus.subject_alt_names) && tlsStatus.subject_alt_names.length > 0) {
       sanSection.hidden = false;

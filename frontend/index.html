@@ -442,7 +442,10 @@
           </div>
           <div class="modal-section" id="tls-fingerprint-section" hidden>
             <label>Certificate Fingerprint</label>
-            <code id="tls-fingerprint" class="hostkey-value"></code>
+            <div class="tls-fingerprint-row">
+              <code id="tls-fingerprint" class="hostkey-value"></code>
+              <button id="tls-fingerprint-copy" class="icon-btn" type="button" data-tooltip="Copy"></button>
+            </div>
           </div>
           <div class="modal-section" id="tls-san-section" hidden>
             <label>Subject Alternative Names</label>
@@ -458,7 +461,7 @@
               <input type="text" id="tls-trust-host-port" class="settings-input" placeholder="host:port">
               <input type="text" id="tls-trust-fingerprint" class="settings-input" placeholder="SHA256:...">
               <div class="tls-trust-form-actions">
-                <button id="tls-trust-use-local" class="modal-btn" type="button">Use Local</button>
+                <button id="tls-trust-use-local" class="modal-btn" type="button" data-tooltip="Fill this server's fingerprint">Fill Local</button>
                 <button id="tls-trust-save" class="modal-btn primary" type="button">Trust</button>
               </div>
             </div>
