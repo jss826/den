@@ -9,7 +9,7 @@ const DenTerminal = (() => {
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
   function getRemoteDenInfo() {
-    const info = window.FilerRemote?.getInfo?.();
+    const info = typeof FilerRemote !== 'undefined' ? FilerRemote.getInfo() : null;
     return info && info.mode === 'den' ? info : null;
   }
 
@@ -19,7 +19,7 @@ const DenTerminal = (() => {
   }
 
   function getRelayInfo() {
-    const info = window.FilerRemote?.getInfo?.();
+    const info = typeof FilerRemote !== 'undefined' ? FilerRemote.getInfo() : null;
     return info && info.mode === 'relay' ? info : null;
   }
 
