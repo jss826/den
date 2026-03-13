@@ -30,19 +30,43 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 
 Single binary, no dependencies.
 
-### Windows
+### Quick Install
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jss826/den/master/install.sh | sh
+```
+
+**Windows (PowerShell):**
 
 ```powershell
-# Download
+irm https://raw.githubusercontent.com/jss826/den/master/install.ps1 | iex
+```
+
+Then run:
+
+```bash
+DEN_PASSWORD=your_password den
+```
+
+### Manual Install
+
+<details>
+<summary>Windows</summary>
+
+```powershell
 curl -Lo den.zip https://github.com/jss826/den/releases/latest/download/den-x86_64-pc-windows-msvc.zip
 Expand-Archive den.zip -DestinationPath . ; Remove-Item den.zip
 
-# Run
 $env:DEN_PASSWORD="your_password"
 .\den.exe
 ```
 
-### Linux
+</details>
+
+<details>
+<summary>Linux</summary>
 
 ```bash
 curl -Lo den.tar.gz https://github.com/jss826/den/releases/latest/download/den-x86_64-unknown-linux-gnu.tar.gz
@@ -50,6 +74,8 @@ tar xzf den.tar.gz && rm den.tar.gz && chmod +x den
 
 DEN_PASSWORD=your_password ./den
 ```
+
+</details>
 
 Open `http://localhost:3939` in your browser.
 
