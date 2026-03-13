@@ -15,12 +15,25 @@ const DenTlsTrust = (() => {
     return { ...cache };
   }
 
-  async function save(hostPort, fingerprint) {
+  async function save(hostPort, fingerprint, displayName) {
+    const body = { host_port: hostPort, fingerprint };
+    if (displayName !== undefined) body.display_name = displayName || null;
     const resp = await fetch('/api/system/tls/trusted', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host_port: hostPort, fingerprint }),
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    cache = null;
+  }
+
+  async function updateDisplayName(hostPort, displayName) {
+    const resp = await fetch('/api/system/tls/trusted', {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host_port: hostPort, display_name: displayName || null }),
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     cache = null;
@@ -111,6 +124,7 @@ const DenTlsTrust = (() => {
     list,
     save,
     remove,
+    updateDisplayName,
     showConfirm,
     confirmAndStore,
   };

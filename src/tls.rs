@@ -59,6 +59,14 @@ pub struct TlsStatusResponse {
 pub struct TrustTlsRequest {
     pub host_port: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateTlsDisplayNameRequest {
+    pub host_port: String,
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -364,6 +372,7 @@ pub async fn trust(
         fingerprint: req.fingerprint,
         first_seen: now,
         last_seen: now,
+        display_name: req.display_name,
     };
 
     tokio::task::spawn_blocking({
@@ -382,6 +391,36 @@ pub async fn trust(
     })?;
 
     Ok(StatusCode::OK)
+}
+
+pub async fn update_trusted_display_name(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<UpdateTlsDisplayNameRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let host_port = req.host_port.trim().to_string();
+    if host_port.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "host_port is required".to_string()));
+    }
+
+    let found = tokio::task::spawn_blocking({
+        let store = state.store.clone();
+        move || store.update_trusted_tls_display_name(&host_port, req.display_name)
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!("tls: update_display_name spawn_blocking failed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?
+    .map_err(|e| {
+        tracing::error!("tls: update_display_name failed: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+
+    if found {
+        Ok(StatusCode::OK)
+    } else {
+        Err((StatusCode::NOT_FOUND, "host_port not found".to_string()))
+    }
 }
 
 pub async fn remove_trusted(

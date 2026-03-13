@@ -146,7 +146,12 @@ const DenSettings = (() => {
 
     list.innerHTML = entries.map(([hostPort, cert]) => `
       <div class="tls-trust-item">
-        <div class="tls-trust-host">${escHtml(hostPort)}</div>
+        <div class="tls-trust-host">
+          ${escHtml(hostPort)}
+          <span class="tls-trust-display-name ${cert.display_name ? '' : 'placeholder'}"
+                data-host-port="${escHtml(hostPort)}"
+                title="Click to edit display name">${escHtml(cert.display_name || '(no name)')}</span>
+        </div>
         <div class="tls-trust-meta">
           <code class="tls-trust-fingerprint">${escHtml(cert.fingerprint || '')}</code>
           <span class="tls-trust-timestamp">First seen: ${escHtml(formatTlsTimestamp(cert.first_seen))} / Last seen: ${escHtml(formatTlsTimestamp(cert.last_seen))}</span>
@@ -154,6 +159,39 @@ const DenSettings = (() => {
         <button class="modal-btn tls-trust-delete" type="button" data-host-port="${escHtml(hostPort)}">Remove</button>
       </div>
     `).join('');
+
+    list.querySelectorAll('.tls-trust-display-name').forEach((span) => {
+      span.addEventListener('click', () => {
+        const hostPort = span.dataset.hostPort;
+        const current = trustedTlsCerts[hostPort]?.display_name || '';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'settings-input tls-trust-display-name-input';
+        input.value = current;
+        input.placeholder = '(no name)';
+        span.replaceWith(input);
+        input.focus();
+        input.select();
+
+        async function commit() {
+          const newName = input.value.trim();
+          try {
+            await DenTlsTrust.updateDisplayName(hostPort, newName);
+            if (trustedTlsCerts[hostPort]) {
+              trustedTlsCerts[hostPort].display_name = newName || null;
+            }
+          } catch {
+            Toast.error('Failed to update display name');
+          }
+          renderTrustedTls();
+        }
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+          if (e.key === 'Escape') { e.preventDefault(); renderTrustedTls(); }
+        });
+      });
+    });
 
     list.querySelectorAll('.tls-trust-delete').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -522,6 +560,9 @@ const DenSettings = (() => {
     const timeoutRow = document.getElementById('sleep-timeout-row');
     if (timeoutRow) timeoutRow.hidden = (sleepMode && sleepMode.value !== 'user-activity');
 
+    const groupCheck = document.getElementById('setting-group-remote');
+    if (groupCheck) groupCheck.checked = current.group_remote_sessions !== false;
+
     // キーバー設定の初期化（items を deep clone）
     if (current.keybar_buttons && current.keybar_buttons.length > 0) {
       editingKeybarButtons = current.keybar_buttons.map(k => {
@@ -626,6 +667,9 @@ const DenSettings = (() => {
       const sleepTimeoutEl = document.getElementById('setting-sleep-timeout');
       const sleepTimeout = sleepTimeoutEl ? Math.max(1, Math.min(480, parseInt(sleepTimeoutEl.value, 10) || 30)) : 30;
 
+      const groupRemoteCheck = document.getElementById('setting-group-remote');
+      const groupRemote = groupRemoteCheck ? groupRemoteCheck.checked : true;
+
       Spinner.button(saveBtn, async () => {
         const ok = await save({
           font_size: Math.max(8, Math.min(32, fontSize)),
@@ -637,6 +681,7 @@ const DenSettings = (() => {
           snippets: snippets,
           sleep_prevention_mode: sleepMode,
           sleep_prevention_timeout: sleepTimeout,
+          group_remote_sessions: groupRemote,
         });
         if (!ok) return;
         apply();
@@ -657,6 +702,9 @@ const DenSettings = (() => {
 
         // スニペットを即時反映
         if (typeof DenSnippet !== 'undefined') DenSnippet.reload();
+
+        // セッションタブ即時反映（グルーピング変更）
+        if (typeof DenTerminal !== 'undefined') DenTerminal.refreshSessionList();
 
         closeModal();
       });

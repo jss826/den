@@ -59,6 +59,8 @@ pub struct TrustedTlsCert {
     pub first_seen: u64,
     /// Unix timestamp in milliseconds
     pub last_seen: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +176,8 @@ pub struct Settings {
     pub sleep_prevention_mode: SleepPreventionMode,
     #[serde(default = "default_sleep_prevention_timeout")]
     pub sleep_prevention_timeout: u16,
+    #[serde(default = "default_true")]
+    pub group_remote_sessions: bool,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -207,6 +211,7 @@ impl Default for Settings {
             ssh_bookmarks: None,
             sleep_prevention_mode: SleepPreventionMode::default(),
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
+            group_remote_sessions: true,
             version: String::new(),
             hostname: String::new(),
         }
@@ -557,6 +562,7 @@ impl Store {
         let entry = if let Some(existing) = certs.get(host_port) {
             TrustedTlsCert {
                 first_seen: existing.first_seen,
+                display_name: entry.display_name.or_else(|| existing.display_name.clone()),
                 ..entry
             }
         } else {
@@ -574,6 +580,33 @@ impl Store {
 
         *cache = Some(certs);
         Ok(())
+    }
+
+    pub fn update_trusted_tls_display_name(
+        &self,
+        host_port: &str,
+        display_name: Option<String>,
+    ) -> std::io::Result<bool> {
+        let mut cache = self.trusted_tls_cache.lock().unwrap();
+        let mut certs = cache
+            .take()
+            .unwrap_or_else(|| self.load_trusted_tls_from_disk());
+
+        let Some(entry) = certs.get_mut(host_port) else {
+            *cache = Some(certs);
+            return Ok(false);
+        };
+        entry.display_name = display_name;
+
+        let path = self.root.join("trusted-tls-certs.json");
+        let json = serde_json::to_string(&certs).map_err(std::io::Error::other)?;
+        if let Err(e) = fs::write(path, &json) {
+            *cache = Some(certs);
+            return Err(e);
+        }
+
+        *cache = Some(certs);
+        Ok(true)
     }
 
     pub fn remove_trusted_tls_cert(&self, host_port: &str) -> std::io::Result<()> {
@@ -992,6 +1025,7 @@ mod tests {
             fingerprint: "SHA256:deadbeef".to_string(),
             first_seen: 1000,
             last_seen: 1000,
+            display_name: None,
         };
         store
             .save_trusted_tls_cert("example.com:8443", entry)
@@ -1007,6 +1041,7 @@ mod tests {
             fingerprint: "SHA256:deadbeef".to_string(),
             first_seen: 1000,
             last_seen: 1000,
+            display_name: None,
         };
         store
             .save_trusted_tls_cert("example.com:8443", entry)
@@ -1016,6 +1051,7 @@ mod tests {
             fingerprint: "SHA256:beadfeed".to_string(),
             first_seen: 2000,
             last_seen: 3000,
+            display_name: None,
         };
         store
             .save_trusted_tls_cert("example.com:8443", updated)
@@ -1034,6 +1070,7 @@ mod tests {
             fingerprint: "SHA256:deadbeef".to_string(),
             first_seen: 1000,
             last_seen: 1000,
+            display_name: None,
         };
         store
             .save_trusted_tls_cert("example.com:8443", entry)

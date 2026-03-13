@@ -1828,6 +1828,7 @@ async fn remote_connect_returns_409_when_fingerprint_changed() {
                 fingerprint: fake_fingerprint.to_string(),
                 first_seen: 1000,
                 last_seen: 1000,
+                display_name: None,
             },
         )
         .unwrap();

@@ -4,7 +4,7 @@ const FilerRemote = (() => {
   // mode: 'local' | 'sftp' | 'den' | 'relay'
   let mode = 'local';
   let hostInfo = null; // { host, username } for SFTP
-  let denInfo = null; // { url, hostPort, fingerprint } for Quick Connect
+  let denInfo = null; // { url, hostPort, fingerprint, displayName } for Quick Connect
   let relayInfo = null; // { relaySessionId, relayHostPort, targetHostPort, targetFingerprint } for Relay
 
   /** Current API base path */
@@ -42,6 +42,7 @@ const FilerRemote = (() => {
         url: denInfo?.url || null,
         hostPort: denInfo?.hostPort || null,
         fingerprint: denInfo?.fingerprint || null,
+        displayName: denInfo?.displayName || null,
         host: null,
         username: null,
       };
@@ -83,7 +84,17 @@ const FilerRemote = (() => {
       url: data.url || url,
       hostPort: data.host_port || null,
       fingerprint: data.fingerprint || null,
+      displayName: null,
     };
+    // Resolve display name from trusted TLS certs
+    if (denInfo.hostPort && typeof DenTlsTrust !== 'undefined') {
+      try {
+        const certs = await DenTlsTrust.list();
+        if (certs[denInfo.hostPort]?.display_name) {
+          denInfo.displayName = certs[denInfo.hostPort].display_name;
+        }
+      } catch { /* ignore */ }
+    }
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
     return data;
   }
@@ -388,7 +399,16 @@ const FilerRemote = (() => {
         const data = await resp.json();
         if (data.connected) {
           mode = 'den';
-          denInfo = { url: data.url, hostPort: data.host_port, fingerprint: data.fingerprint };
+          denInfo = { url: data.url, hostPort: data.host_port, fingerprint: data.fingerprint, displayName: null };
+          // Resolve display name
+          if (denInfo.hostPort && typeof DenTlsTrust !== 'undefined') {
+            try {
+              const certs = await DenTlsTrust.list();
+              if (certs[denInfo.hostPort]?.display_name) {
+                denInfo.displayName = certs[denInfo.hostPort].display_name;
+              }
+            } catch { /* ignore */ }
+          }
           document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
           return;
         }

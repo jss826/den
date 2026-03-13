@@ -1249,6 +1249,32 @@ html, body {
 .tls-trust-host {
   font-size: 0.82rem;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tls-trust-display-name {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.tls-trust-display-name:hover {
+  border-color: var(--border);
+  background: var(--surface);
+}
+.tls-trust-display-name.placeholder {
+  color: var(--muted);
+  font-style: italic;
+}
+.tls-trust-display-name-input {
+  font-size: 0.78rem;
+  padding: 1px 4px;
+  max-width: 140px;
 }
 .tls-trust-meta {
   display: flex;

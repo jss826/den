@@ -300,6 +300,7 @@ pub async fn connect(
                     fingerprint,
                     first_seen: now,
                     last_seen: now,
+                    display_name: None,
                 },
             )
         }
@@ -1208,6 +1209,7 @@ async fn relay_connect_two_hop(state: Arc<AppState>, req: RelayConnectRequest) -
                     fingerprint: fp,
                     first_seen: now,
                     last_seen: now,
+                    display_name: None,
                 },
             )
         }
@@ -1400,6 +1402,7 @@ async fn relay_connect_one_hop(state: Arc<AppState>, req: RelayConnectRequest) -
                     fingerprint: fp,
                     first_seen: now,
                     last_seen: now,
+                    display_name: None,
                 },
             )
         }

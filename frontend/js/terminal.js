@@ -742,7 +742,7 @@ const DenTerminal = (() => {
     const local = await fetchSessions();
 
     // Mark local sessions
-    const all = local.map(s => ({ ...s, remote: null }));
+    const all = local.map(s => ({ ...s, remote: null, remoteDisplayName: null }));
 
     // Fetch relay sessions
     const relay = getRelayInfo();
@@ -752,7 +752,9 @@ const DenTerminal = (() => {
           credentials: 'same-origin',
         });
         if (r.ok) {
-          all.push(...(await r.json()).map(s => ({ ...s, remote: relay.hostPort, detected_ports: [] })));
+          all.push(...(await r.json()).map(s => ({
+            ...s, remote: relay.hostPort, remoteDisplayName: null, detected_ports: [],
+          })));
         }
       } catch { /* ignore */ }
     } else {
@@ -764,7 +766,11 @@ const DenTerminal = (() => {
             credentials: 'same-origin',
           });
           if (r.ok) {
-            all.push(...(await r.json()).map(s => ({ ...s, remote: remoteInfo.hostPort, detected_ports: [] })));
+            all.push(...(await r.json()).map(s => ({
+              ...s, remote: remoteInfo.hostPort,
+              remoteDisplayName: remoteInfo.displayName || null,
+              detected_ports: [],
+            })));
           }
         } catch { /* ignore */ }
       }
@@ -838,7 +844,9 @@ const DenTerminal = (() => {
     const sessions = await fetchAllSessions();
 
     // F004: Skip DOM rebuild when sessions haven't changed
-    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession + '|' + currentRemote;
+    const grouping = typeof DenSettings !== 'undefined'
+      ? DenSettings.get('group_remote_sessions') !== false : true;
+    const sessionsKey = JSON.stringify(sessions) + '|' + currentSession + '|' + currentRemote + '|' + grouping;
     if (sessionsKey === lastSessionsKey) return;
     lastSessionsKey = sessionsKey;
 
@@ -874,10 +882,18 @@ const DenTerminal = (() => {
 
       const label = document.createElement('span');
       label.className = 'session-tab-label';
-      const displayName = s.remote ? `${s.remote}:${s.name}` : s.name;
-      label.textContent = displayName;
+      const grouping = typeof DenSettings !== 'undefined'
+        ? DenSettings.get('group_remote_sessions') !== false : true;
+      let displayLabel;
+      if (s.remote && grouping) {
+        const remoteLabel = s.remoteDisplayName || s.remote;
+        displayLabel = `${remoteLabel}:${s.name}`;
+      } else {
+        displayLabel = s.name;
+      }
+      label.textContent = displayLabel;
       label.title = s.remote
-        ? `${s.remote} — session: ${s.name}`
+        ? `${s.remoteDisplayName ? s.remoteDisplayName + ' — ' : ''}${s.remote} — session: ${s.name}`
         : s.name;
       tab.appendChild(label);
 
@@ -886,7 +902,7 @@ const DenTerminal = (() => {
       closeBtn.type = 'button';
       closeBtn.setAttribute('tabindex', '-1');
       closeBtn.textContent = '\u00d7';
-      closeBtn.setAttribute('aria-label', `Kill session ${displayName}`);
+      closeBtn.setAttribute('aria-label', `Kill session ${displayLabel}`);
       tab.appendChild(closeBtn);
 
       sessionTabsEl.appendChild(tab);
@@ -1244,8 +1260,11 @@ const DenTerminal = (() => {
     if (connectedHostPort) {
       const sep = document.createElement('div');
       sep.className = 'new-session-menu-separator';
-      const label = relayInfo ? `Relay ${connectedHostPort}` : `Remote ${connectedHostPort}`;
-      sep.textContent = label;
+      const remoteDisplayName = remoteInfo?.displayName;
+      const sepLabel = relayInfo
+        ? `Relay ${connectedHostPort}`
+        : `Remote ${remoteDisplayName || connectedHostPort}`;
+      sep.textContent = sepLabel;
       menu.appendChild(sep);
 
       const newItem = document.createElement('div');

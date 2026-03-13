@@ -463,6 +463,8 @@ const DenFiler = (() => {
       for (const hostPort of Object.keys(certs).sort()) {
         const opt = document.createElement('option');
         opt.value = 'https://' + hostPort;
+        const name = certs[hostPort].display_name;
+        if (name) opt.label = name;
         datalist.appendChild(opt);
       }
     }).catch(() => {});

@@ -105,6 +105,7 @@ pub fn create_app_with_secret(
             "/api/system/tls/trusted",
             get(tls::list_trusted)
                 .post(tls::trust)
+                .patch(tls::update_trusted_display_name)
                 .delete(tls::remove_trusted),
         )
         .route("/api/remote/connect", post(remote::connect))
