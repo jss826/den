@@ -79,7 +79,14 @@ DEN_PASSWORD=your_password ./den
 
 Open `http://localhost:3939` in your browser.
 
-> **Tip:** Set `DEN_PASSWORD` in a `.env` file in the same directory to avoid typing it every time.
+> **Tip:** Set `DEN_PASSWORD` in a `.env` file to avoid typing it every time.
+>
+> | Platform | `.env` location | Data directory |
+> |----------|-----------------|----------------|
+> | Windows | `%LOCALAPPDATA%\den\.env` | `%LOCALAPPDATA%\den\data\` |
+> | Linux / macOS | `~/.config/den/.env` | `~/.local/share/den/` |
+>
+> Override with `DEN_DATA_DIR` environment variable.
 
 ### Development (with just)
 
@@ -125,7 +132,7 @@ In development builds, `rust-embed` reads directly from the filesystem — chang
 | `DEN_ENV` | `development` | `production` | Environment mode |
 | `DEN_PORT` | `3939` | `8080` | Listen port |
 | `DEN_BIND_ADDRESS` | `127.0.0.1` | `0.0.0.0` | Bind address |
-| `DEN_DATA_DIR` | `./data-dev` | `./data` | Data persistence directory |
+| `DEN_DATA_DIR` | `./data-dev` | *(see below)* | Data persistence directory |
 | `DEN_LOG_LEVEL` | `debug` | `info` | Log level filter |
 | `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | same | Shell for terminal |
 | `DEN_SSH_PORT` | *(disabled)* | *(disabled)* | SSH server port (opt-in) |
@@ -133,6 +140,10 @@ In development builds, `rust-embed` reads directly from the filesystem — chang
 | `DEN_TLS_CERT_PATH` | *(auto-generate)* | *(auto-generate)* | Server certificate path (DER) |
 | `DEN_TLS_KEY_PATH` | *(auto-generate)* | *(auto-generate)* | Private key path (PKCS#8 DER) |
 | `DEN_TLS_SAN` | *(none)* | *(none)* | Subject Alternative Names (comma-separated) |
+
+When `DEN_DATA_DIR` is not set, the default depends on the platform:
+- **Windows:** `<exe directory>\data` (e.g. `%LOCALAPPDATA%\den\data`)
+- **Linux / macOS:** `$XDG_DATA_HOME/den` (default `~/.local/share/den`)
 
 ## TLS
 

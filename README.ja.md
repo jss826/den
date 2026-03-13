@@ -79,7 +79,14 @@ DEN_PASSWORD=your_password ./den
 
 ブラウザで `http://localhost:3939` を開いてください。
 
-> **Tip:** 同じディレクトリに `.env` ファイルを作成し `DEN_PASSWORD=your_password` を書いておくと、毎回入力不要になります。
+> **Tip:** `.env` ファイルに `DEN_PASSWORD=your_password` を書いておくと、毎回入力不要になります。
+>
+> | プラットフォーム | `.env` の場所 | データディレクトリ |
+> |-----------------|--------------|-------------------|
+> | Windows | `%LOCALAPPDATA%\den\.env` | `%LOCALAPPDATA%\den\data\` |
+> | Linux / macOS | `~/.config/den/.env` | `~/.local/share/den/` |
+>
+> `DEN_DATA_DIR` 環境変数で変更可能。
 
 ### 開発（just 使用）
 
@@ -125,7 +132,7 @@ just prod strongpw    # パスワード上書き指定も可
 | `DEN_ENV` | `development` | `production` | 環境モード |
 | `DEN_PORT` | `3939` | `8080` | リッスンポート |
 | `DEN_BIND_ADDRESS` | `127.0.0.1` | `0.0.0.0` | バインドアドレス |
-| `DEN_DATA_DIR` | `./data-dev` | `./data` | データ永続化ディレクトリ |
+| `DEN_DATA_DIR` | `./data-dev` | *（後述）* | データ永続化ディレクトリ |
 | `DEN_LOG_LEVEL` | `debug` | `info` | ログレベル |
 | `DEN_SHELL` | `powershell.exe` (Win) / `$SHELL` | 同左 | ターミナルのシェル |
 | `DEN_SSH_PORT` | *（無効）* | *（無効）* | SSH サーバーポート（opt-in） |
@@ -133,6 +140,10 @@ just prod strongpw    # パスワード上書き指定も可
 | `DEN_TLS_CERT_PATH` | *（自動生成）* | *（自動生成）* | サーバー証明書パス（DER 形式） |
 | `DEN_TLS_KEY_PATH` | *（自動生成）* | *（自動生成）* | 秘密鍵パス（PKCS#8 DER 形式） |
 | `DEN_TLS_SAN` | *（なし）* | *（なし）* | Subject Alternative Names（カンマ区切り） |
+
+`DEN_DATA_DIR` 未設定時のデフォルト:
+- **Windows:** `<exe ディレクトリ>\data`（例: `%LOCALAPPDATA%\den\data`）
+- **Linux / macOS:** `$XDG_DATA_HOME/den`（デフォルト `~/.local/share/den`）
 
 ## TLS
 
