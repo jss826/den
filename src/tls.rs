@@ -447,7 +447,12 @@ pub async fn serve(
                     let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
                     let hyper_service = TowerToHyperService::new(service);
                     if let Err(err) = builder.serve_connection_with_upgrades(io, hyper_service).await {
-                        tracing::warn!(%remote_addr, "HTTPS connection error: {err}");
+                        let msg = err.to_string();
+                        if msg.contains("close_notify") {
+                            tracing::debug!(%remote_addr, "TLS connection closed without close_notify");
+                        } else {
+                            tracing::warn!(%remote_addr, "HTTPS connection error: {err}");
+                        }
                     }
                 });
             }
