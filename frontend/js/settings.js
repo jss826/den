@@ -31,6 +31,7 @@ const DenSettings = (() => {
   let editingSnippets = [];
   let tlsStatus = null;
   let trustedTlsCerts = {};
+  let latestVersion = null;
 
   // unescapeSend は keybar.js の executeNormalKey 内で実行時に適用される。
   // 設定保存時にはエスケープ形式のまま保持する。

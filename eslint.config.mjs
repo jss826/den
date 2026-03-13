@@ -29,6 +29,7 @@ export default [
         FilerTree: 'readonly',
         FilerEditor: 'readonly',
         FilerRemote: 'readonly',
+        DenTlsTrust: 'readonly',
         CM: 'readonly',
         // xterm.js vendor globals
         Terminal: 'readonly',

@@ -1179,9 +1179,9 @@ async fn relay_connect_two_hop(state: Arc<AppState>, req: RelayConnectRequest) -
     // 3. Build pinned clients for relay
     let (relay_http, relay_ws_config) =
         match build_pinned_clients(&relay_probed.cert_der, &relay_probed.fingerprint) {
-        Ok(c) => c,
-        Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
-    };
+            Ok(c) => c,
+            Err(msg) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+        };
 
     // 4. Login to relay
     let relay_cookie =
@@ -1817,5 +1817,17 @@ mod tests {
         let fingerprint = sha256_fingerprint(b"hello");
         assert!(fingerprint.starts_with("SHA256:"));
         assert_eq!(fingerprint.len(), "SHA256:".len() + 64);
+    }
+
+    #[test]
+    fn build_pinned_clients_succeeds() {
+        // Use a minimal self-signed DER certificate for testing.
+        // rcgen generates a valid cert without needing files.
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_der = cert.cert.der().to_vec();
+        let fingerprint = sha256_fingerprint(&cert_der);
+
+        let result = build_pinned_clients(&cert_der, &fingerprint);
+        assert!(result.is_ok(), "build_pinned_clients failed: {result:?}");
     }
 }

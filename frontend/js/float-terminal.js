@@ -14,11 +14,6 @@ const FloatTerminal = (() => {
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
 
-  function getRemoteDenInfo() {
-    const info = window.FilerRemote?.getInfo?.();
-    return info && info.mode === 'den' ? info : null;
-  }
-
   function encodeSessionTarget(name, remote) {
     return JSON.stringify({ name, remote: remote || null });
   }

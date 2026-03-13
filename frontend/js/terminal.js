@@ -1,4 +1,3 @@
-/* global FilerRemote */
 // Den - ターミナルモジュール
 const DenTerminal = (() => {
   let term = null;
