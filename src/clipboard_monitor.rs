@@ -6,9 +6,24 @@
 //! テキスト内容が変更された場合のみ Store に追加する。
 
 use crate::store::Store;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const CLIPBOARD_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 const CLIPBOARD_MAX_TEXT_BYTES: usize = 10_240;
+
+/// Handle to stop the clipboard monitor on shutdown.
+#[derive(Clone)]
+pub struct ClipboardMonitorHandle {
+    stop: Arc<AtomicBool>,
+}
+
+impl ClipboardMonitorHandle {
+    /// Signal the monitor to stop.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
 
 #[cfg(windows)]
 mod win32 {
@@ -119,7 +134,9 @@ async fn record_clipboard_text(store: &Store, text: String, last_text: &mut Stri
 
 /// クリップボード監視を開始（バックグラウンド tokio タスク）
 #[cfg(windows)]
-pub fn start(store: Store) {
+pub fn start(store: Store) -> ClipboardMonitorHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let handle = ClipboardMonitorHandle { stop: stop.clone() };
     tokio::spawn(async move {
         let mut last_seq = win32::get_sequence_number();
         let mut last_text = String::new();
@@ -135,6 +152,9 @@ pub fn start(store: Store) {
         let mut interval = tokio::time::interval(CLIPBOARD_POLL_INTERVAL);
         loop {
             interval.tick().await;
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
             let current_seq = win32::get_sequence_number();
             if current_seq == last_seq {
                 continue;
@@ -149,10 +169,13 @@ pub fn start(store: Store) {
             record_clipboard_text(&store, text, &mut last_text).await;
         }
     });
+    handle
 }
 
 #[cfg(not(windows))]
-pub fn start(store: Store) {
+pub fn start(store: Store) -> ClipboardMonitorHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let handle = ClipboardMonitorHandle { stop: stop.clone() };
     // Clipboard operations must stay on a single OS thread (Wayland/X11 connection affinity).
     // Use spawn_blocking to pin to a dedicated thread and reuse the Clipboard instance.
     tokio::task::spawn_blocking(move || {
@@ -173,6 +196,9 @@ pub fn start(store: Store) {
         let rt = tokio::runtime::Handle::current();
         loop {
             std::thread::sleep(CLIPBOARD_POLL_INTERVAL);
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
             match desktop::read_clipboard(&mut clipboard) {
                 desktop::ClipboardRead::Text(text) => {
                     rt.block_on(record_clipboard_text(&store, text, &mut last_text));
@@ -185,6 +211,7 @@ pub fn start(store: Store) {
             }
         }
     });
+    handle
 }
 
 #[cfg(test)]

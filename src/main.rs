@@ -88,8 +88,8 @@ async fn main() {
         Some(store.clone()),
     );
 
-    // クリップボード監視（Windows: システムクリップボード変更を検知）
-    den::clipboard_monitor::start(store.clone());
+    // クリップボード監視（システムクリップボード変更を検知）
+    let clipboard_handle = den::clipboard_monitor::start(store.clone());
 
     // HTTP サーバー（メイン）+ graceful shutdown
     let shutdown_registry = Arc::clone(&registry);
@@ -134,23 +134,27 @@ async fn main() {
             listener,
             app,
             tls_runtime.server_config,
-            shutdown_signal(shutdown_registry),
+            shutdown_signal(shutdown_registry, clipboard_handle.clone()),
         )
         .await
         .unwrap();
     } else {
         tracing::info!("Listening on http://{}:{}", bind_address, port);
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(shutdown_registry))
+            .with_graceful_shutdown(shutdown_signal(shutdown_registry, clipboard_handle))
             .await
             .unwrap();
     }
 }
 
 /// Wait for shutdown signal (Ctrl+C) and persist sessions.
-async fn shutdown_signal(registry: Arc<SessionRegistry>) {
+async fn shutdown_signal(
+    registry: Arc<SessionRegistry>,
+    clipboard_handle: den::clipboard_monitor::ClipboardMonitorHandle,
+) {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("Shutdown signal received, persisting sessions...");
+    clipboard_handle.stop();
     registry.persist_sessions().await;
     tracing::info!("Sessions persisted. Shutting down.");
 }
