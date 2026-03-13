@@ -210,6 +210,9 @@ document.addEventListener('DOMContentLoaded', () => {
     DenSettings.apply();
     DenSettings.bindUI();
 
+    // Den Connect モーダル早期初期化（Terminal タブからも利用するため）
+    DenFiler.initDenConnectModal();
+
     // ターミナル初期化
     const container = document.getElementById('terminal-container');
     DenTerminal.init(container);

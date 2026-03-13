@@ -81,17 +81,7 @@ const DenFiler = (() => {
     const sftpSubmit = document.getElementById('sftp-connect-submit');
     if (sftpSubmit) sftpSubmit.addEventListener('click', doSftpConnect);
 
-    const denCancel = document.getElementById('den-connect-cancel');
-    if (denCancel) denCancel.addEventListener('click', () => {
-      document.getElementById('den-connect-modal').hidden = true;
-    });
-    const denSubmit = document.getElementById('den-connect-submit');
-    if (denSubmit) denSubmit.addEventListener('click', doDenConnect);
-    const denUseRelay = document.getElementById('den-use-relay');
-    if (denUseRelay) denUseRelay.addEventListener('change', () => {
-      const section = document.getElementById('den-relay-section');
-      if (section) section.hidden = !denUseRelay.checked;
-    });
+    initDenConnectModal();
 
     // SSH Bookmarks
     const bookmarkSelect = document.getElementById('sftp-bookmark-select');
@@ -446,6 +436,23 @@ const DenFiler = (() => {
     renderBookmarkSelect(null);
     modal.hidden = false;
     document.getElementById('sftp-host').focus();
+  }
+
+  let denConnectInitialized = false;
+  function initDenConnectModal() {
+    if (denConnectInitialized) return;
+    denConnectInitialized = true;
+    const denCancel = document.getElementById('den-connect-cancel');
+    if (denCancel) denCancel.addEventListener('click', () => {
+      document.getElementById('den-connect-modal').hidden = true;
+    });
+    const denSubmit = document.getElementById('den-connect-submit');
+    if (denSubmit) denSubmit.addEventListener('click', doDenConnect);
+    const denUseRelay = document.getElementById('den-use-relay');
+    if (denUseRelay) denUseRelay.addEventListener('change', () => {
+      const section = document.getElementById('den-relay-section');
+      if (section) section.hidden = !denUseRelay.checked;
+    });
   }
 
   function showDenModal(defaultUrl) {
@@ -1183,5 +1190,5 @@ const DenFiler = (() => {
     quickOpenCleanup = cleanup;
   }
 
-  return { init, focusSearch, showQuickOpen };
+  return { init, initDenConnectModal, focusSearch, showQuickOpen };
 })();
