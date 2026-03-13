@@ -364,6 +364,29 @@ impl Store {
         Ok(())
     }
 
+    // --- Session Order ---
+
+    pub fn load_session_order(&self) -> Vec<String> {
+        let path = self.root.join("session-order.json");
+        match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+                tracing::warn!("Corrupt session-order.json, using empty: {e}");
+                Vec::new()
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => {
+                tracing::warn!("Failed to read session-order.json: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn save_session_order(&self, order: &[String]) -> std::io::Result<()> {
+        let path = self.root.join("session-order.json");
+        let json = serde_json::to_string(order).map_err(std::io::Error::other)?;
+        fs::write(path, json)
+    }
+
     // --- Session Records ---
 
     pub fn load_sessions(&self) -> Vec<SessionRecord> {
@@ -1017,5 +1040,23 @@ mod tests {
             .unwrap();
         store.remove_trusted_tls_cert("example.com:8443").unwrap();
         assert!(store.get_trusted_tls_cert("example.com:8443").is_none());
+    }
+
+    // --- Session Order tests ---
+
+    #[test]
+    fn session_order_empty_when_missing() {
+        let (store, _tmp) = temp_store();
+        let order = store.load_session_order();
+        assert!(order.is_empty());
+    }
+
+    #[test]
+    fn session_order_roundtrip() {
+        let (store, _tmp) = temp_store();
+        let order = vec!["b".to_string(), "a".to_string(), "c".to_string()];
+        store.save_session_order(&order).unwrap();
+        let loaded = store.load_session_order();
+        assert_eq!(loaded, order);
     }
 }

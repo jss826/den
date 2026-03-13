@@ -727,6 +727,17 @@ const DenTerminal = (() => {
     return [];
   }
 
+  async function saveSessionOrder(order) {
+    try {
+      await fetch('/api/terminal/sessions/order', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(order),
+      });
+    } catch (_) { /* best-effort */ }
+  }
+
   /** Fetch sessions from local + current remote/relay Den */
   async function fetchAllSessions() {
     const local = await fetchSessions();
@@ -855,6 +866,7 @@ const DenTerminal = (() => {
       tab.dataset.session = s.name;
       tab.dataset.remote = s.remote || '';
       tab.setAttribute('role', 'tab');
+      tab.draggable = !s.remote; // only local sessions are reorderable
       const isActive = isCurrentSession(s);
       tab.setAttribute('tabindex', isActive ? '0' : '-1');
       tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
@@ -1048,6 +1060,66 @@ const DenTerminal = (() => {
           tab.setAttribute('tabindex', '-1');
           target.setAttribute('tabindex', '0');
           target.focus();
+        }
+      });
+
+      // Drag & drop for session tab reordering
+      let draggedTab = null;
+
+      sessionTabsEl.addEventListener('dragstart', (e) => {
+        const tab = e.target.closest('.session-tab');
+        if (!tab || tab.dataset.remote) { e.preventDefault(); return; }
+        draggedTab = tab;
+        tab.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', tab.dataset.session);
+      });
+
+      sessionTabsEl.addEventListener('dragover', (e) => {
+        if (!draggedTab) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const tab = e.target.closest('.session-tab');
+        if (!tab || tab === draggedTab || tab.dataset.remote) return;
+        // Clear previous indicators
+        for (const t of sessionTabsEl.querySelectorAll('.drag-over-left,.drag-over-right')) {
+          t.classList.remove('drag-over-left', 'drag-over-right');
+        }
+        const rect = tab.getBoundingClientRect();
+        const mid = rect.left + rect.width / 2;
+        tab.classList.add(e.clientX < mid ? 'drag-over-left' : 'drag-over-right');
+      });
+
+      sessionTabsEl.addEventListener('dragleave', (e) => {
+        const tab = e.target.closest('.session-tab');
+        if (tab) tab.classList.remove('drag-over-left', 'drag-over-right');
+      });
+
+      sessionTabsEl.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        if (!draggedTab) return;
+        const tab = e.target.closest('.session-tab');
+        if (!tab || tab === draggedTab || tab.dataset.remote) return;
+        tab.classList.remove('drag-over-left', 'drag-over-right');
+        const rect = tab.getBoundingClientRect();
+        const mid = rect.left + rect.width / 2;
+        if (e.clientX < mid) {
+          sessionTabsEl.insertBefore(draggedTab, tab);
+        } else {
+          sessionTabsEl.insertBefore(draggedTab, tab.nextSibling);
+        }
+        // Save new order to server
+        const order = [...sessionTabsEl.querySelectorAll('.session-tab')]
+          .filter(t => !t.dataset.remote)
+          .map(t => t.dataset.session);
+        await saveSessionOrder(order);
+      });
+
+      sessionTabsEl.addEventListener('dragend', () => {
+        if (draggedTab) draggedTab.classList.remove('dragging');
+        draggedTab = null;
+        for (const t of sessionTabsEl.querySelectorAll('.drag-over-left,.drag-over-right')) {
+          t.classList.remove('drag-over-left', 'drag-over-right');
         }
       });
     }

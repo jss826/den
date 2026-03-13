@@ -963,7 +963,22 @@ impl SessionRegistry {
             });
         }
 
-        result.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        // Sort by saved order first, then by created_at for new sessions
+        let saved_order = self
+            .store
+            .as_ref()
+            .map(|s| s.load_session_order())
+            .unwrap_or_default();
+        result.sort_by(|a, b| {
+            let pos_a = saved_order.iter().position(|n| *n == a.name);
+            let pos_b = saved_order.iter().position(|n| *n == b.name);
+            match (pos_a, pos_b) {
+                (Some(i), Some(j)) => i.cmp(&j),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.created_at.cmp(&b.created_at),
+            }
+        });
 
         let saved_records = self.load_saved_records();
         for record in saved_records {

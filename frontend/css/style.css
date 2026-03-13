@@ -569,6 +569,9 @@ html, body {
   border-color: var(--border);
 }
 .session-tab.dead { opacity: 0.5; }
+.session-tab.dragging { opacity: 0.4; }
+.session-tab.drag-over-left { box-shadow: -2px 0 0 0 var(--accent); }
+.session-tab.drag-over-right { box-shadow: 2px 0 0 0 var(--accent); }
 
 
 .session-tab-label {

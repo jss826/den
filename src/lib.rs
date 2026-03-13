@@ -170,6 +170,7 @@ pub fn create_app_with_secret(
             "/api/terminal/sessions",
             get(ws::list_sessions).post(ws::create_session),
         )
+        .route("/api/terminal/sessions/order", put(ws::reorder_sessions))
         .route(
             "/api/terminal/sessions/{name}",
             put(ws::rename_session).delete(ws::destroy_session),

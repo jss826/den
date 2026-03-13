@@ -369,6 +369,18 @@ pub async fn rename_session(
     }
 }
 
+/// PUT /api/terminal/sessions/order
+pub async fn reorder_sessions(
+    State(state): State<Arc<AppState>>,
+    Json(order): Json<Vec<String>>,
+) -> impl IntoResponse {
+    if let Err(e) = state.store.save_session_order(&order) {
+        tracing::warn!("Failed to save session order: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// DELETE /api/terminal/sessions/{name}
 pub async fn destroy_session(
     State(state): State<Arc<AppState>>,
