@@ -363,6 +363,14 @@ pub async fn trust(
             "Invalid fingerprint format".to_string(),
         ));
     }
+    if let Some(ref name) = req.display_name
+        && name.len() > MAX_DISPLAY_NAME_LEN
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("display_name must be at most {MAX_DISPLAY_NAME_LEN} characters"),
+        ));
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -393,6 +401,8 @@ pub async fn trust(
     Ok(StatusCode::OK)
 }
 
+const MAX_DISPLAY_NAME_LEN: usize = 100;
+
 pub async fn update_trusted_display_name(
     State(state): State<Arc<AppState>>,
     axum::Json(req): axum::Json<UpdateTlsDisplayNameRequest>,
@@ -400,6 +410,14 @@ pub async fn update_trusted_display_name(
     let host_port = req.host_port.trim().to_string();
     if host_port.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "host_port is required".to_string()));
+    }
+    if let Some(ref name) = req.display_name
+        && name.len() > MAX_DISPLAY_NAME_LEN
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("display_name must be at most {MAX_DISPLAY_NAME_LEN} characters"),
+        ));
     }
 
     let found = tokio::task::spawn_blocking({

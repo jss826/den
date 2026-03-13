@@ -7,6 +7,15 @@ const FilerRemote = (() => {
   let denInfo = null; // { url, hostPort, fingerprint, displayName } for Quick Connect
   let relayInfo = null; // { relaySessionId, relayHostPort, targetHostPort, targetFingerprint } for Relay
 
+  /** Resolve display name from trusted TLS certs cache */
+  async function resolveDisplayName(hostPort) {
+    if (!hostPort || typeof DenTlsTrust === 'undefined') return null;
+    try {
+      const certs = await DenTlsTrust.list();
+      return certs[hostPort]?.display_name || null;
+    } catch { return null; }
+  }
+
   /** Current API base path */
   function getApiBase() {
     if (mode === 'relay') return `/api/relay/${relayInfo.relaySessionId}/filer`;
@@ -86,15 +95,7 @@ const FilerRemote = (() => {
       fingerprint: data.fingerprint || null,
       displayName: null,
     };
-    // Resolve display name from trusted TLS certs
-    if (denInfo.hostPort && typeof DenTlsTrust !== 'undefined') {
-      try {
-        const certs = await DenTlsTrust.list();
-        if (certs[denInfo.hostPort]?.display_name) {
-          denInfo.displayName = certs[denInfo.hostPort].display_name;
-        }
-      } catch { /* ignore */ }
-    }
+    denInfo.displayName = await resolveDisplayName(denInfo.hostPort);
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
     return data;
   }
@@ -400,15 +401,7 @@ const FilerRemote = (() => {
         if (data.connected) {
           mode = 'den';
           denInfo = { url: data.url, hostPort: data.host_port, fingerprint: data.fingerprint, displayName: null };
-          // Resolve display name
-          if (denInfo.hostPort && typeof DenTlsTrust !== 'undefined') {
-            try {
-              const certs = await DenTlsTrust.list();
-              if (certs[denInfo.hostPort]?.display_name) {
-                denInfo.displayName = certs[denInfo.hostPort].display_name;
-              }
-            } catch { /* ignore */ }
-          }
+          denInfo.displayName = await resolveDisplayName(denInfo.hostPort);
           document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
           return;
         }

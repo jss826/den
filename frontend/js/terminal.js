@@ -882,8 +882,6 @@ const DenTerminal = (() => {
 
       const label = document.createElement('span');
       label.className = 'session-tab-label';
-      const grouping = typeof DenSettings !== 'undefined'
-        ? DenSettings.get('group_remote_sessions') !== false : true;
       let displayLabel;
       if (s.remote && grouping) {
         const remoteLabel = s.remoteDisplayName || s.remote;

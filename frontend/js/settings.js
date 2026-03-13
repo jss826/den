@@ -173,7 +173,10 @@ const DenSettings = (() => {
         input.focus();
         input.select();
 
+        let committed = false;
         async function commit() {
+          if (committed) return;
+          committed = true;
           const newName = input.value.trim();
           try {
             await DenTlsTrust.updateDisplayName(hostPort, newName);
@@ -188,7 +191,7 @@ const DenSettings = (() => {
         input.addEventListener('blur', commit);
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-          if (e.key === 'Escape') { e.preventDefault(); renderTrustedTls(); }
+          if (e.key === 'Escape') { e.preventDefault(); committed = true; renderTrustedTls(); }
         });
       });
     });
