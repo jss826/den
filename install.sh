@@ -49,10 +49,15 @@ done
 
 printf "\n"
 printf "Select version [0]: "
-read -r CHOICE
+if [ -t 0 ]; then
+  read -r CHOICE
+else
+  CHOICE=""
+  printf "(auto: 0)\n"
+fi
 CHOICE=${CHOICE:-0}
 
-TAG=$(printf '%s\n' "$TAGS" | sed -n "$((CHOICE+1))p")
+TAG=$(printf '%s\n' "$TAGS" | sed -n "$((CHOICE + 1))p")
 
 if [ -z "$TAG" ]; then
   printf "Invalid selection: %s\n" "$CHOICE" >&2

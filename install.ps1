@@ -31,7 +31,11 @@ for ($i = 0; $i -lt $Releases.Count; $i++) {
 }
 Write-Host ""
 
-$Choice = Read-Host "Select version [0]"
+try {
+    $Choice = Read-Host "Select version [0]"
+} catch {
+    $Choice = ""
+}
 if ([string]::IsNullOrWhiteSpace($Choice)) { $Choice = "0" }
 $Index = [int]$Choice
 
