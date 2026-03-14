@@ -4,33 +4,29 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentRemote = null; // null for local, 'relay' for relay, connectionId for Den
+  let currentRemote = null; // null for local, connectionId for remote Den (direct or relay)
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
-  function getRelayInfo() {
-    const info = typeof FilerRemote !== 'undefined' ? FilerRemote.getInfo() : null;
-    return info && info.mode === 'relay' ? info : null;
+  /** Strip port from host:port string, returning just hostname */
+  function stripPort(hp) {
+    if (!hp) return null;
+    const i = hp.lastIndexOf(':');
+    return i > 0 && !hp.endsWith(']') ? hp.substring(0, i) : hp;
   }
 
   /** Look up display label for a remote identifier. Accepts optional pre-fetched connections map. */
   function getRemoteLabel(remote, cachedConns) {
-    if (remote === 'relay') {
-      const info = getRelayInfo();
-      return info?.hostPort || 'relay';
-    }
     const conns = cachedConns || (typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {});
     const conn = conns[remote];
-    return conn?.displayName || conn?.hostPort || remote;
+    return conn?.displayName || stripPort(conn?.hostPort) || remote;
   }
 
   function getWsPath() {
     if (!currentRemote) return '/api/ws';
-    if (currentRemote === 'relay') {
-      const relay = getRelayInfo();
-      if (!relay?.relaySessionId) return '/api/ws';
-      return `/api/relay/${relay.relaySessionId}/ws`;
-    }
+    const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+    const conn = conns[currentRemote];
+    if (conn?.type === 'relay') return `/api/relay/${currentRemote}/ws`;
     return `/api/remote/${currentRemote}/ws`;
   }
 
@@ -739,33 +735,18 @@ const DenTerminal = (() => {
     // Mark local sessions
     const all = local.map(s => ({ ...s, remote: null, remoteDisplayName: null }));
 
-    // Fetch relay sessions
-    const relay = getRelayInfo();
-    if (relay?.relaySessionId) {
-      try {
-        const [sessResp, portsResp] = await Promise.all([
-          fetch(`/api/relay/${relay.relaySessionId}/terminal/sessions`, { credentials: 'same-origin' }),
-          fetch(`/api/relay/${relay.relaySessionId}/ports`, { credentials: 'same-origin' }),
-        ]);
-        if (sessResp.ok) {
-          const remotePorts = portsResp.ok ? await portsResp.json() : [];
-          all.push(...(await sessResp.json()).map(s => ({
-            ...s, remote: 'relay', remoteDisplayName: null,
-            detected_ports: remotePorts.filter(p => !p.session || p.session === s.name),
-          })));
-        }
-      } catch { /* ignore */ }
-    }
-
-    // Fetch sessions for all Den connections in parallel
+    // Fetch sessions for all Den connections (direct + relay) in parallel
     const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
     const denEntries = Object.entries(denConns);
     if (denEntries.length > 0) {
       const results = await Promise.all(denEntries.map(async ([connId, info]) => {
         try {
+          const apiPrefix = info.type === 'relay'
+            ? `/api/relay/${connId}`
+            : `/api/remote/${connId}`;
           const [sessResp, portsResp] = await Promise.all([
-            fetch(`/api/remote/${connId}/terminal/sessions`, { credentials: 'same-origin' }),
-            fetch(`/api/remote/${connId}/ports`, { credentials: 'same-origin' }),
+            fetch(`${apiPrefix}/terminal/sessions`, { credentials: 'same-origin' }),
+            fetch(`${apiPrefix}/ports`, { credentials: 'same-origin' }),
           ]);
           if (sessResp.ok) {
             const remotePorts = portsResp.ok ? await portsResp.json() : [];
@@ -787,12 +768,9 @@ const DenTerminal = (() => {
   /** Get API base path for session operations */
   function sessionApiBase(remote) {
     if (!remote) return '/api';
-    if (remote === 'relay') {
-      const info = getRelayInfo();
-      if (!info?.relaySessionId) return '/api';
-      return `/api/relay/${info.relaySessionId}`;
-    }
-    // remote is a connectionId
+    const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+    const conn = conns[remote];
+    if (conn?.type === 'relay') return `/api/relay/${remote}`;
     return `/api/remote/${remote}`;
   }
 
@@ -1002,12 +980,11 @@ const DenTerminal = (() => {
 
   function getFwdUrl(portInfo) {
     if (portInfo.remote) {
-      if (portInfo.remote === 'relay') {
-        const relay = getRelayInfo();
-        if (!relay?.relaySessionId) return `/fwd/${portInfo.port}/`;
-        return `/api/relay/${relay.relaySessionId}/fwd/${portInfo.port}/`;
+      const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+      const conn = conns[portInfo.remote];
+      if (conn?.type === 'relay') {
+        return `/api/relay/${portInfo.remote}/fwd/${portInfo.port}/`;
       }
-      // remote is a connectionId
       return `/api/remote/${portInfo.remote}/fwd/${portInfo.port}/`;
     }
     return `/fwd/${portInfo.port}/`;
@@ -1309,39 +1286,13 @@ const DenTerminal = (() => {
     });
     menu.appendChild(localItem);
 
-    // Relay connection
-    const relayInfo = getRelayInfo();
-    if (relayInfo) {
-      const sep = document.createElement('div');
-      sep.className = 'new-session-menu-separator';
-      sep.textContent = `Relay ${relayInfo.hostPort || ''}`;
-      menu.appendChild(sep);
-
-      const newItem = document.createElement('div');
-      newItem.className = 'new-session-menu-item';
-      newItem.textContent = 'New Terminal';
-      newItem.addEventListener('click', async () => {
-        closeMenu();
-        const name = await Toast.prompt('Session name:');
-        if (!name || !name.trim()) return;
-        const trimmed = name.trim();
-        const validationError = validateSessionName(trimmed);
-        if (validationError) { Toast.error(validationError); return; }
-        const ok = await createSession(trimmed, null, 'relay');
-        if (!ok) { Toast.error('Failed to create remote session'); return; }
-        lastSessionsKey = '';
-        await refreshSessionList();
-        switchSession(trimmed, 'relay');
-      });
-      menu.appendChild(newItem);
-    }
-
-    // Den connections (one section per connection)
+    // Den connections (one section per connection, direct + relay unified)
     const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
     for (const [connId, info] of Object.entries(denConns)) {
+      const prefix = info.type === 'relay' ? 'Relay' : 'Remote';
       const sep = document.createElement('div');
       sep.className = 'new-session-menu-separator';
-      sep.textContent = `Remote ${info.displayName || info.hostPort || connId}`;
+      sep.textContent = `${prefix} ${info.displayName || stripPort(info.hostPort) || connId}`;
       menu.appendChild(sep);
 
       const newItem = document.createElement('div');
@@ -1363,17 +1314,15 @@ const DenTerminal = (() => {
       menu.appendChild(newItem);
     }
 
-    // Quick Connect option (always shown when no relay)
-    if (!relayInfo) {
-      const quickItem = document.createElement('div');
-      quickItem.className = 'new-session-menu-item';
-      quickItem.textContent = 'Quick Connect Den\u2026';
-      quickItem.addEventListener('click', () => {
-        closeMenu();
-        DenFiler.showDenModal();
-      });
-      menu.appendChild(quickItem);
-    }
+    // Quick Connect option
+    const quickItem = document.createElement('div');
+    quickItem.className = 'new-session-menu-item';
+    quickItem.textContent = 'Quick Connect Den\u2026';
+    quickItem.addEventListener('click', () => {
+      closeMenu();
+      DenFiler.showDenModal();
+    });
+    menu.appendChild(quickItem);
 
     // SSH bookmarks
     const bookmarks = DenSettings.get('ssh_bookmarks') || [];

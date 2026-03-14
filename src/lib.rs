@@ -126,7 +126,10 @@ pub fn create_app_with_secret(
         )
         // Relay routes
         .route("/api/relay/connect", post(remote::relay_connect))
-        .route("/api/relay/status", get(remote::relay_status))
+        .route(
+            "/api/relay/connections",
+            get(remote::relay_list_connections),
+        )
         .route("/api/relay/{id}/disconnect", post(remote::relay_disconnect))
         .route("/api/relay/{id}/ws", get(remote::relay_ws_handler))
         .route(

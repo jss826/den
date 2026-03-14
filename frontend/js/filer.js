@@ -229,14 +229,11 @@ const DenFiler = (() => {
     const info = FilerRemote.getInfo();
     const denConns = FilerRemote.getDenConnections();
     const denCount = Object.keys(denConns).length;
-    if (info.mode === 'relay') {
-      btn.textContent = info.hostPort || 'Relay';
-      btn.classList.add('active');
-      btn.setAttribute('data-tooltip', `Connected via relay ${info.relayHostPort || ''}`);
-    } else if (info.mode === 'den') {
+    if (info.mode === 'den') {
       const activeConn = denConns[FilerRemote.getActiveDenId()];
       const label = activeConn?.displayName || activeConn?.hostPort || 'Remote Den';
-      btn.textContent = denCount > 1 ? `${label} (+${denCount - 1})` : label;
+      const suffix = activeConn?.type === 'relay' ? ' (relay)' : '';
+      btn.textContent = denCount > 1 ? `${label}${suffix} (+${denCount - 1})` : `${label}${suffix}`;
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', `${denCount} Den connection${denCount !== 1 ? 's' : ''}`);
     } else if (info.mode === 'sftp') {
@@ -270,23 +267,6 @@ const DenFiler = (() => {
 
     const info = FilerRemote.getInfo();
 
-    // Relay disconnect
-    if (info.mode === 'relay') {
-      const label = `${info.hostPort || 'target'} via ${info.relayHostPort || 'relay'}`;
-      const disconnItem = document.createElement('div');
-      disconnItem.className = 'new-session-menu-item disconnect';
-      disconnItem.textContent = `Disconnect ${label}`;
-      disconnItem.addEventListener('click', () => {
-        closeRemoteDropdown();
-        doRelayDisconnect();
-      });
-      menu.appendChild(disconnItem);
-
-      const sep = document.createElement('div');
-      sep.className = 'new-session-menu-separator';
-      menu.appendChild(sep);
-    }
-
     // SFTP disconnect
     if (info.mode === 'sftp') {
       const label = `${info.username}@${info.host}`;
@@ -304,13 +284,14 @@ const DenFiler = (() => {
       menu.appendChild(sep);
     }
 
-    // Per-Den-connection disconnect items
+    // Per-Den-connection disconnect items (direct + relay unified)
     const denConns = FilerRemote.getDenConnections();
     const denIds = Object.keys(denConns);
     if (denIds.length > 0) {
       for (const connId of denIds) {
         const conn = denConns[connId];
-        const label = conn.displayName || conn.hostPort || connId;
+        let label = conn.displayName || conn.hostPort || connId;
+        if (conn.type === 'relay') label += ' (relay)';
         const disconnItem = document.createElement('div');
         disconnItem.className = 'new-session-menu-item disconnect';
         disconnItem.textContent = `Disconnect ${label}`;
@@ -601,7 +582,7 @@ const DenFiler = (() => {
         } else {
           data = await FilerRemote.connectDen(url, password);
           document.getElementById('den-connect-modal').hidden = true;
-          Toast.success(`Connected to ${data.host_port || url}`);
+          Toast.success(`Connected to ${data.host_port || url} (direct)`);
         }
       } catch (e) {
         if (e.message !== 'Connection cancelled') {
@@ -620,12 +601,6 @@ const DenFiler = (() => {
   async function doDenDisconnect(connectionId) {
     if (!(await Toast.confirm('Disconnect from remote Den?'))) return;
     await FilerRemote.disconnectDen(connectionId);
-    Toast.success('Disconnected');
-  }
-
-  async function doRelayDisconnect() {
-    if (!(await Toast.confirm('Disconnect relay connection?'))) return;
-    await FilerRemote.disconnectRelay();
     Toast.success('Disconnected');
   }
 
@@ -1252,5 +1227,144 @@ const DenFiler = (() => {
     quickOpenCleanup = cleanup;
   }
 
-  return { init, initDenConnectModal, showDenModal, focusSearch, showQuickOpen };
+  // --- Connections info dialog ---
+  let connectionsDialogVisible = false;
+  let renderGeneration = 0; // F007: guard against concurrent renderConnectionsList
+
+  function initConnectionsButton() {
+    const btn = document.getElementById('connections-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => showConnectionsDialog());
+
+    // Update button visibility on remote changes
+    document.addEventListener('den:remote-changed', () => updateConnectionsButton());
+
+    // Close button
+    const closeBtn = document.getElementById('connections-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeConnectionsDialog);
+
+    // F006: Also track Esc-based close (modal is in escModals, hidden by app.js keydown handler)
+    const modal = document.getElementById('connections-modal');
+    if (modal) {
+      const observer = new MutationObserver(() => {
+        if (modal.hidden) connectionsDialogVisible = false;
+      });
+      observer.observe(modal, { attributes: true, attributeFilter: ['hidden'] });
+    }
+
+    // Refresh session list in dialog when sessions change (F007: use event detail)
+    document.addEventListener('den:sessions-changed', (e) => {
+      if (connectionsDialogVisible) renderConnectionsList(e.detail?.sessions);
+    });
+  }
+
+  function closeConnectionsDialog() {
+    const modal = document.getElementById('connections-modal');
+    if (modal) modal.hidden = true;
+    connectionsDialogVisible = false;
+  }
+
+  function updateConnectionsButton() {
+    const btn = document.getElementById('connections-btn');
+    if (!btn) return;
+    const denConns = FilerRemote.getDenConnections();
+    const count = Object.keys(denConns).length;
+    btn.hidden = count === 0;
+    btn.classList.toggle('active', count > 0);
+  }
+
+  async function showConnectionsDialog() {
+    const modal = document.getElementById('connections-modal');
+    if (!modal) return;
+    connectionsDialogVisible = true;
+    modal.hidden = false;
+    await renderConnectionsList();
+  }
+
+  async function renderConnectionsList(cachedSessions) {
+    const container = document.getElementById('connections-list');
+    if (!container) return;
+
+    // F007: generation guard to prevent stale renders
+    const gen = ++renderGeneration;
+
+    const denConns = FilerRemote.getDenConnections();
+    const connIds = Object.keys(denConns);
+
+    if (connIds.length === 0) {
+      container.innerHTML = '<p class="connections-empty">No active connections</p>';
+      return;
+    }
+
+    // Reuse cached sessions from event detail, or fetch fresh
+    let allSessions = cachedSessions || [];
+    if (!cachedSessions) {
+      try {
+        allSessions = await DenTerminal.fetchAllSessions();
+      } catch { /* ignore */ }
+    }
+
+    // F007: stale check after async
+    if (gen !== renderGeneration) return;
+
+    container.innerHTML = '';
+    for (const connId of connIds) {
+      const conn = denConns[connId];
+      const entry = document.createElement('div');
+      entry.className = 'connection-entry';
+
+      const isRelay = conn.type === 'relay';
+      const typeLabel = isRelay ? 'Relay' : 'Direct';
+      // F013: sanitize CSS class — only allow known values
+      const typeCssClass = isRelay ? 'relay' : 'direct';
+      const displayName = conn.displayName || conn.hostPort || connId;
+
+      let html = `<div class="connection-header">`;
+      html += `<strong class="connection-name">${escapeHtml(displayName)}</strong>`;
+      html += `<span class="connection-type-badge ${typeCssClass}">${typeLabel}</span>`;
+      html += `</div>`;
+      html += `<div class="connection-details">`;
+      html += `<div class="connection-detail"><span class="connection-label">Host:Port</span> <code>${escapeHtml(conn.hostPort || 'unknown')}</code></div>`;
+      if (conn.fingerprint) {
+        html += `<div class="connection-detail"><span class="connection-label">Fingerprint</span> <code class="connection-fingerprint">${escapeHtml(conn.fingerprint)}</code></div>`;
+      }
+      if (isRelay && conn.relayHostPort) {
+        html += `<div class="connection-detail"><span class="connection-label">Via Relay</span> <code>${escapeHtml(conn.relayHostPort)}</code></div>`;
+      }
+
+      // Associated sessions
+      const sessions = allSessions.filter(s => s.remote === connId);
+      if (sessions.length > 0) {
+        html += `<div class="connection-detail"><span class="connection-label">Sessions</span> ${sessions.map(s => `<span class="connection-session">${escapeHtml(s.name)}</span>`).join(' ')}</div>`;
+      }
+      html += `</div>`;
+
+      entry.innerHTML = html;
+
+      // Disconnect button (F009: confirmation dialog + double-click guard)
+      const disconnBtn = document.createElement('button');
+      disconnBtn.className = 'modal-btn connection-disconnect-btn';
+      disconnBtn.textContent = 'Disconnect';
+      disconnBtn.addEventListener('click', async () => {
+        if (disconnBtn.disabled) return;
+        if (!(await Toast.confirm(`Disconnect ${escapeHtml(displayName)}?`))) return;
+        disconnBtn.disabled = true;
+        await FilerRemote.disconnectDen(connId);
+        await renderConnectionsList();
+        updateConnectionsButton();
+        Toast.success('Disconnected');
+      });
+      entry.appendChild(disconnBtn);
+
+      container.appendChild(entry);
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  return { init, initDenConnectModal, initConnectionsButton, showDenModal, focusSearch, showQuickOpen };
 })();

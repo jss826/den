@@ -44,17 +44,28 @@ impl Default for RemoteManager {
 }
 
 impl RemoteManager {
-    pub fn insert(&self, id: String, session: RemoteSession) -> Result<(), &'static str> {
+    pub fn insert(
+        &self,
+        id: String,
+        session: RemoteSession,
+        relay_client: &RelayClientManager,
+    ) -> Result<(), &'static str> {
+        // Collect relay state first (separate lock scope to avoid deadlock)
+        let relay_count = relay_client.count();
+        let relay_has_host = relay_client.has_target_host_port(&session.host_port);
+
         let mut sessions = self.sessions.lock().unwrap();
-        if sessions.len() >= MAX_REMOTE_CONNECTIONS {
+        // Check total connections (direct + relay) against global limit
+        if sessions.len() + relay_count >= MAX_REMOTE_CONNECTIONS {
             return Err("too many remote connections");
         }
         // Prevent duplicate connections to the same host
-        if sessions
-            .values()
-            .any(|s| s.host_port == session.host_port)
-        {
+        if sessions.values().any(|s| s.host_port == session.host_port) {
             return Err("already connected to this host");
+        }
+        // Prevent duplicate with relay connections
+        if relay_has_host {
+            return Err("already connected to this host via relay");
         }
         sessions.insert(id, session);
         Ok(())
@@ -84,6 +95,18 @@ impl RemoteManager {
                 )
             })
             .collect()
+    }
+
+    pub fn count(&self) -> usize {
+        self.sessions.lock().unwrap().len()
+    }
+
+    pub fn has_host_port(&self, host_port: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .any(|s| s.host_port == host_port)
     }
 }
 
@@ -358,7 +381,11 @@ pub async fn connect(
         ws_client_config,
     };
 
-    if let Err(msg) = state.remote_manager.insert(connection_id.clone(), session) {
+    if let Err(msg) =
+        state
+            .remote_manager
+            .insert(connection_id.clone(), session, &state.relay_client)
+    {
         return api_error(StatusCode::CONFLICT, msg);
     }
 
@@ -957,10 +984,10 @@ impl RelayManager {
     }
 }
 
-/// Relay client: state when this Den connects to a target through a relay.
+/// Relay client: state when this Den connects to targets through relay(s).
 #[derive(Clone)]
 pub struct RelayClientManager {
-    current: Arc<Mutex<Option<RelayClientSession>>>,
+    sessions: Arc<Mutex<HashMap<String, RelayClientSession>>>,
 }
 
 #[derive(Clone)]
@@ -975,23 +1002,87 @@ struct RelayClientSession {
 impl Default for RelayClientManager {
     fn default() -> Self {
         Self {
-            current: Arc::new(Mutex::new(None)),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
 
 impl RelayClientManager {
-    fn get(&self) -> Option<RelayClientSession> {
-        self.current.lock().unwrap().clone()
+    fn insert(
+        &self,
+        session: RelayClientSession,
+        remote_manager: &RemoteManager,
+    ) -> Result<(), &'static str> {
+        // Collect remote state first (separate lock scope to avoid deadlock)
+        let remote_count = remote_manager.count();
+        let remote_has_host = remote_manager.has_host_port(&session.target_host_port);
+
+        let mut sessions = self.sessions.lock().unwrap();
+        // Check total connections (relay + direct) against limit
+        if sessions.len() + remote_count >= MAX_REMOTE_CONNECTIONS {
+            return Err("too many remote connections");
+        }
+        // Prevent duplicate target_host_port within relay sessions
+        if sessions
+            .values()
+            .any(|s| s.target_host_port == session.target_host_port)
+        {
+            return Err("already connected to this target via relay");
+        }
+        // Prevent duplicate with direct connections
+        if remote_has_host {
+            return Err("already connected to this host directly");
+        }
+        let id = session.relay_session_id.clone();
+        sessions.insert(id, session);
+        Ok(())
     }
 
-    fn set(&self, session: RelayClientSession) {
-        *self.current.lock().unwrap() = Some(session);
+    fn get(&self, relay_session_id: &str) -> Option<RelayClientSession> {
+        self.sessions.lock().unwrap().get(relay_session_id).cloned()
     }
 
-    fn clear(&self) {
-        *self.current.lock().unwrap() = None;
+    fn remove(&self, relay_session_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap()
+            .remove(relay_session_id)
+            .is_some()
     }
+
+    fn list(&self) -> Vec<RelayClientConnectionInfo> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|s| RelayClientConnectionInfo {
+                relay_session_id: s.relay_session_id.clone(),
+                relay_host_port: s.relay_host_port.clone(),
+                target_host_port: s.target_host_port.clone(),
+                target_fingerprint: s.target_fingerprint.clone(),
+            })
+            .collect()
+    }
+
+    fn count(&self) -> usize {
+        self.sessions.lock().unwrap().len()
+    }
+
+    fn has_target_host_port(&self, host_port: &str) -> bool {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .any(|s| s.target_host_port == host_port)
+    }
+}
+
+#[derive(Serialize)]
+pub struct RelayClientConnectionInfo {
+    pub relay_session_id: String,
+    pub relay_host_port: String,
+    pub target_host_port: String,
+    pub target_fingerprint: String,
 }
 
 #[derive(Deserialize)]
@@ -1013,19 +1104,6 @@ struct RelayConnectResponse {
     target_fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     relay_host_port: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct RelayStatusResponse {
-    connected: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    relay_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    relay_host_port: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target_host_port: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target_fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1225,7 +1303,7 @@ async fn relay_connect_two_hop(state: Arc<AppState>, req: RelayConnectRequest) -
     };
 
     // 6. Store relay client session
-    state.relay_client.set(RelayClientSession {
+    let relay_session = RelayClientSession {
         relay: RemoteSession {
             base_url: relay_base.to_string(),
             host_port: relay_host_port.clone(),
@@ -1238,7 +1316,26 @@ async fn relay_connect_two_hop(state: Arc<AppState>, req: RelayConnectRequest) -
         relay_host_port: relay_host_port.clone(),
         target_host_port: relay_data.target_host_port.clone(),
         target_fingerprint: relay_data.target_fingerprint.clone(),
-    });
+    };
+    if let Err(e) = state
+        .relay_client
+        .insert(relay_session.clone(), &state.remote_manager)
+    {
+        // Clean up the session created on the relay side
+        let disconnect_url = format!(
+            "{}/api/relay/{}/disconnect",
+            relay_session.relay.base_url, relay_session.relay_session_id
+        );
+        let _ = relay_session
+            .relay
+            .http_client
+            .post(&disconnect_url)
+            .timeout(REMOTE_REQUEST_TIMEOUT)
+            .header(header::COOKIE, &relay_session.relay.cookie_header)
+            .send()
+            .await;
+        return api_error(StatusCode::CONFLICT, e);
+    }
 
     axum::Json(RelayConnectResponse {
         relay_session_id: relay_data.relay_session_id,
@@ -1370,25 +1467,11 @@ async fn relay_connect_one_hop(state: Arc<AppState>, req: RelayConnectRequest) -
     .into_response()
 }
 
-/// GET /api/relay/status
-pub async fn relay_status(State(state): State<Arc<AppState>>) -> axum::Json<RelayStatusResponse> {
-    let body = match state.relay_client.get() {
-        Some(rc) => RelayStatusResponse {
-            connected: true,
-            relay_session_id: Some(rc.relay_session_id),
-            relay_host_port: Some(rc.relay_host_port),
-            target_host_port: Some(rc.target_host_port),
-            target_fingerprint: Some(rc.target_fingerprint),
-        },
-        None => RelayStatusResponse {
-            connected: false,
-            relay_session_id: None,
-            relay_host_port: None,
-            target_host_port: None,
-            target_fingerprint: None,
-        },
-    };
-    axum::Json(body)
+/// GET /api/relay/connections
+pub async fn relay_list_connections(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<Vec<RelayClientConnectionInfo>> {
+    axum::Json(state.relay_client.list())
 }
 
 /// POST /api/relay/{id}/disconnect
@@ -1400,10 +1483,8 @@ pub async fn relay_disconnect(
     if state.relay_manager.remove(&session_id) {
         return StatusCode::NO_CONTENT;
     }
-    // Check relay client
-    if let Some(rc) = state.relay_client.get()
-        && rc.relay_session_id == session_id
-    {
+    // Check relay client sessions by relay_session_id key
+    if let Some(rc) = state.relay_client.get(&session_id) {
         // Disconnect on the relay side too
         let disconnect_url = format!(
             "{}/api/relay/{}/disconnect",
@@ -1417,7 +1498,7 @@ pub async fn relay_disconnect(
             .header(header::COOKIE, &rc.relay.cookie_header)
             .send()
             .await;
-        state.relay_client.clear();
+        state.relay_client.remove(&session_id);
         return StatusCode::NO_CONTENT;
     }
     StatusCode::NOT_FOUND
@@ -1436,9 +1517,7 @@ fn resolve_relay_session(state: &AppState, session_id: &str) -> Option<RelayReso
     if let Some(target) = state.relay_manager.get_target(session_id) {
         return Some(RelayResolve::Server(target));
     }
-    if let Some(rc) = state.relay_client.get()
-        && rc.relay_session_id == session_id
-    {
+    if let Some(rc) = state.relay_client.get(session_id) {
         return Some(RelayResolve::Client(rc));
     }
     None

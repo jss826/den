@@ -10,7 +10,7 @@ const FloatTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentRemote = null; // null for local, 'relay' for relay, connectionId for Den
+  let currentRemote = null; // null for local, connectionId for remote Den (direct or relay)
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
 
@@ -270,11 +270,12 @@ const FloatTerminal = (() => {
     let wsPath;
     if (!currentRemote) {
       wsPath = '/api/ws';
-    } else if (currentRemote === 'relay') {
-      const relayInfo = typeof FilerRemote !== 'undefined' ? FilerRemote.getInfo() : null;
-      wsPath = relayInfo?.relaySessionId ? `/api/relay/${relayInfo.relaySessionId}/ws` : '/api/ws';
     } else {
-      wsPath = `/api/remote/${currentRemote}/ws`;
+      const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+      const conn = conns[currentRemote];
+      wsPath = conn?.type === 'relay'
+        ? `/api/relay/${currentRemote}/ws`
+        : `/api/remote/${currentRemote}/ws`;
     }
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 

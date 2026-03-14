@@ -1566,6 +1566,71 @@ html, body {
   margin-top: 4px;
 }
 
+/* Connections dialog */
+.connections-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 16px 0;
+}
+.connection-entry {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}
+.connection-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.connection-name {
+  font-size: 0.95rem;
+}
+.connection-type-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.connection-type-badge.direct {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+}
+.connection-type-badge.relay {
+  background: #f59e0b;
+  color: #000;
+}
+.connection-details {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.connection-detail {
+  margin-bottom: 2px;
+}
+.connection-label {
+  opacity: 0.7;
+  min-width: 70px;
+  display: inline-block;
+}
+.connection-fingerprint {
+  font-size: 0.7rem;
+}
+.connection-session {
+  display: inline-block;
+  background: var(--border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 3px;
+  font-size: 0.75rem;
+}
+.connection-disconnect-btn {
+  margin-top: 8px;
+  font-size: 0.8rem;
+}
+
 /* SSH Bookmark row */
 .sftp-bookmark-row {
   display: flex;

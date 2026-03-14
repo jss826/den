@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal'];
+  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
   const allModals = ['confirm-modal', 'prompt-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
@@ -196,6 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'snippet-btn': DenIcons.snippet,
       'text-input-btn': DenIcons.edit,
       'float-terminal-btn': DenIcons.terminal,
+      'connections-btn': DenIcons.globe,
       'keep-awake-btn': DenIcons.coffee,
       'settings-btn': DenIcons.gear,
     };
@@ -264,6 +265,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // SFTP 接続状態チェック（ページリロード時の復元）
     FilerRemote.checkStatus();
+
+    // Connections info button
+    DenFiler.initConnectionsButton();
 
     // スニペット初期化
     DenSnippet.init(document.getElementById('snippet-btn'));

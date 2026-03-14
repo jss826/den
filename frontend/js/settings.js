@@ -286,10 +286,9 @@ const DenSettings = (() => {
 
   function getRemoteSettingsUrl() {
     const info = FilerRemote.getInfo();
-    if (!info.connected) return null;
-    if (info.mode === 'relay') return `/api/relay/${info.relaySessionId}/settings`;
-    if (info.mode === 'den') return `/api/remote/${info.connectionId}/settings`;
-    return null;
+    if (!info.connected || info.mode !== 'den' || !info.connectionId) return null;
+    if (info.connectionType === 'relay') return `/api/relay/${info.connectionId}/settings`;
+    return `/api/remote/${info.connectionId}/settings`;
   }
 
   async function loadRemoteSettings() {

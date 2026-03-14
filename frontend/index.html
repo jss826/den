@@ -34,6 +34,7 @@
       <button id="snippet-btn" class="tab-icon-btn" data-tooltip="Snippets" aria-label="Snippets"></button>
       <button id="text-input-btn" class="tab-icon-btn" data-tooltip="Text Input (Ctrl+J)" aria-label="Text input"></button>
       <button id="float-terminal-btn" class="tab-icon-btn" data-tooltip="Floating Terminal (Ctrl+`)" aria-label="Floating terminal"></button>
+      <button id="connections-btn" class="tab-icon-btn" data-tooltip="Connections" aria-label="Connections" hidden></button>
       <button id="keep-awake-btn" class="tab-icon-btn" data-tooltip="Keep Awake" aria-label="Keep awake"></button>
       <button id="settings-btn" class="tab-icon-btn" data-tooltip="Settings" aria-label="Settings"></button>
     </div>
@@ -284,6 +285,17 @@
         <div class="modal-actions">
           <button id="tls-cert-cancel" class="modal-btn">Cancel</button>
           <button id="tls-cert-trust" class="modal-btn hostkey-trust-btn">Trust</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 接続情報モーダル -->
+    <div id="connections-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Connections">
+      <div class="modal-content">
+        <h3>Connections</h3>
+        <div id="connections-list"></div>
+        <div class="modal-actions">
+          <button id="connections-close" class="modal-btn">Close</button>
         </div>
       </div>
     </div>

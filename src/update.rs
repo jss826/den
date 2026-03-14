@@ -315,8 +315,24 @@ fn update_linux(
         return Err("den binary not found in archive".to_string());
     }
 
-    // Replace binary (atomic on same filesystem)
-    std::fs::copy(&new_bin, current_exe).map_err(|e| format!("Failed to replace binary: {e}"))?;
+    // Remove old binary first to avoid ETXTBSY on running executable.
+    // Linux allows unlinking a running binary; the kernel keeps the inode alive
+    // until the process exits. Then copy the new binary into place.
+    let bak = current_exe.with_extension("bak");
+    let _ = std::fs::remove_file(&bak);
+    std::fs::rename(current_exe, &bak)
+        .map_err(|e| format!("Failed to rename current binary: {e}"))?;
+    if let Err(e) = std::fs::copy(&new_bin, current_exe) {
+        // Rollback: restore original binary
+        let _ = std::fs::rename(&bak, current_exe);
+        return Err(format!("Failed to place new binary: {e}"));
+    }
+    // Set executable permission
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(current_exe, std::fs::Permissions::from_mode(0o755));
+    }
 
     // Cleanup
     let _ = std::fs::remove_file(&tmp_tar);
