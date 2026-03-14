@@ -39,13 +39,25 @@ fn download_url() -> String {
     )
 }
 
-/// Compare two semver strings (e.g. "1.6.1" < "1.7.0").
+/// Compare two semver strings (e.g. "1.6.1" < "1.7.0", "2.0.0-rc.10" < "2.0.0").
 /// Returns true if `latest` is newer than `current`.
+/// Pre-release versions (containing '-') are considered older than the same
+/// version without a pre-release suffix (e.g. 2.0.0-rc.10 < 2.0.0).
 fn is_newer(current: &str, latest: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
-    let cur = parse(current);
-    let lat = parse(latest);
-    lat > cur
+
+    // Split off pre-release suffix: "2.0.0-rc.10" → ("2.0.0", true)
+    let (cur_ver, cur_pre) = current.split_once('-').map_or((current, false), |(v, _)| (v, true));
+    let (lat_ver, lat_pre) = latest.split_once('-').map_or((latest, false), |(v, _)| (v, true));
+    let cur = parse(cur_ver);
+    let lat = parse(lat_ver);
+
+    match lat.cmp(&cur) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        // Same version numbers: pre-release < release (e.g. 2.0.0-rc.10 < 2.0.0)
+        std::cmp::Ordering::Equal => cur_pre && !lat_pre,
+    }
 }
 
 /// Fetch latest release tag from GitHub API using curl.
@@ -374,6 +386,15 @@ mod tests {
         assert!(!is_newer("1.6.1", "1.6.1"));
         assert!(!is_newer("1.7.0", "1.6.1"));
         assert!(!is_newer("2.0.0", "1.9.9"));
+        // Pre-release → release upgrade
+        assert!(is_newer("2.0.0-rc.10", "2.0.0"));
+        assert!(is_newer("2.0.0-rc.1", "2.0.0"));
+        // Same pre-release
+        assert!(!is_newer("2.0.0-rc.10", "2.0.0-rc.10"));
+        // Release is not older than pre-release of same version
+        assert!(!is_newer("2.0.0", "2.0.0-rc.10"));
+        // Pre-release of higher version is still newer
+        assert!(is_newer("1.6.1", "2.0.0-rc.1"));
     }
 
     #[test]
