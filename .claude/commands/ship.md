@@ -24,6 +24,16 @@ allowed-tools: Bash, Read, Grep, Glob
 4. `git status` でワーキングツリーがクリーンか確認
 5. 結果を報告（コミットハッシュ + 変更概要）
 
+## Phase 3: Issue クローズ（該当時）
+
+1. コミットメッセージ・会話コンテキストから関連 Issue 番号を推定
+2. 該当 Issue があれば `gh issue view <num> --json state` で状態確認
+3. OPEN なら「Issue #N をクローズしますか？」と確認
+
+→ **承認待ち**
+
+4. 承認後 `gh issue close <num>`
+
 ## ルール
 
 - .env や credentials 系ファイルはコミットしない

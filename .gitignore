@@ -1,12 +1,11 @@
 /target
-/target-test
-/target-release
+/target-*/
 node_modules/
 .claude/settings.local.json
 !frontend/vendor/
 /data
 /data-dev
-/data-dev-*
+/data-dev*/
 /data-e2e
 test-results/
 playwright-report/
