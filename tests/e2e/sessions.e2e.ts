@@ -38,10 +38,11 @@ test.describe('Session Management', () => {
 
   test('create local session via + menu', async ({ page }) => {
     await login(page);
-    await createSession(page, 'test-create');
+    const name = `tc-${Date.now()}`;
+    await createSession(page, name);
 
     // Session tab should be visible and active
-    const tab = page.locator('.session-tab[data-session="test-create"]');
+    const tab = page.locator(`.session-tab[data-session="${name}"]`);
     await expect(tab).toBeVisible();
     await expect(tab).toHaveClass(/active/);
 
@@ -98,11 +99,12 @@ test.describe('Session Management', () => {
 
   test('kill session via close button', async ({ page }) => {
     await login(page);
-    await createSession(page, 'to-kill');
-    await expect(page.locator('.session-tab[data-session="to-kill"]')).toBeVisible();
+    const name = `kill-${Date.now()}`;
+    await createSession(page, name);
+    await expect(page.locator(`.session-tab[data-session="${name}"]`)).toBeVisible();
 
     // Click close button on the tab
-    await page.locator('.session-tab[data-session="to-kill"] .session-tab-close').click();
+    await page.locator(`.session-tab[data-session="${name}"] .session-tab-close`).click();
 
     // Confirm dialog should appear
     const confirmModal = page.locator('#confirm-modal');
@@ -110,7 +112,7 @@ test.describe('Session Management', () => {
     await confirmModal.locator('button', { hasText: 'OK' }).click();
 
     // Tab should be removed
-    await expect(page.locator('.session-tab[data-session="to-kill"]')).toHaveCount(0, { timeout: 5000 });
+    await expect(page.locator(`.session-tab[data-session="${name}"]`)).toHaveCount(0, { timeout: 5000 });
   });
 
   test('invalid session name is rejected', async ({ page }) => {

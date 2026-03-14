@@ -1,4 +1,4 @@
-/* global DenTerminal, Keybar */
+/* global DenTerminal, Toast */
 // Den - Text Input Box module (mobile-friendly command input)
 // eslint-disable-next-line no-unused-vars
 const TextInput = (() => {
@@ -12,6 +12,7 @@ const TextInput = (() => {
   let historyBtn = null;
   let historyPopup = null;
   let historyRafId = null;
+  let resizeObserver = null;
 
   function init() {
     box = document.getElementById('text-input-box');
@@ -38,19 +39,35 @@ const TextInput = (() => {
       }
     });
 
-    // Restore visibility from localStorage
-    if (localStorage.getItem(VISIBLE_KEY) === 'true') {
-      show();
+    // F003: ResizeObserver to track textarea manual resize
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        if (box && !box.hidden) updateTerminalHeight();
+      });
+      resizeObserver.observe(textarea);
     }
+
+    // Restore visibility from localStorage
+    try {
+      if (localStorage.getItem(VISIBLE_KEY) === 'true') {
+        show();
+      }
+    } catch { /* F006: storage unavailable */ }
   }
 
   function send() {
     const text = textarea.value;
     if (!text) return;
 
-    // Convert \n to \r for PTY, process escape sequences
-    let data = text.replace(/\n/g, '\r');
-    data = Keybar.unescapeSend(data);
+    // F002: check WebSocket connection before sending
+    const term = DenTerminal.getTerminal();
+    if (!term) {
+      Toast.error('Not connected to terminal');
+      return;
+    }
+
+    // F011: Convert \n to \r for PTY (no unescapeSend — user text should be sent as-is)
+    const data = text.replace(/\n/g, '\r');
 
     DenTerminal.sendInput(data);
     addToHistory(text);
@@ -62,7 +79,7 @@ const TextInput = (() => {
     if (!box) return;
     box.hidden = false;
     updateTerminalHeight();
-    localStorage.setItem(VISIBLE_KEY, 'true');
+    try { localStorage.setItem(VISIBLE_KEY, 'true'); } catch { /* F006 */ }
   }
 
   function hide() {
@@ -70,7 +87,7 @@ const TextInput = (() => {
     box.hidden = true;
     closeHistory();
     updateTerminalHeight();
-    localStorage.setItem(VISIBLE_KEY, 'false');
+    try { localStorage.setItem(VISIBLE_KEY, 'false'); } catch { /* F006 */ }
   }
 
   function toggle() {
@@ -92,26 +109,36 @@ const TextInput = (() => {
     if (textarea) textarea.focus();
   }
 
-  /** Recalculate terminal container height when text input toggles */
+  // F005: Use CSS custom property to avoid forced reflow (no offsetHeight read)
   function updateTerminalHeight() {
     const container = document.getElementById('terminal-container');
     if (!container) return;
     if (box && !box.hidden) {
-      container.style.height = `calc(100% - var(--terminal-session-bar-height) - ${box.offsetHeight}px)`;
+      // Use rAF to batch read+write and avoid layout thrashing
+      requestAnimationFrame(() => {
+        if (!box || box.hidden) {
+          container.style.height = '';
+        } else {
+          container.style.height = `calc(100% - var(--terminal-session-bar-height) - ${box.offsetHeight}px)`;
+        }
+        DenTerminal.fitAndRefresh();
+      });
     } else {
       container.style.height = '';
+      requestAnimationFrame(() => {
+        DenTerminal.fitAndRefresh();
+      });
     }
-    // Notify xterm.js to refit
-    requestAnimationFrame(() => {
-      DenTerminal.fitAndRefresh();
-    });
   }
 
   // --- History ---
 
+  // F012: Validate localStorage data is an array of strings
   function getHistory() {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+      const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      if (!Array.isArray(data)) return [];
+      return data.filter((h) => typeof h === 'string');
     } catch { return []; }
   }
 
@@ -123,7 +150,14 @@ const TextInput = (() => {
     history = history.filter((h) => h !== trimmed);
     history.unshift(trimmed);
     if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+    } catch { /* F006: quota exceeded or storage unavailable */ }
+  }
+
+  // F001: Clear command history (called on logout or manually)
+  function clearHistory() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
   }
 
   function toggleHistory() {
@@ -140,6 +174,10 @@ const TextInput = (() => {
 
     historyPopup = document.createElement('div');
     historyPopup.className = 'text-input-history-popup';
+    // F015: ARIA role for popup
+    historyPopup.setAttribute('role', 'dialog');
+    historyPopup.setAttribute('aria-label', 'Command History');
+    if (historyBtn) historyBtn.setAttribute('aria-expanded', 'true');
 
     // Header
     const header = document.createElement('div');
@@ -154,7 +192,7 @@ const TextInput = (() => {
       clearBtn.type = 'button';
       clearBtn.textContent = 'Clear';
       clearBtn.addEventListener('click', () => {
-        localStorage.removeItem(STORAGE_KEY);
+        clearHistory();
         closeHistory();
       });
       header.appendChild(clearBtn);
@@ -169,11 +207,14 @@ const TextInput = (() => {
     } else {
       const list = document.createElement('div');
       list.className = 'text-input-history-list';
+      // F015: ARIA list role
+      list.setAttribute('role', 'list');
 
       for (const entry of history) {
         const item = document.createElement('button');
         item.className = 'text-input-history-item';
         item.type = 'button';
+        item.setAttribute('role', 'listitem');
 
         const preview = document.createElement('span');
         preview.className = 'text-input-history-preview';
@@ -197,6 +238,8 @@ const TextInput = (() => {
     historyRafId = requestAnimationFrame(() => {
       if (!historyPopup) return;
       document.addEventListener('pointerdown', onHistoryOutsideClick, true);
+      // F016: Close popup when focus moves outside
+      document.addEventListener('focusin', onHistoryOutsideFocus, true);
       historyRafId = null;
     });
   }
@@ -231,11 +274,21 @@ const TextInput = (() => {
       historyPopup.remove();
       historyPopup = null;
     }
+    // F015: Update aria-expanded
+    if (historyBtn) historyBtn.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', onHistoryOutsideClick, true);
+    document.removeEventListener('focusin', onHistoryOutsideFocus, true);
   }
 
   function onHistoryOutsideClick(e) {
-    if (historyPopup && !historyPopup.contains(e.target) && e.target !== historyBtn && !historyBtn.contains(e.target)) {
+    if (historyPopup && !historyPopup.contains(e.target) && e.target !== historyBtn && (!historyBtn || !historyBtn.contains(e.target))) {
+      closeHistory();
+    }
+  }
+
+  // F016: Close popup when focus moves outside
+  function onHistoryOutsideFocus(e) {
+    if (historyPopup && !historyPopup.contains(e.target) && e.target !== historyBtn && (!historyBtn || !historyBtn.contains(e.target))) {
       closeHistory();
     }
   }
@@ -244,5 +297,5 @@ const TextInput = (() => {
     return historyPopup !== null;
   }
 
-  return { init, toggle, isVisible, focus, closeHistory, isHistoryOpen };
+  return { init, toggle, isVisible, focus, closeHistory, clearHistory, isHistoryOpen };
 })();

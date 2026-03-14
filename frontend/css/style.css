@@ -773,7 +773,8 @@ html, body {
   border-radius: 4px;
   padding: 0.4rem 0.5rem;
   color: var(--fg);
-  font: 0.85rem monospace;
+  font-family: monospace;
+  font-size: 0.85rem;
   resize: vertical;
 }
 .text-input-textarea:focus {
