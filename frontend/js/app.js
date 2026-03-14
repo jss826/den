@@ -197,6 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'text-input-btn': DenIcons.edit,
       'float-terminal-btn': DenIcons.terminal,
       'connections-btn': DenIcons.globe,
+      'ports-btn': DenIcons.network,
       'keep-awake-btn': DenIcons.coffee,
       'settings-btn': DenIcons.gear,
     };

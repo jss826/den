@@ -943,39 +943,100 @@ const DenTerminal = (() => {
       }
     }
 
-    // Render port bar
-    renderPortBar(allPorts);
+    // Update ports button visibility
+    updatePortsButton(allPorts);
   }
 
-  function renderPortBar(ports) {
-    const bar = document.getElementById('port-bar');
-    const items = document.getElementById('port-bar-items');
-    if (!bar || !items) return;
+  // Track current ports for the dialog
+  let _currentPorts = [];
 
-    if (ports.length === 0) {
-      bar.hidden = true;
-      return;
+  function updatePortsButton(ports) {
+    _currentPorts = ports;
+    const btn = document.getElementById('ports-btn');
+    if (!btn) return;
+    btn.hidden = ports.length === 0;
+    btn.classList.toggle('active', ports.length > 0);
+  }
+
+  function initPortsButton() {
+    const btn = document.getElementById('ports-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => showPortsDialog());
+  }
+
+  function showPortsDialog() {
+    const allModals = document.querySelectorAll('.modal');
+    allModals.forEach(m => { m.hidden = true; });
+
+    let modal = document.getElementById('ports-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'ports-modal';
+      modal.className = 'modal';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width:420px">
+          <h3>Detected Ports</h3>
+          <div id="ports-modal-body"></div>
+          <div class="modal-actions">
+            <button class="modal-btn" id="ports-modal-close">Close</button>
+          </div>
+        </div>`;
+      document.body.appendChild(modal);
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.hidden = true;
+      });
+      modal.querySelector('#ports-modal-close').addEventListener('click', () => {
+        modal.hidden = true;
+      });
     }
 
-    bar.hidden = false;
-    items.textContent = '';
-    for (const p of ports) {
-      const btn = document.createElement('button');
-      btn.className = 'port-bar-item';
-      btn.title = p.source || `Port ${p.port}`;
-      const num = document.createElement('span');
-      num.className = 'port-number';
-      num.textContent = p.port;
-      btn.appendChild(num);
-      if (p.remote) {
-        const src = document.createElement('span');
-        src.className = 'port-source';
-        src.textContent = p.remote;
-        btn.appendChild(src);
+    const body = modal.querySelector('#ports-modal-body');
+    body.textContent = '';
+
+    if (_currentPorts.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'connections-empty';
+      empty.textContent = 'No ports detected';
+      body.appendChild(empty);
+    } else {
+      for (const p of _currentPorts) {
+        const entry = document.createElement('div');
+        entry.className = 'connection-entry';
+        entry.style.cursor = 'pointer';
+
+        const header = document.createElement('div');
+        header.className = 'connection-header';
+
+        const name = document.createElement('span');
+        name.className = 'connection-name';
+        name.textContent = `Port ${p.port}`;
+        header.appendChild(name);
+
+        if (p.remote) {
+          const badge = document.createElement('span');
+          badge.className = 'connection-type-badge direct';
+          badge.textContent = p.remote;
+          header.appendChild(badge);
+        }
+
+        entry.appendChild(header);
+
+        if (p.source) {
+          const details = document.createElement('div');
+          details.className = 'connection-details';
+          details.textContent = p.source;
+          entry.appendChild(details);
+        }
+
+        entry.addEventListener('click', () => {
+          modal.hidden = true;
+          openPort(p);
+        });
+        body.appendChild(entry);
       }
-      btn.addEventListener('click', () => openPort(p));
-      items.appendChild(btn);
     }
+
+    modal.hidden = false;
   }
 
   function getFwdUrl(portInfo) {
@@ -1240,6 +1301,8 @@ const DenTerminal = (() => {
       lastSessionsKey = '';
       refreshSessionList();
     });
+
+    initPortsButton();
   }
 
   /** Generate a unique session name from a base, appending -2, -3, etc. if needed. */

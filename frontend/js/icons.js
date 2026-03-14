@@ -88,6 +88,10 @@ const DenIcons = (() => {
     return svg('<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', size);
   }
 
+  function network(size) {
+    return svg('<rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4m-7 4v-4h14v4"/>', size);
+  }
+
   // --- ファイルツリー アイコン ---
 
   function folder(size) {
@@ -138,7 +142,7 @@ const DenIcons = (() => {
     filePlus, folderPlus, upload, refresh, gear, terminal,
     chevronLeft, chevronRight, download,
     panelLeft, panelRight,
-    snippet, clipboard, coffee, globe, edit, eye, eyeOff,
+    snippet, clipboard, coffee, globe, network, edit, eye, eyeOff,
     folder, file, fileColor, svg,
   };
 })();
