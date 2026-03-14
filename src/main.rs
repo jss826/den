@@ -8,7 +8,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
-    // Load .env: CWD first, then platform-specific config directory as fallback.
+    // Load .env: CWD first, then data directory as fallback.
     // Later values do NOT override earlier ones, so CWD takes precedence.
     let _ = dotenvy::dotenv();
     if cfg!(windows) {
@@ -20,16 +20,16 @@ async fn main() {
             let _ = dotenvy::from_path(exe_dir.join(".env"));
         }
     } else {
-        // Linux/macOS: XDG_CONFIG_HOME/den/.env (default ~/.config/den/.env)
-        let config_dir = std::env::var("XDG_CONFIG_HOME")
+        // Linux/macOS: XDG_DATA_HOME/den/.env (default ~/.local/share/den/.env)
+        let data_dir = std::env::var("XDG_DATA_HOME")
             .ok()
             .map(std::path::PathBuf::from)
             .or_else(|| {
                 std::env::var("HOME")
                     .ok()
-                    .map(|h| std::path::PathBuf::from(h).join(".config"))
+                    .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
             });
-        if let Some(dir) = config_dir {
+        if let Some(dir) = data_dir {
             let _ = dotenvy::from_path(dir.join("den").join(".env"));
         }
     }
