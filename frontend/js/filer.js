@@ -479,6 +479,13 @@ const DenFiler = (() => {
       const section = document.getElementById('den-relay-section');
       if (section) section.hidden = !denUseRelay.checked;
     });
+    // Den bookmarks
+    const denBookmarkSelect = document.getElementById('den-bookmark-select');
+    if (denBookmarkSelect) denBookmarkSelect.addEventListener('change', onDenBookmarkSelect);
+    const denBookmarkSave = document.getElementById('den-bookmark-save');
+    if (denBookmarkSave) denBookmarkSave.addEventListener('click', onDenBookmarkSave);
+    const denBookmarkDelete = document.getElementById('den-bookmark-delete');
+    if (denBookmarkDelete) denBookmarkDelete.addEventListener('click', onDenBookmarkDelete);
   }
 
   function populateDenUrlDatalist() {
@@ -494,6 +501,111 @@ const DenFiler = (() => {
         datalist.appendChild(opt);
       }
     }).catch(() => {});
+  }
+
+  // --- Den Bookmarks ---
+
+  function renderDenBookmarkSelect(selectedLabel) {
+    const select = document.getElementById('den-bookmark-select');
+    const deleteBtn = document.getElementById('den-bookmark-delete');
+    if (!select) return;
+    const bookmarks = DenSettings.get('den_bookmarks') || [];
+    select.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Saved Connections --';
+    select.appendChild(placeholder);
+    bookmarks.forEach((b) => {
+      const opt = document.createElement('option');
+      opt.value = b.label;
+      opt.textContent = b.use_relay ? `${b.label} (relay)` : b.label;
+      if (b.label === selectedLabel) opt.selected = true;
+      select.appendChild(opt);
+    });
+    if (deleteBtn) deleteBtn.hidden = !select.value;
+  }
+
+  function onDenBookmarkSelect() {
+    const select = document.getElementById('den-bookmark-select');
+    const deleteBtn = document.getElementById('den-bookmark-delete');
+    const bookmarks = DenSettings.get('den_bookmarks') || [];
+    const label = select.value;
+    if (deleteBtn) deleteBtn.hidden = !label;
+    const b = bookmarks.find(bk => bk.label === label);
+    if (!b) return;
+    document.getElementById('den-connect-url').value = b.url || '';
+    document.getElementById('den-connect-password').value = b.password || '';
+    const relayCheckbox = document.getElementById('den-use-relay');
+    if (relayCheckbox) relayCheckbox.checked = !!b.use_relay;
+    const relaySection = document.getElementById('den-relay-section');
+    if (relaySection) relaySection.hidden = !b.use_relay;
+    const relayUrl = document.getElementById('den-relay-url');
+    if (relayUrl) relayUrl.value = b.relay_url || '';
+    const relayPassword = document.getElementById('den-relay-password');
+    if (relayPassword) relayPassword.value = b.relay_password || '';
+  }
+
+  async function onDenBookmarkSave() {
+    const url = document.getElementById('den-connect-url').value.trim();
+    if (!url) {
+      Toast.error('Target URL is required to save');
+      return;
+    }
+    const defaultLabel = url.replace(/^https?:\/\//, '');
+    const rawLabel = await Toast.prompt('Bookmark name:', defaultLabel);
+    if (!rawLabel) return;
+    const label = rawLabel.trim();
+    if (!label) {
+      Toast.error('Bookmark name cannot be empty');
+      return;
+    }
+
+    const useRelay = document.getElementById('den-use-relay')?.checked || false;
+    const entry = {
+      label,
+      url,
+      password: document.getElementById('den-connect-password').value || null,
+      use_relay: useRelay,
+      relay_url: useRelay ? (document.getElementById('den-relay-url')?.value.trim() || null) : null,
+      relay_password: useRelay ? (document.getElementById('den-relay-password')?.value || null) : null,
+    };
+
+    const bookmarks = (DenSettings.get('den_bookmarks') || []).slice();
+    const existIdx = bookmarks.findIndex(b => b.label === label);
+    if (existIdx >= 0) {
+      if (!(await Toast.confirm(`A bookmark named "${label}" already exists. Overwrite?`))) return;
+      bookmarks[existIdx] = entry;
+    } else {
+      if (bookmarks.length >= 50) {
+        Toast.error('Bookmark limit reached (max 50)');
+        return;
+      }
+      bookmarks.push(entry);
+    }
+    const ok = await DenSettings.save({ den_bookmarks: bookmarks });
+    if (ok) {
+      Toast.success('Bookmark saved');
+      renderDenBookmarkSelect(label);
+    } else {
+      Toast.error('Failed to save bookmark');
+    }
+  }
+
+  async function onDenBookmarkDelete() {
+    const select = document.getElementById('den-bookmark-select');
+    const bookmarks = (DenSettings.get('den_bookmarks') || []).slice();
+    const label = select.value;
+    const idx = bookmarks.findIndex(b => b.label === label);
+    if (idx < 0) return;
+    if (!(await Toast.confirm(`Delete bookmark "${label}"?`))) return;
+    bookmarks.splice(idx, 1);
+    const ok = await DenSettings.save({ den_bookmarks: bookmarks });
+    if (ok) {
+      Toast.success('Bookmark deleted');
+      renderDenBookmarkSelect(null);
+    } else {
+      Toast.error('Failed to delete bookmark');
+    }
   }
 
   function showDenModal(defaultUrl) {
@@ -512,7 +624,8 @@ const DenFiler = (() => {
     if (relayUrl) relayUrl.value = '';
     const relayPassword = document.getElementById('den-relay-password');
     if (relayPassword) relayPassword.value = '';
-    // Populate URL datalist from trusted certificates
+    // Populate bookmarks and URL datalist
+    renderDenBookmarkSelect(null);
     populateDenUrlDatalist();
     modal.hidden = false;
     urlInput.focus();

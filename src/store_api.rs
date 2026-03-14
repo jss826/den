@@ -7,6 +7,94 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::store::Settings;
 
+// --- Bookmark password encryption (AES-256-GCM with HMAC-derived key) ---
+
+fn derive_bookmark_key(master_password: &str) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac =
+        HmacSha256::new_from_slice(b"den-bookmark-encryption-key").expect("HMAC key length");
+    mac.update(master_password.as_bytes());
+    let result = mac.finalize().into_bytes();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
+    key
+}
+
+fn encrypt_password(plain: &str, key: &[u8; 32]) -> String {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    use base64::Engine;
+    let cipher = Aes256Gcm::new_from_slice(key).expect("AES key length");
+    let nonce_bytes: [u8; 12] = rand::random();
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, plain.as_bytes())
+        .expect("AES-GCM encrypt");
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend_from_slice(&ciphertext);
+    base64::engine::general_purpose::STANDARD.encode(&combined)
+}
+
+fn decrypt_password(encrypted: &str, key: &[u8; 32]) -> Result<String, String> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    use base64::Engine;
+    let combined = base64::engine::general_purpose::STANDARD
+        .decode(encrypted)
+        .map_err(|e| format!("base64 decode: {e}"))?;
+    if combined.len() < 29 {
+        // 12 nonce + 1 plaintext min + 16 tag
+        return Err("encrypted data too short".into());
+    }
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let cipher = Aes256Gcm::new_from_slice(key).expect("AES key length");
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| "decryption failed (wrong password?)")?;
+    String::from_utf8(plaintext).map_err(|e| format!("utf8: {e}"))
+}
+
+/// Encrypt plaintext bookmark passwords for disk storage
+fn encrypt_den_bookmarks(settings: &mut Settings, key: &[u8; 32]) {
+    if let Some(ref mut bookmarks) = settings.den_bookmarks {
+        for b in bookmarks.iter_mut() {
+            if let Some(ref pw) = b.password
+                && !pw.is_empty()
+            {
+                b.password = Some(encrypt_password(pw, key));
+            }
+            if let Some(ref pw) = b.relay_password
+                && !pw.is_empty()
+            {
+                b.relay_password = Some(encrypt_password(pw, key));
+            }
+        }
+    }
+}
+
+/// Decrypt bookmark passwords for API response (best-effort: leave encrypted on failure)
+fn decrypt_den_bookmarks(settings: &mut Settings, key: &[u8; 32]) {
+    if let Some(ref mut bookmarks) = settings.den_bookmarks {
+        for b in bookmarks.iter_mut() {
+            if let Some(ref pw) = b.password
+                && !pw.is_empty()
+                && let Ok(plain) = decrypt_password(pw, key)
+            {
+                b.password = Some(plain);
+            }
+            if let Some(ref pw) = b.relay_password
+                && !pw.is_empty()
+                && let Ok(plain) = decrypt_password(pw, key)
+            {
+                b.relay_password = Some(plain);
+            }
+        }
+    }
+}
+
 /// GET /api/settings
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let store = state.store.clone();
@@ -14,6 +102,9 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoRespon
         Ok(mut settings) => {
             settings.version = env!("CARGO_PKG_VERSION").to_string();
             settings.hostname = gethostname::gethostname().to_string_lossy().into_owned();
+            // Decrypt bookmark passwords for API response
+            let key = derive_bookmark_key(&state.config.password);
+            decrypt_den_bookmarks(&mut settings, &key);
             Json(settings).into_response()
         }
         Err(e) => {
@@ -116,8 +207,48 @@ pub async fn put_settings(
             }
         }
     }
+    // Validate den_bookmarks
+    if let Some(ref bookmarks) = settings.den_bookmarks {
+        if bookmarks.len() > 50 {
+            return (StatusCode::UNPROCESSABLE_ENTITY, "too many den bookmarks").into_response();
+        }
+        for b in bookmarks {
+            if b.label.trim().is_empty() || b.url.trim().is_empty() {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "den bookmark label/url required",
+                )
+                    .into_response();
+            }
+            if b.label.chars().count() > 50 {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "den bookmark label too long",
+                )
+                    .into_response();
+            }
+            if b.url.len() > 2048 {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "den bookmark url too long",
+                )
+                    .into_response();
+            }
+            if b.relay_url.as_deref().is_some_and(|u| u.len() > 2048) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "den bookmark relay_url too long",
+                )
+                    .into_response();
+            }
+        }
+    }
     // sleep_prevention_mode: enum 化により serde が不正値を拒否（422 を返す）
     settings.sleep_prevention_timeout = settings.sleep_prevention_timeout.clamp(1, 480);
+
+    // Encrypt bookmark passwords before saving to disk
+    let key = derive_bookmark_key(&state.config.password);
+    encrypt_den_bookmarks(&mut settings, &key);
 
     let store = state.store.clone();
     let sleep_mode = settings.sleep_prevention_mode;

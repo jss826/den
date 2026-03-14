@@ -201,6 +201,13 @@
     <div id="den-connect-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Remote Den Connection" data-1p-ignore>
       <div class="modal-content">
         <h3>Quick Connect to Den</h3>
+        <div class="sftp-bookmark-row">
+          <select id="den-bookmark-select" class="settings-input" aria-label="Saved Connections">
+            <option value="">-- Saved Connections --</option>
+          </select>
+          <button id="den-bookmark-delete" class="modal-btn" type="button" hidden
+            data-tooltip="Delete" aria-label="Delete bookmark">&#x2715;</button>
+        </div>
         <div class="modal-section">
           <label>Target URL</label>
           <input type="text" id="den-connect-url" class="settings-input" placeholder="https://den-b:8080" autocomplete="off" data-1p-ignore list="den-connect-url-list" />
@@ -226,6 +233,7 @@
           </div>
         </div>
         <div class="modal-actions">
+          <button id="den-bookmark-save" class="modal-btn" type="button">Save</button>
           <button id="den-connect-cancel" class="modal-btn">Cancel</button>
           <button id="den-connect-submit" class="modal-btn primary">Connect</button>
         </div>

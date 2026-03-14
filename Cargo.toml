@@ -47,6 +47,7 @@ tokio-rustls = "0.26.4"
 rustls = { version = "0.23.37", default-features = false, features = ["std", "ring"] }
 rcgen = "0.14.7"
 uuid = { version = "1", features = ["v4"] }
+aes-gcm = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

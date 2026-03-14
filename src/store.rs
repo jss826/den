@@ -98,6 +98,20 @@ fn default_ssh_port() -> u16 {
     22
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DenBookmark {
+    pub label: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub use_relay: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_password: Option<String>,
+}
+
 /// Persisted session record for restart recovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -173,6 +187,8 @@ pub struct Settings {
     #[serde(default)]
     pub ssh_bookmarks: Option<Vec<SshBookmark>>,
     #[serde(default)]
+    pub den_bookmarks: Option<Vec<DenBookmark>>,
+    #[serde(default)]
     pub sleep_prevention_mode: SleepPreventionMode,
     #[serde(default = "default_sleep_prevention_timeout")]
     pub sleep_prevention_timeout: u16,
@@ -209,6 +225,7 @@ impl Default for Settings {
             keybar_position: None,
             snippets: None,
             ssh_bookmarks: None,
+            den_bookmarks: None,
             sleep_prevention_mode: SleepPreventionMode::default(),
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
             group_remote_sessions: true,
