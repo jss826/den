@@ -295,6 +295,10 @@
           <button class="settings-tab" role="tab" data-tab="sg-tls">TLS</button>
         </div>
         <div class="settings-tab-panel active" id="sg-appearance" role="tabpanel">
+          <div class="settings-sync-bar" data-section="appearance" hidden>
+            <button class="settings-sync-btn sync-from-remote" type="button">← Remote</button>
+            <button class="settings-sync-btn sync-to-remote" type="button">→ Remote</button>
+          </div>
           <div class="modal-section">
             <label>Theme</label>
             <select id="setting-theme" class="settings-input">
@@ -318,6 +322,10 @@
           </div>
         </div>
         <div class="settings-tab-panel" id="sg-terminal" role="tabpanel" hidden>
+          <div class="settings-sync-bar" data-section="terminal" hidden>
+            <button class="settings-sync-btn sync-from-remote" type="button">← Remote</button>
+            <button class="settings-sync-btn sync-to-remote" type="button">→ Remote</button>
+          </div>
           <div class="modal-section">
             <label>Terminal Scrollback</label>
             <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
@@ -351,6 +359,10 @@
           </div>
         </div>
         <div class="settings-tab-panel" id="sg-keybar" role="tabpanel" hidden>
+          <div class="settings-sync-bar" data-section="keybar" hidden>
+            <button class="settings-sync-btn sync-from-remote" type="button">← Remote</button>
+            <button class="settings-sync-btn sync-to-remote" type="button">→ Remote</button>
+          </div>
           <div class="modal-section">
             <label>Primary Row</label>
             <div id="keybar-editor" class="keybar-editor">
@@ -424,6 +436,10 @@
           </div>
         </div>
         <div class="settings-tab-panel" id="sg-snippets" role="tabpanel" hidden>
+          <div class="settings-sync-bar" data-section="snippets" hidden>
+            <button class="settings-sync-btn sync-from-remote" type="button">← Remote</button>
+            <button class="settings-sync-btn sync-to-remote" type="button">→ Remote</button>
+          </div>
           <div class="modal-section">
             <div class="snippet-editor">
               <div id="snippet-list" class="snippet-list"></div>

@@ -124,8 +124,8 @@ const TextInput = (() => {
         DenTerminal.fitAndRefresh();
       });
     } else {
-      container.style.height = '';
       requestAnimationFrame(() => {
+        container.style.height = '';
         DenTerminal.fitAndRefresh();
       });
     }
@@ -237,9 +237,9 @@ const TextInput = (() => {
 
     historyRafId = requestAnimationFrame(() => {
       if (!historyPopup) return;
-      document.addEventListener('pointerdown', onHistoryOutsideClick, true);
+      document.addEventListener('pointerdown', onHistoryOutside, true);
       // F016: Close popup when focus moves outside
-      document.addEventListener('focusin', onHistoryOutsideFocus, true);
+      document.addEventListener('focusin', onHistoryOutside, true);
       historyRafId = null;
     });
   }
@@ -276,18 +276,11 @@ const TextInput = (() => {
     }
     // F015: Update aria-expanded
     if (historyBtn) historyBtn.setAttribute('aria-expanded', 'false');
-    document.removeEventListener('pointerdown', onHistoryOutsideClick, true);
-    document.removeEventListener('focusin', onHistoryOutsideFocus, true);
+    document.removeEventListener('pointerdown', onHistoryOutside, true);
+    document.removeEventListener('focusin', onHistoryOutside, true);
   }
 
-  function onHistoryOutsideClick(e) {
-    if (historyPopup && !historyPopup.contains(e.target) && e.target !== historyBtn && (!historyBtn || !historyBtn.contains(e.target))) {
-      closeHistory();
-    }
-  }
-
-  // F016: Close popup when focus moves outside
-  function onHistoryOutsideFocus(e) {
+  function onHistoryOutside(e) {
     if (historyPopup && !historyPopup.contains(e.target) && e.target !== historyBtn && (!historyBtn || !historyBtn.contains(e.target))) {
       closeHistory();
     }

@@ -119,6 +119,10 @@ pub fn create_app_with_secret(
             "/api/remote/terminal/sessions/{session}",
             put(remote::proxy_rename_session).delete(remote::proxy_delete_session),
         )
+        .route(
+            "/api/remote/settings",
+            get(remote::proxy_settings_get).put(remote::proxy_settings_put),
+        )
         .route("/api/remote/ws", get(remote::ws_relay_handler))
         .route("/api/remote/filer/list", get(remote::proxy_filer_list))
         .route("/api/remote/filer/read", get(remote::proxy_filer_read))

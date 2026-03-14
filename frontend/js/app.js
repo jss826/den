@@ -39,12 +39,14 @@ document.addEventListener('DOMContentLoaded', () => {
         showMain();
       } else {
         Auth.clearToken();
+        TextInput.clearHistory();
         loginScreen.hidden = false;
         mainScreen.hidden = true;
         passwordInput.focus();
       }
     } catch {
       Auth.clearToken();
+      TextInput.clearHistory();
       loginScreen.hidden = false;
       mainScreen.hidden = true;
       passwordInput.focus();

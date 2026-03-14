@@ -1,4 +1,4 @@
-/* global DenDragList, DenKeyPresets, Keybar, DenTerminal, FloatTerminal, DenSnippet, Toast */
+/* global DenDragList, DenKeyPresets, Keybar, DenTerminal, FloatTerminal, DenSnippet, Toast, FilerRemote */
 // Den - 設定管理モジュール
 const DenSettings = (() => {
   function escHtml(str) {
@@ -273,6 +273,164 @@ const DenSettings = (() => {
       }
     }
   }
+
+  // --- Remote settings sync ---
+  let remoteSettings = null;
+
+  const SECTION_KEYS = {
+    appearance: ['theme', 'font_size'],
+    terminal: ['terminal_scrollback', 'ssh_agent_forwarding', 'sleep_prevention_mode', 'sleep_prevention_timeout', 'group_remote_sessions'],
+    keybar: ['keybar_buttons', 'keybar_secondary_buttons'],
+    snippets: ['snippets'],
+  };
+
+  function getRemoteSettingsUrl() {
+    const info = FilerRemote.getInfo();
+    if (!info.connected) return null;
+    if (info.mode === 'relay') return `/api/relay/${info.relaySessionId}/settings`;
+    if (info.mode === 'den') return '/api/remote/settings';
+    return null;
+  }
+
+  async function loadRemoteSettings() {
+    const url = getRemoteSettingsUrl();
+    if (!url) { remoteSettings = null; return null; }
+    try {
+      const resp = await fetch(url, { credentials: 'same-origin' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      remoteSettings = await resp.json();
+      return remoteSettings;
+    } catch (e) {
+      console.warn('Failed to load remote settings:', e);
+      remoteSettings = null;
+      return null;
+    }
+  }
+
+  async function saveRemoteSettings(updates) {
+    const url = getRemoteSettingsUrl();
+    if (!url || !remoteSettings) return false;
+    const snapshot = { ...remoteSettings };
+    Object.assign(remoteSettings, updates);
+    try {
+      const resp = await fetch(url, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(remoteSettings),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return true;
+    } catch (e) {
+      Object.assign(remoteSettings, snapshot);
+      Toast.error('Failed to save remote settings');
+      console.warn('Failed to save remote settings:', e);
+      return false;
+    }
+  }
+
+  function formatSettingValue(key, val) {
+    if (val == null) return '(none)';
+    if (key === 'snippets') {
+      if (!Array.isArray(val) || val.length === 0) return '(none)';
+      return val.length + ' items';
+    }
+    if (key === 'keybar_buttons' || key === 'keybar_secondary_buttons') {
+      if (!Array.isArray(val) || val.length === 0) return '(default)';
+      return val.length + ' buttons';
+    }
+    if (typeof val === 'boolean') return val ? 'ON' : 'OFF';
+    return String(val);
+  }
+
+  function buildDiffText(section, from, to) {
+    const keys = SECTION_KEYS[section];
+    if (!keys) return '';
+    const lines = [];
+    for (const key of keys) {
+      const fromVal = from[key];
+      const toVal = to[key];
+      const fromStr = formatSettingValue(key, fromVal);
+      const toStr = formatSettingValue(key, toVal);
+      if (fromStr !== toStr) {
+        lines.push(`${key}: ${fromStr} → ${toStr}`);
+      }
+    }
+    return lines.length > 0 ? lines.join('\n') : null;
+  }
+
+  function updateSyncBars() {
+    const connected = !!getRemoteSettingsUrl();
+    document.querySelectorAll('.settings-sync-bar').forEach((bar) => {
+      bar.hidden = !connected;
+    });
+  }
+
+  function setSyncButtonsDisabled(disabled) {
+    document.querySelectorAll('.settings-sync-btn').forEach((btn) => { btn.disabled = disabled; });
+  }
+
+  async function ensureRemoteSettings() {
+    if (remoteSettings) return true;
+    await loadRemoteSettings();
+    if (!remoteSettings) {
+      Toast.error('Cannot load remote settings');
+      updateSyncBars();
+      return false;
+    }
+    return true;
+  }
+
+  function bindSyncButtons() {
+    document.querySelectorAll('.settings-sync-bar').forEach((bar) => {
+      const section = bar.dataset.section;
+      const fromBtn = bar.querySelector('.sync-from-remote');
+      const toBtn = bar.querySelector('.sync-to-remote');
+
+      if (fromBtn) fromBtn.addEventListener('click', async () => {
+        setSyncButtonsDisabled(true);
+        try {
+          if (!await ensureRemoteSettings()) return;
+          const keys = SECTION_KEYS[section];
+          if (!keys) return;
+          const diff = buildDiffText(section, current, remoteSettings);
+          if (!diff) { Toast.success('Settings already match'); return; }
+          const ok = await Toast.confirm('Copy from Remote?\n\n' + diff);
+          if (!ok) return;
+          const updates = {};
+          for (const key of keys) updates[key] = remoteSettings[key];
+          const saved = await save(updates);
+          if (saved) {
+            apply();
+            Toast.success('Copied from remote');
+            openModal();
+          }
+        } finally { setSyncButtonsDisabled(false); }
+      });
+
+      if (toBtn) toBtn.addEventListener('click', async () => {
+        setSyncButtonsDisabled(true);
+        try {
+          if (!await ensureRemoteSettings()) return;
+          const keys = SECTION_KEYS[section];
+          if (!keys) return;
+          const diff = buildDiffText(section, remoteSettings, current);
+          if (!diff) { Toast.success('Settings already match'); return; }
+          const ok = await Toast.confirm('Copy to Remote?\n\n' + diff);
+          if (!ok) return;
+          const updates = {};
+          for (const key of keys) updates[key] = current[key];
+          const saved = await saveRemoteSettings(updates);
+          if (saved) Toast.success('Copied to remote');
+        } finally { setSyncButtonsDisabled(false); }
+      });
+    });
+  }
+
+  let syncButtonsBound = false;
+
+  // F005: Clear remote settings cache when connection changes
+  document.addEventListener('den:remote-changed', () => { remoteSettings = null; });
 
   let mediaQuery = null;
   let titleCtx = { tab: 'terminal', session: 'default', oscDisplay: '', remoteHost: '' };
@@ -617,6 +775,11 @@ const DenSettings = (() => {
     if (updateApplyBtn) updateApplyBtn.hidden = true;
     loadTlsStatus();
     loadTrustedTls();
+
+    // Remote settings sync
+    updateSyncBars();
+    if (getRemoteSettingsUrl()) loadRemoteSettings();
+    if (!syncButtonsBound) { syncButtonsBound = true; bindSyncButtons(); }
 
     modal.hidden = false;
   }

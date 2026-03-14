@@ -532,6 +532,36 @@ pub async fn proxy_filer_delete(
     .await
 }
 
+pub async fn proxy_settings_get(
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, StatusCode> {
+    proxy_remote_request(
+        &state,
+        reqwest::Method::GET,
+        "/api/settings",
+        None,
+        None,
+        vec![],
+    )
+    .await
+}
+
+pub async fn proxy_settings_put(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Response, StatusCode> {
+    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
+    proxy_remote_request(
+        &state,
+        reqwest::Method::PUT,
+        "/api/settings",
+        None,
+        Some(headers),
+        body.to_vec(),
+    )
+    .await
+}
+
 fn api_error(status: StatusCode, message: &str) -> Response {
     (
         status,
