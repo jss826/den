@@ -14,8 +14,10 @@
 - **SFTP リモートファイル** — russh-sftp 経由でリモート SSH ホストに接続し、ファイルを閲覧・編集
 - **SSH サーバー内蔵** — russh ベース、パスワード＋公開鍵認証、セッション attach/create
 - **12 テーマ** — Dark, Light, Solarized Dark/Light, Monokai, Nord, Dracula, Gruvbox Dark/Light, Catppuccin Mocha, One Dark, System
+- **テキスト入力** — モバイル/タブレット向けリサイズ可能なコマンド入力ボックス (Ctrl+J)、コマンド履歴付き
 - **スニペット** — カスタマイズ可能なリストからワンクリックでコマンド入力
 - **クリップボード履歴** — 利用可能な環境ではシステムクリップボード監視による自動追跡
+- **ポートフォワーディング** — Quick Connect 経由でリモートポートをローカルに転送
 - **Quick Connect** — 別の Den インスタンスのターミナルとファイルに TLS 経由で接続
 - **自己署名 TLS** — HTTPS/WSS オプション対応、証明書自動生成＋フィンガープリントベースの信頼モデル
 - **認証** — HttpOnly Cookie (HMAC-SHA256 トークン, 24時間有効期限) + レートリミット + CSP
@@ -249,7 +251,7 @@ cat ~/.ssh/id_ed25519.pub >> ./data-dev/ssh/authorized_keys
 │  └─────────────────────┘  └─────────────┘  └───────────┘ │
 │  ┌──────────────────────────────────────────────────────┐ │
 │  │ Quick Connect  →  Remote Den (HTTPS, direct or relay) │ │
-│  │ (terminal + filer + WS proxy)                        │ │
+│  │ (terminal + filer + WS proxy + port forwarding)      │ │
 │  └──────────────────────────────────────────────────────┘ │
 │  Static files (rust-embed)    TLS (self-signed / custom)  │
 │  Store (JSON persistence)     SSH Server (russh)          │
@@ -273,6 +275,11 @@ den/
 │   ├── remote.rs           # Quick Connect リレー (ターミナル, ファイラー, WS)
 │   ├── tls.rs              # TLS 設定, フィンガープリント信頼 API
 │   ├── update.rs           # セルフアップデート (GitHub Releases)
+│   ├── port_forward.rs     # Quick Connect 経由のポートフォワーディング
+│   ├── port_detection.rs   # リッスンポート検出
+│   ├── port_monitor.rs     # ポート変更監視
+│   ├── clipboard_api.rs    # クリップボード REST API
+│   ├── clipboard_monitor.rs # システムクリップボード監視
 │   ├── filer/              # ファイルマネージャ API
 │   │   └── api.rs          # ツリー, 読取, 書込, 検索, アップロード, ダウンロード
 │   ├── sftp/               # SFTP リモートファイル操作
@@ -301,6 +308,11 @@ den/
 │   │   ├── filer-remote.js # SFTP リモート接続 UI
 │   │   ├── keybar.js       # タッチキーバー
 │   │   ├── settings.js     # 設定モーダル
+│   │   ├── text-input.js   # モバイル向けコマンド入力ボックス
+│   │   ├── tls-trust.js    # TLS フィンガープリント信頼 UI
+│   │   ├── snippet.js      # スニペットマネージャ
+│   │   ├── clipboard.js    # クリップボードユーティリティ
+│   │   ├── clipboard-history.js # クリップボード履歴 UI
 │   │   ├── toast.js        # Toast + confirm/prompt モーダル
 │   │   ├── icons.js        # SVG アイコンモジュール
 │   │   ├── spinner.js      # ローディングスピナー
