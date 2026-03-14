@@ -789,6 +789,23 @@ html, body {
   padding: 6px 8px;
   flex-shrink: 0;
 }
+.text-input-resize-handle {
+  height: 6px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: -6px -8px 4px;
+  padding: 2px 0;
+}
+.text-input-resize-handle::after {
+  content: '';
+  display: block;
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+}
 .text-input-toolbar {
   display: flex;
   gap: 4px;
@@ -814,6 +831,7 @@ html, body {
 }
 .text-input-textarea {
   flex: 1;
+  min-width: 0;
   min-height: 2.5rem;
   max-height: min(50vh, 16rem);
   background: var(--bg);
@@ -823,7 +841,7 @@ html, body {
   color: var(--fg);
   font-family: monospace;
   font-size: 0.85rem;
-  resize: vertical;
+  resize: none;
 }
 .text-input-textarea:focus {
   outline: none;

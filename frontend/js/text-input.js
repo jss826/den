@@ -40,13 +40,8 @@ const TextInput = (() => {
       }
     });
 
-    // ResizeObserver to track textarea manual resize
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => {
-        if (box && !box.hidden) scheduleTerminalRefit();
-      });
-      resizeObserver.observe(textarea);
-    }
+    // Drag-to-resize handle at top of text-input-box
+    initResizeHandle();
 
     // Restore visibility from localStorage
     try {
@@ -108,6 +103,37 @@ const TextInput = (() => {
 
   function focus() {
     if (textarea) textarea.focus();
+  }
+
+  // --- Drag resize ---
+
+  function initResizeHandle() {
+    const handle = document.getElementById('text-input-resize-handle');
+    if (!handle || !textarea) return;
+
+    let startY = 0;
+    let startHeight = 0;
+
+    function onPointerMove(e) {
+      // Dragging up = negative delta = increase height
+      const delta = startY - e.clientY;
+      const newHeight = Math.max(40, startHeight + delta);
+      textarea.style.height = newHeight + 'px';
+      scheduleTerminalRefit();
+    }
+
+    function onPointerUp() {
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+    }
+
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      startY = e.clientY;
+      startHeight = textarea.offsetHeight;
+      document.addEventListener('pointermove', onPointerMove);
+      document.addEventListener('pointerup', onPointerUp);
+    });
   }
 
   // Flexbox handles layout; just refit the terminal after toggle/resize
