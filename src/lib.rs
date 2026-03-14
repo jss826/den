@@ -124,6 +124,25 @@ pub fn create_app_with_secret(
             get(remote::proxy_settings_get).put(remote::proxy_settings_put),
         )
         .route("/api/remote/ws", get(remote::ws_relay_handler))
+        // Remote port forwarding proxy
+        .route("/api/remote/ports", get(remote::proxy_remote_ports))
+        .route(
+            "/api/remote/terminal/sessions/{name}/ports",
+            get(remote::proxy_remote_session_ports),
+        )
+        .route("/api/remote/fwd/{port}", any(remote::proxy_remote_fwd_root))
+        .route(
+            "/api/remote/fwd/{port}/{*path}",
+            any(remote::proxy_remote_fwd),
+        )
+        .route(
+            "/api/remote/fwd-ws/{port}",
+            get(remote::proxy_remote_fwd_ws_root),
+        )
+        .route(
+            "/api/remote/fwd-ws/{port}/{*path}",
+            get(remote::proxy_remote_fwd_ws),
+        )
         .route("/api/remote/filer/list", get(remote::proxy_filer_list))
         .route("/api/remote/filer/read", get(remote::proxy_filer_read))
         .route("/api/remote/filer/write", put(remote::proxy_filer_write))

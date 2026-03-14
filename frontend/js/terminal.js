@@ -748,12 +748,15 @@ const DenTerminal = (() => {
     const relay = getRelayInfo();
     if (relay?.relaySessionId) {
       try {
-        const r = await fetch(`/api/relay/${relay.relaySessionId}/terminal/sessions`, {
-          credentials: 'same-origin',
-        });
-        if (r.ok) {
-          all.push(...(await r.json()).map(s => ({
-            ...s, remote: relay.hostPort, remoteDisplayName: null, detected_ports: [],
+        const [sessResp, portsResp] = await Promise.all([
+          fetch(`/api/relay/${relay.relaySessionId}/terminal/sessions`, { credentials: 'same-origin' }),
+          fetch(`/api/relay/${relay.relaySessionId}/ports`, { credentials: 'same-origin' }),
+        ]);
+        if (sessResp.ok) {
+          const remotePorts = portsResp.ok ? await portsResp.json() : [];
+          all.push(...(await sessResp.json()).map(s => ({
+            ...s, remote: relay.hostPort, remoteDisplayName: null,
+            detected_ports: remotePorts.filter(p => !p.session || p.session === s.name),
           })));
         }
       } catch { /* ignore */ }
@@ -762,14 +765,16 @@ const DenTerminal = (() => {
       const remoteInfo = getRemoteDenInfo();
       if (remoteInfo?.hostPort) {
         try {
-          const r = await fetch('/api/remote/terminal/sessions', {
-            credentials: 'same-origin',
-          });
-          if (r.ok) {
-            all.push(...(await r.json()).map(s => ({
+          const [sessResp, portsResp] = await Promise.all([
+            fetch('/api/remote/terminal/sessions', { credentials: 'same-origin' }),
+            fetch('/api/remote/ports', { credentials: 'same-origin' }),
+          ]);
+          if (sessResp.ok) {
+            const remotePorts = portsResp.ok ? await portsResp.json() : [];
+            all.push(...(await sessResp.json()).map(s => ({
               ...s, remote: remoteInfo.hostPort,
               remoteDisplayName: remoteInfo.displayName || null,
-              detected_ports: [],
+              detected_ports: remotePorts.filter(p => !p.session || p.session === s.name),
             })));
           }
         } catch { /* ignore */ }
@@ -926,12 +931,12 @@ const DenTerminal = (() => {
   }
 
   async function checkRemotePorts(sessions) {
-    // Collect SSH session ports (local non-SSH ports are accessible directly)
+    // Collect ports from SSH and remote sessions
     const allPorts = [];
     const seenPorts = new Set();
     for (const s of sessions) {
       if (!s.detected_ports || s.detected_ports.length === 0) continue;
-      // Only show ports from SSH sessions (local ports are directly accessible)
+      // Show ports from SSH sessions and remote Den sessions
       if (!s.ssh_host && !s.remote) continue;
       const sessionKey = s.remote ? `${s.remote}:${s.name}` : s.name;
       for (const p of s.detected_ports) {
@@ -954,15 +959,62 @@ const DenTerminal = (() => {
         });
       }
     }
+
+    // Render port bar
+    renderPortBar(allPorts);
+  }
+
+  function renderPortBar(ports) {
+    const bar = document.getElementById('port-bar');
+    const items = document.getElementById('port-bar-items');
+    if (!bar || !items) return;
+
+    if (ports.length === 0) {
+      bar.hidden = true;
+      return;
+    }
+
+    bar.hidden = false;
+    items.textContent = '';
+    for (const p of ports) {
+      const btn = document.createElement('button');
+      btn.className = 'port-bar-item';
+      btn.title = p.source || `Port ${p.port}`;
+      const num = document.createElement('span');
+      num.className = 'port-number';
+      num.textContent = p.port;
+      btn.appendChild(num);
+      if (p.remote) {
+        const src = document.createElement('span');
+        src.className = 'port-source';
+        src.textContent = p.remote;
+        btn.appendChild(src);
+      }
+      btn.addEventListener('click', () => openPort(p));
+      items.appendChild(btn);
+    }
+  }
+
+  function getFwdUrl(portInfo) {
+    if (portInfo.remote) {
+      const relayInfo = getRelayInfo();
+      if (relayInfo && portInfo.remote === relayInfo.hostPort) {
+        return `/api/relay/${relayInfo.relaySessionId}/fwd/${portInfo.port}/`;
+      }
+      if (isRemoteDenTarget(portInfo.remote)) {
+        return `/api/remote/fwd/${portInfo.port}/`;
+      }
+    }
+    return `/fwd/${portInfo.port}/`;
   }
 
   async function openPort(portInfo) {
+    const url = getFwdUrl(portInfo);
     // Open tab first to avoid popup blocker after await (F004)
-    const url = `/fwd/${portInfo.port}/`;
     const tab = window.open('about:blank', '_blank', 'noopener,noreferrer');
 
-    // For SSH sessions, start tunnel first
-    if (!portInfo.forwarded && portInfo.remote === null && portInfo.session) {
+    // For local SSH sessions, start tunnel first
+    if (!portInfo.forwarded && !portInfo.remote && portInfo.session) {
       try {
         const resp = await fetch(
           `/api/terminal/sessions/${encodeURIComponent(portInfo.session)}/ports/${portInfo.port}/forward`,

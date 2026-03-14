@@ -518,6 +518,47 @@ html, body {
 }
 
 
+.port-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.port-bar::-webkit-scrollbar { display: none; }
+.port-bar-label {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-weight: 600;
+}
+.port-bar-items { display: flex; gap: 4px; }
+.port-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.port-bar-item:hover { background: var(--hover); }
+.port-bar-item .port-number { font-weight: 600; }
+.port-bar-item .port-source {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .session-tabs {
   display: flex;
   align-items: center;

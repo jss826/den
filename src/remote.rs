@@ -562,6 +562,150 @@ pub async fn proxy_settings_put(
     .await
 }
 
+// --- Remote port forwarding proxy ---
+
+/// GET /api/remote/ports — proxy to remote Den's /api/ports
+pub async fn proxy_remote_ports(
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, StatusCode> {
+    proxy_remote_request(
+        &state,
+        reqwest::Method::GET,
+        "/api/ports",
+        None,
+        None,
+        vec![],
+    )
+    .await
+}
+
+/// GET /api/remote/terminal/sessions/{name}/ports — proxy to remote Den
+pub async fn proxy_remote_session_ports(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Response, StatusCode> {
+    proxy_remote_request(
+        &state,
+        reqwest::Method::GET,
+        // Session names are validated to contain only [a-zA-Z0-9-] (see is_valid_session_name),
+        // so no URL encoding is needed here.
+        &format!("/api/terminal/sessions/{name}/ports"),
+        None,
+        None,
+        vec![],
+    )
+    .await
+}
+
+/// ANY /api/remote/fwd/{port} — proxy HTTP to remote Den's /fwd/{port}
+pub async fn proxy_remote_fwd_root(
+    State(state): State<Arc<AppState>>,
+    Path(port): Path<u16>,
+    method: axum::http::Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, StatusCode> {
+    proxy_remote_request(
+        &state,
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+        &format!("/fwd/{port}"),
+        None,
+        extract_forwarded_headers(&headers),
+        body.to_vec(),
+    )
+    .await
+}
+
+/// ANY /api/remote/fwd/{port}/{*path} — proxy HTTP to remote Den's /fwd/{port}/{path}
+pub async fn proxy_remote_fwd(
+    State(state): State<Arc<AppState>>,
+    Path((port, path)): Path<(u16, String)>,
+    RawQuery(query): RawQuery,
+    method: axum::http::Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, StatusCode> {
+    let path = sanitize_proxy_path(&path);
+    proxy_remote_request(
+        &state,
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+        &format!("/fwd/{port}/{path}"),
+        query.as_deref(),
+        extract_forwarded_headers(&headers),
+        body.to_vec(),
+    )
+    .await
+}
+
+/// GET /api/remote/fwd-ws/{port} — WebSocket proxy to remote Den's /fwd-ws/{port}
+pub async fn proxy_remote_fwd_ws_root(
+    ws: WebSocketUpgrade,
+    Path(port): Path<u16>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let Some(remote) = state.remote_manager.get() else {
+        return StatusCode::PRECONDITION_REQUIRED.into_response();
+    };
+    ws.on_upgrade(move |socket| handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}")))
+        .into_response()
+}
+
+/// GET /api/remote/fwd-ws/{port}/{*path} — WebSocket proxy to remote Den's /fwd-ws/{port}/{path}
+pub async fn proxy_remote_fwd_ws(
+    ws: WebSocketUpgrade,
+    Path((port, path)): Path<(u16, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let Some(remote) = state.remote_manager.get() else {
+        return StatusCode::PRECONDITION_REQUIRED.into_response();
+    };
+    let path = sanitize_proxy_path(&path);
+    ws.on_upgrade(move |socket| {
+        handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}/{path}"))
+    })
+    .into_response()
+}
+
+/// Generic WebSocket relay to a specific path on the remote Den.
+async fn handle_remote_ws_path(browser_ws: WebSocket, remote: RemoteSession, path: String) {
+    let ws_base = remote.base_url.replacen("https://", "wss://", 1);
+    let remote_url = format!("{}{path}", ws_base.trim_end_matches('/'));
+
+    let mut request = match remote_url.into_client_request() {
+        Ok(request) => request,
+        Err(e) => {
+            tracing::warn!("remote fwd ws: invalid URL: {e}");
+            return;
+        }
+    };
+    if let Ok(cookie) = remote.cookie_header.parse() {
+        request.headers_mut().insert(header::COOKIE, cookie);
+    }
+
+    let connect_result = connect_remote_ws_client(request, remote.ws_client_config.clone()).await;
+
+    let (remote_ws, _) = match connect_result {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!("remote fwd ws connect failed: {e}");
+            let (mut browser_tx, _) = browser_ws.split();
+            let _ = browser_tx.send(AxumWsMessage::Close(None)).await;
+            return;
+        }
+    };
+
+    relay_ws_bidirectional(browser_ws, remote_ws).await;
+}
+
+/// Sanitize a proxy path to prevent path traversal attacks.
+/// Removes `..` segments that could escape the `/fwd/` scope.
+fn sanitize_proxy_path(path: &str) -> String {
+    path.split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".." && *seg != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn api_error(status: StatusCode, message: &str) -> Response {
     (
         status,
@@ -842,6 +986,14 @@ async fn handle_remote_ws(browser_ws: WebSocket, remote: RemoteSession, query: O
         }
     };
 
+    relay_ws_bidirectional(browser_ws, remote_ws).await;
+}
+
+/// Bidirectional WebSocket relay between browser (axum) and remote (tungstenite).
+async fn relay_ws_bidirectional(
+    browser_ws: WebSocket,
+    remote_ws: tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>,
+) {
     let (mut browser_tx, mut browser_rx) = browser_ws.split();
     let (mut remote_tx, mut remote_rx) = remote_ws.split();
 
@@ -1862,5 +2014,14 @@ mod tests {
 
         let result = build_pinned_clients(&cert_der, &fingerprint);
         assert!(result.is_ok(), "build_pinned_clients failed: {result:?}");
+    }
+
+    #[test]
+    fn sanitize_proxy_path_removes_traversal() {
+        assert_eq!(sanitize_proxy_path("../../api/settings"), "api/settings");
+        assert_eq!(sanitize_proxy_path("a/../b"), "a/b");
+        assert_eq!(sanitize_proxy_path("./foo"), "foo");
+        assert_eq!(sanitize_proxy_path("foo/bar"), "foo/bar");
+        assert_eq!(sanitize_proxy_path(""), "");
     }
 }
