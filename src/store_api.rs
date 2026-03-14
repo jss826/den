@@ -213,17 +213,10 @@ pub async fn put_settings(
             return (StatusCode::UNPROCESSABLE_ENTITY, "too many den bookmarks").into_response();
         }
         for b in bookmarks {
-            if b.label.trim().is_empty() || b.url.trim().is_empty() {
+            if b.url.trim().is_empty() {
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "den bookmark label/url required",
-                )
-                    .into_response();
-            }
-            if b.label.chars().count() > 50 {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "den bookmark label too long",
+                    "den bookmark url required",
                 )
                     .into_response();
             }

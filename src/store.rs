@@ -100,7 +100,9 @@ fn default_ssh_port() -> u16 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DenBookmark {
-    pub label: String,
+    /// Deprecated: kept for migration only (read old JSON, never write).
+    #[serde(default, skip_serializing)]
+    pub label: Option<String>,
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
@@ -262,9 +264,53 @@ impl Store {
         if let Some(cached) = self.settings_cache.lock().unwrap().as_ref() {
             return cached.clone();
         }
-        let settings = self.load_settings_from_disk();
+        let mut settings = self.load_settings_from_disk();
+        self.migrate_bookmark_labels(&mut settings);
         *self.settings_cache.lock().unwrap() = Some(settings.clone());
         settings
+    }
+
+    /// Migrate legacy `DenBookmark.label` → `TrustedTlsCert.display_name`.
+    fn migrate_bookmark_labels(&self, settings: &mut Settings) {
+        let bookmarks = match settings.den_bookmarks.as_mut() {
+            Some(b) if !b.is_empty() => b,
+            _ => return,
+        };
+        let mut migrated = false;
+        for bookmark in bookmarks.iter_mut() {
+            let label = match bookmark.label.take() {
+                Some(l) if !l.is_empty() => l,
+                _ => continue,
+            };
+            // Extract host:port from bookmark URL (e.g. "https://host:8080" → "host:8080")
+            let host_port = extract_host_port(&bookmark.url);
+            // Copy label to TrustedTlsCert.display_name if not already set
+            let certs = self.load_trusted_tls();
+            if let Some(cert) = certs.get(&host_port)
+                && cert.display_name.is_none()
+            {
+                if let Err(e) =
+                    self.update_trusted_tls_display_name(&host_port, Some(label.clone()))
+                {
+                    tracing::warn!(
+                        "Failed to migrate bookmark label to TLS display_name \
+                         for {host_port}: {e}"
+                    );
+                } else {
+                    tracing::info!(
+                        "Migrated bookmark label \"{label}\" → \
+                         TLS display_name for {host_port}"
+                    );
+                    migrated = true;
+                }
+            }
+        }
+        if migrated {
+            // Re-save settings without labels
+            if let Err(e) = self.save_settings_internal(settings) {
+                tracing::warn!("Failed to re-save settings after bookmark migration: {e}");
+            }
+        }
     }
 
     fn load_settings_from_disk(&self) -> Settings {
@@ -294,12 +340,16 @@ impl Store {
     }
 
     pub fn save_settings(&self, settings: &Settings) -> std::io::Result<()> {
+        self.save_settings_internal(settings)?;
+        *self.settings_cache.lock().unwrap() = Some(settings.clone());
+        Ok(())
+    }
+
+    fn save_settings_internal(&self, settings: &Settings) -> std::io::Result<()> {
         let path = self.root.join("settings.json");
         let json = serde_json::to_string_pretty(settings)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(path, json)?;
-        *self.settings_cache.lock().unwrap() = Some(settings.clone());
-        Ok(())
+        fs::write(path, json)
     }
 
     // --- Clipboard History ---
@@ -643,6 +693,22 @@ impl Store {
 
         *cache = Some(certs);
         Ok(())
+    }
+}
+
+/// Extract `host:port` from a URL string (e.g. `https://host:8080/path` → `host:8080`).
+fn extract_host_port(url: &str) -> String {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
+    if host_port.contains(':') {
+        host_port.to_string()
+    } else if url.starts_with("https://") {
+        format!("{host_port}:443")
+    } else {
+        format!("{host_port}:80")
     }
 }
 

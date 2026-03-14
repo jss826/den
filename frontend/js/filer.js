@@ -505,11 +505,34 @@ const DenFiler = (() => {
 
   // --- Den Bookmarks ---
 
-  function renderDenBookmarkSelect(selectedLabel) {
+  /** Extract host:port from a URL string (mirrors backend extract_host_port). */
+  function bookmarkHostPort(url) {
+    try {
+      const u = new URL(url);
+      return u.host; // includes port if explicit
+    } catch {
+      return url.replace(/^https?:\/\//, '').split('/')[0];
+    }
+  }
+
+  /** Resolve display name for a bookmark from TrustedTlsCert cache. */
+  async function resolveBookmarkName(url) {
+    const hp = bookmarkHostPort(url);
+    try {
+      const certs = await DenTlsTrust.list();
+      return certs[hp]?.display_name || hp;
+    } catch { return hp; }
+  }
+
+  let _tlsCertsForRender = null;
+
+  async function renderDenBookmarkSelect(selectedUrl) {
     const select = document.getElementById('den-bookmark-select');
     const deleteBtn = document.getElementById('den-bookmark-delete');
     if (!select) return;
     const bookmarks = DenSettings.get('den_bookmarks') || [];
+    // Fetch TLS certs once for display names
+    try { _tlsCertsForRender = await DenTlsTrust.list(); } catch { _tlsCertsForRender = {}; }
     select.innerHTML = '';
     const placeholder = document.createElement('option');
     placeholder.value = '';
@@ -517,9 +540,11 @@ const DenFiler = (() => {
     select.appendChild(placeholder);
     bookmarks.forEach((b) => {
       const opt = document.createElement('option');
-      opt.value = b.label;
-      opt.textContent = b.use_relay ? `${b.label} (relay)` : b.label;
-      if (b.label === selectedLabel) opt.selected = true;
+      opt.value = b.url;
+      const hp = bookmarkHostPort(b.url);
+      const name = _tlsCertsForRender[hp]?.display_name || hp;
+      opt.textContent = b.use_relay ? `${name} (relay)` : name;
+      if (b.url === selectedUrl) opt.selected = true;
       select.appendChild(opt);
     });
     if (deleteBtn) deleteBtn.hidden = !select.value;
@@ -529,9 +554,9 @@ const DenFiler = (() => {
     const select = document.getElementById('den-bookmark-select');
     const deleteBtn = document.getElementById('den-bookmark-delete');
     const bookmarks = DenSettings.get('den_bookmarks') || [];
-    const label = select.value;
-    if (deleteBtn) deleteBtn.hidden = !label;
-    const b = bookmarks.find(bk => bk.label === label);
+    const url = select.value;
+    if (deleteBtn) deleteBtn.hidden = !url;
+    const b = bookmarks.find(bk => bk.url === url);
     if (!b) return;
     document.getElementById('den-connect-url').value = b.url || '';
     document.getElementById('den-connect-password').value = b.password || '';
@@ -551,18 +576,15 @@ const DenFiler = (() => {
       Toast.error('Target URL is required to save');
       return;
     }
-    const defaultLabel = url.replace(/^https?:\/\//, '');
-    const rawLabel = await Toast.prompt('Bookmark name:', defaultLabel);
-    if (!rawLabel) return;
-    const label = rawLabel.trim();
-    if (!label) {
-      Toast.error('Bookmark name cannot be empty');
-      return;
-    }
+    const hostPort = bookmarkHostPort(url);
+    // Prompt for display name (saved to TrustedTlsCert)
+    const currentName = await resolveBookmarkName(url);
+    const rawName = await Toast.prompt('Connection name:', currentName);
+    if (!rawName) return;
+    const displayName = rawName.trim();
 
     const useRelay = document.getElementById('den-use-relay')?.checked || false;
     const entry = {
-      label,
       url,
       password: document.getElementById('den-connect-password').value || null,
       use_relay: useRelay,
@@ -571,9 +593,8 @@ const DenFiler = (() => {
     };
 
     const bookmarks = (DenSettings.get('den_bookmarks') || []).slice();
-    const existIdx = bookmarks.findIndex(b => b.label === label);
+    const existIdx = bookmarks.findIndex(b => b.url === url);
     if (existIdx >= 0) {
-      if (!(await Toast.confirm(`A bookmark named "${label}" already exists. Overwrite?`))) return;
       bookmarks[existIdx] = entry;
     } else {
       if (bookmarks.length >= 50) {
@@ -582,10 +603,12 @@ const DenFiler = (() => {
       }
       bookmarks.push(entry);
     }
+    // Save display name to TrustedTlsCert
+    try { await DenTlsTrust.updateDisplayName(hostPort, displayName); } catch { /* ignore if cert not yet trusted */ }
     const ok = await DenSettings.save({ den_bookmarks: bookmarks });
     if (ok) {
       Toast.success('Bookmark saved');
-      renderDenBookmarkSelect(label);
+      renderDenBookmarkSelect(url);
     } else {
       Toast.error('Failed to save bookmark');
     }
@@ -594,10 +617,12 @@ const DenFiler = (() => {
   async function onDenBookmarkDelete() {
     const select = document.getElementById('den-bookmark-select');
     const bookmarks = (DenSettings.get('den_bookmarks') || []).slice();
-    const label = select.value;
-    const idx = bookmarks.findIndex(b => b.label === label);
+    const url = select.value;
+    const idx = bookmarks.findIndex(b => b.url === url);
     if (idx < 0) return;
-    if (!(await Toast.confirm(`Delete bookmark "${label}"?`))) return;
+    const hp = bookmarkHostPort(url);
+    const name = _tlsCertsForRender?.[hp]?.display_name || hp;
+    if (!(await Toast.confirm(`Delete bookmark "${name}"?`))) return;
     bookmarks.splice(idx, 1);
     const ok = await DenSettings.save({ den_bookmarks: bookmarks });
     if (ok) {
