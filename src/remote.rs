@@ -49,6 +49,13 @@ impl RemoteManager {
         if sessions.len() >= MAX_REMOTE_CONNECTIONS {
             return Err("too many remote connections");
         }
+        // Prevent duplicate connections to the same host
+        if sessions
+            .values()
+            .any(|s| s.host_port == session.host_port)
+        {
+            return Err("already connected to this host");
+        }
         sessions.insert(id, session);
         Ok(())
     }
@@ -352,8 +359,14 @@ pub async fn connect(
     };
 
     if let Err(msg) = state.remote_manager.insert(connection_id.clone(), session) {
-        return api_error(StatusCode::TOO_MANY_REQUESTS, msg);
+        return api_error(StatusCode::CONFLICT, msg);
     }
+
+    tracing::info!(
+        connection_id = %connection_id,
+        host_port = %host_port,
+        "Quick Connect: connected"
+    );
 
     axum::Json(RemoteStatusResponse {
         connected: true,
@@ -385,6 +398,7 @@ pub async fn list_connections(
 
 pub async fn disconnect(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
     if state.remote_manager.remove(&id) {
+        tracing::info!(connection_id = %id, "Quick Connect: disconnected");
         StatusCode::NO_CONTENT
     } else {
         StatusCode::NOT_FOUND
@@ -447,11 +461,18 @@ pub async fn remote_proxy_catch_all(
     let session = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let rest = sanitize_proxy_path(&rest);
 
-    // fwd/ routes proxy to /fwd/ (not /api/fwd/)
-    let path = if rest.starts_with("fwd/") || rest == "fwd" {
+    // Allowlist: only proxy known API paths to the remote Den
+    let path = if rest.starts_with("fwd/") {
+        // Port forwarding: /fwd/{port}/... → /fwd/{port}/...
         format!("/{rest}")
-    } else {
+    } else if rest.starts_with("terminal/")
+        || rest.starts_with("filer/")
+        || rest == "settings"
+        || rest == "ports"
+    {
         format!("/api/{rest}")
+    } else {
+        return Err(StatusCode::FORBIDDEN);
     };
 
     proxy_to_remote_session(

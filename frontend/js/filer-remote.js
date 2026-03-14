@@ -68,6 +68,7 @@ const FilerRemote = (() => {
   /** Connect to another Den over HTTPS/WSS (supports multiple simultaneous connections) */
   async function connectDen(url, password) {
     if (mode === 'sftp') await disconnectSftpSilent();
+    if (mode === 'relay') await disconnectRelaySilent();
 
     let resp = await doDenConnectFetch(url, password);
     if (resp.status === 409) {
@@ -426,15 +427,22 @@ const FilerRemote = (() => {
         const connections = await resp.json();
         if (connections.length > 0) {
           denConnections = {};
+          // Resolve display names in parallel
+          const hostPorts = connections.map(c => c.host_port);
+          let displayNames = {};
+          try {
+            const certs = typeof DenTlsTrust !== 'undefined' ? await DenTlsTrust.list() : {};
+            for (const hp of hostPorts) {
+              displayNames[hp] = certs[hp]?.display_name || null;
+            }
+          } catch { /* ignore */ }
           for (const conn of connections) {
-            const connInfo = {
+            denConnections[conn.connection_id] = {
               url: conn.url || null,
               hostPort: conn.host_port || null,
               fingerprint: conn.fingerprint || null,
-              displayName: null,
+              displayName: displayNames[conn.host_port] || null,
             };
-            connInfo.displayName = await resolveDisplayName(connInfo.hostPort);
-            denConnections[conn.connection_id] = connInfo;
           }
           activeDenId = connections[0].connection_id;
           mode = 'den';

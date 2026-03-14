@@ -193,9 +193,18 @@ const DenFiler = (() => {
     document.addEventListener('click', () => closeRemoteDropdown());
 
     // Remote source changed event
+    let lastFilerMode = 'local';
+    let lastActiveDenId = null;
     document.addEventListener('den:remote-changed', (e) => {
       const { mode } = e.detail;
+      const newActiveDenId = e.detail.connectionId || null;
       updateRemoteButton();
+      // Only reset filer if the actual browsing source changed
+      const modeChanged = mode !== lastFilerMode;
+      const denIdChanged = mode === 'den' && newActiveDenId !== lastActiveDenId;
+      lastFilerMode = mode;
+      lastActiveDenId = newActiveDenId;
+      if (!modeChanged && !denIdChanged) return;
       const drives = document.getElementById('filer-drives');
       if (mode !== 'local') {
         if (drives) drives.hidden = true;
