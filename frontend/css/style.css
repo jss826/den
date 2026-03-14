@@ -505,6 +505,9 @@ html, body {
   --terminal-session-bar-height: 40px;
   --session-tab-min-height: 32px;
   --session-close-hit-size: 28px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .terminal-session-bar {
@@ -515,6 +518,7 @@ html, body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   height: var(--terminal-session-bar-height);
+  flex-shrink: 0;
 }
 
 
@@ -527,6 +531,7 @@ html, body {
   border-bottom: 1px solid var(--border);
   font-size: 0.75rem;
   overflow-x: auto;
+  flex-shrink: 0;
   scrollbar-width: none;
 }
 .port-bar::-webkit-scrollbar { display: none; }
@@ -756,7 +761,8 @@ html, body {
 
 #terminal-container {
   width: 100%;
-  height: calc(100% - var(--terminal-session-bar-height));
+  flex: 1;
+  min-height: 0;
   position: relative;
 }
 
@@ -781,6 +787,7 @@ html, body {
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 6px 8px;
+  flex-shrink: 0;
 }
 .text-input-toolbar {
   display: flex;
@@ -808,7 +815,7 @@ html, body {
 .text-input-textarea {
   flex: 1;
   min-height: 2.5rem;
-  max-height: 8rem;
+  max-height: 50vh;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;

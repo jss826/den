@@ -66,8 +66,8 @@ const TextInput = (() => {
       return;
     }
 
-    // F011: Convert \n to \r for PTY (no unescapeSend — user text should be sent as-is)
-    const data = text.replace(/\n/g, '\r');
+    // Convert \n to \r for PTY, then append \r to execute the command
+    const data = text.replace(/\n/g, '\r') + '\r';
 
     DenTerminal.sendInput(data);
     addToHistory(text);
@@ -109,26 +109,11 @@ const TextInput = (() => {
     if (textarea) textarea.focus();
   }
 
-  // F005: Use CSS custom property to avoid forced reflow (no offsetHeight read)
+  // Flexbox handles layout; just refit the terminal after toggle/resize
   function updateTerminalHeight() {
-    const container = document.getElementById('terminal-container');
-    if (!container) return;
-    if (box && !box.hidden) {
-      // Use rAF to batch read+write and avoid layout thrashing
-      requestAnimationFrame(() => {
-        if (!box || box.hidden) {
-          container.style.height = '';
-        } else {
-          container.style.height = `calc(100% - var(--terminal-session-bar-height) - ${box.offsetHeight}px)`;
-        }
-        DenTerminal.fitAndRefresh();
-      });
-    } else {
-      requestAnimationFrame(() => {
-        container.style.height = '';
-        DenTerminal.fitAndRefresh();
-      });
-    }
+    requestAnimationFrame(() => {
+      DenTerminal.fitAndRefresh();
+    });
   }
 
   // --- History ---
