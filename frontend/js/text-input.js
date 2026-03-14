@@ -67,8 +67,8 @@ const TextInput = (() => {
       return;
     }
 
-    // Convert \n to \r for PTY, then append \r to execute the command
-    const data = text.replace(/\n/g, '\r') + '\r';
+    // Convert \n to \r for PTY
+    const data = text.replace(/\n/g, '\r');
 
     DenTerminal.sendInput(data);
     addToHistory(text);
