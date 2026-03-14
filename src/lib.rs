@@ -13,6 +13,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod store;
 pub mod store_api;
+pub mod terminal_filter;
 pub mod tls;
 pub mod update;
 pub mod ws;

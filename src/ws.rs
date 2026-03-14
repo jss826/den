@@ -16,6 +16,7 @@ use crate::AppState;
 use crate::port_forward::PortInfo;
 use crate::pty::registry::{ClientKind, RegistryError, SessionInfo, SshSessionConfig};
 use crate::store::SshAuthType;
+use crate::terminal_filter::{filter_conpty_private_modes, filter_terminal_responses};
 
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
@@ -90,10 +91,18 @@ async fn handle_socket(
         }
     };
 
-    // replay data を送信
-    if !replay.is_empty() && ws_tx.send(Message::Binary(replay.into())).await.is_err() {
-        registry.detach(&session_name, client_id).await;
-        return;
+    // replay data を送信（ConPTY private mode を除去）
+    if !replay.is_empty() {
+        let filtered_replay = filter_conpty_private_modes(&replay);
+        if !filtered_replay.is_empty()
+            && ws_tx
+                .send(Message::Binary(filtered_replay.into_owned().into()))
+                .await
+                .is_err()
+        {
+            registry.detach(&session_name, client_id).await;
+            return;
+        }
     }
 
     // broadcast → WS 転送（coalescing: burst データを単一 WS メッセージに結合）
@@ -122,7 +131,12 @@ async fn handle_socket(
                         }
                     }
                     let coalesced = std::mem::take(&mut buf);
-                    if ws_tx.send(Message::Binary(coalesced.into())).await.is_err() {
+                    let filtered = filter_conpty_private_modes(&coalesced);
+                    if ws_tx
+                        .send(Message::Binary(filtered.into_owned().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -155,6 +169,7 @@ async fn handle_socket(
             match msg {
                 Message::Binary(data) => {
                     let filtered = filter_mouse_sequences(&data);
+                    let filtered = filter_terminal_responses(&filtered);
                     if !filtered.is_empty()
                         && let Err(e) = session.write_input_from(client_id, &filtered).await
                     {
@@ -170,6 +185,7 @@ async fn handle_socket(
                             }
                             WsCommand::Input { data } => {
                                 let filtered = filter_mouse_sequences(data.as_bytes());
+                                let filtered = filter_terminal_responses(&filtered);
                                 if !filtered.is_empty()
                                     && let Err(e) =
                                         session.write_input_from(client_id, &filtered).await
