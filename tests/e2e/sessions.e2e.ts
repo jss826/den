@@ -10,9 +10,12 @@ test.describe('Session Management', () => {
 
   test('empty state shown when no sessions exist', async ({ page }) => {
     await login(page);
+    // Wait for session list to finish loading (either tabs appear or empty state)
+    await expect(
+      page.locator('.session-tab, .terminal-empty-state').first(),
+    ).toBeVisible({ timeout: 10_000 });
     // Skip if sessions already exist from prior test runs
-    const tabs = page.locator('.session-tab');
-    if (await tabs.count() > 0) {
+    if (await page.locator('.session-tab').count() > 0) {
       test.skip();
       return;
     }
@@ -48,28 +51,34 @@ test.describe('Session Management', () => {
 
   test('create multiple sessions and switch between them', async ({ page }) => {
     await login(page);
-    await createSession(page, 'sess-a');
-    await createSession(page, 'sess-b');
+    const ts = Date.now();
+    const nameA = `sa-${ts}`;
+    const nameB = `sb-${ts}`;
+    await createSession(page, nameA);
+    await createSession(page, nameB);
 
     // Both tabs should exist
-    await expect(page.locator('.session-tab[data-session="sess-a"]')).toBeVisible();
-    await expect(page.locator('.session-tab[data-session="sess-b"]')).toBeVisible();
+    await expect(page.locator(`.session-tab[data-session="${nameA}"]`)).toBeVisible();
+    await expect(page.locator(`.session-tab[data-session="${nameB}"]`)).toBeVisible();
 
-    // sess-b should be active (most recently created)
-    await expect(page.locator('.session-tab[data-session="sess-b"]')).toHaveClass(/active/);
+    // nameB should be active (most recently created)
+    await expect(page.locator(`.session-tab[data-session="${nameB}"]`)).toHaveClass(/active/);
 
-    // Click sess-a to switch
-    await page.locator('.session-tab[data-session="sess-a"]').click();
-    await expect(page.locator('.session-tab[data-session="sess-a"]')).toHaveClass(/active/);
-    await expect(page.locator('.session-tab[data-session="sess-b"]')).not.toHaveClass(/active/);
+    // Click nameA to switch
+    await page.locator(`.session-tab[data-session="${nameA}"]`).click();
+    await expect(page.locator(`.session-tab[data-session="${nameA}"]`)).toHaveClass(/active/);
+    await expect(page.locator(`.session-tab[data-session="${nameB}"]`)).not.toHaveClass(/active/);
   });
 
   test('rename session via double-click', async ({ page }) => {
     await login(page);
-    await createSession(page, 'to-rename');
+    // Use unique name to avoid collision with sessions from prior runs
+    const oldName = `ren-${Date.now()}`;
+    const newName = `renamed-${Date.now()}`;
+    await createSession(page, oldName);
 
     // Double-click the tab label (not the close button) to rename
-    const tab = page.locator('.session-tab[data-session="to-rename"] .session-tab-label');
+    const tab = page.locator(`.session-tab[data-session="${oldName}"] .session-tab-label`);
     await tab.dblclick();
 
     // Prompt modal should appear
@@ -79,12 +88,12 @@ test.describe('Session Management', () => {
     // Clear and enter new name
     const input = promptModal.locator('input');
     await input.clear();
-    await input.fill('renamed');
+    await input.fill(newName);
     await promptModal.locator('button', { hasText: 'OK' }).click();
 
     // New tab should appear, old one should be gone (wait for session list refresh)
-    await expect(page.locator('.session-tab[data-session="renamed"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('.session-tab[data-session="to-rename"]')).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator(`.session-tab[data-session="${newName}"]`)).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(`.session-tab[data-session="${oldName}"]`)).toHaveCount(0, { timeout: 10_000 });
   });
 
   test('kill session via close button', async ({ page }) => {

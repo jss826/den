@@ -735,6 +735,132 @@ html, body {
   padding: 4px;
 }
 
+/* Text Input Box */
+.text-input-box {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 6px 8px;
+}
+.text-input-toolbar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.text-input-toolbar-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  color: var(--fg);
+  cursor: pointer;
+}
+.text-input-toolbar-btn:hover {
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+}
+.text-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+.text-input-textarea {
+  flex: 1;
+  min-height: 2.5rem;
+  max-height: 8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.5rem;
+  color: var(--fg);
+  font: 0.85rem monospace;
+  resize: vertical;
+}
+.text-input-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.text-input-send-btn {
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  border: none;
+  border-radius: 4px;
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: stretch;
+}
+.text-input-send-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* Text Input History Popup */
+.text-input-history-popup {
+  position: fixed;
+  z-index: 200;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  width: min(360px, calc(100vw - 16px));
+  max-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+.text-input-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.text-input-history-clear {
+  background: none;
+  border: none;
+  color: var(--error);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.text-input-history-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.text-input-history-list {
+  overflow-y: auto;
+  flex: 1;
+}
+.text-input-history-item {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.text-input-history-item:last-child {
+  border-bottom: none;
+}
+.text-input-history-item:hover {
+  background: var(--hover);
+}
+.text-input-history-preview {
+  font-family: monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* キーバー (全幅・垂直ドラッグ) */
 #keybar {
   position: fixed;

@@ -32,6 +32,7 @@
       <div class="tab-spacer"></div>
       <button id="clipboard-history-btn" class="tab-icon-btn" data-tooltip="Clipboard History" aria-label="Clipboard history"></button>
       <button id="snippet-btn" class="tab-icon-btn" data-tooltip="Snippets" aria-label="Snippets"></button>
+      <button id="text-input-btn" class="tab-icon-btn" data-tooltip="Text Input (Ctrl+J)" aria-label="Text input"></button>
       <button id="float-terminal-btn" class="tab-icon-btn" data-tooltip="Floating Terminal (Ctrl+`)" aria-label="Floating terminal"></button>
       <button id="keep-awake-btn" class="tab-icon-btn" data-tooltip="Keep Awake" aria-label="Keep awake"></button>
       <button id="settings-btn" class="tab-icon-btn" data-tooltip="Settings" aria-label="Settings"></button>
@@ -45,6 +46,15 @@
         <span id="session-clients" class="session-clients" aria-hidden="true"></span>
       </div>
       <div id="terminal-container"></div>
+      <div id="text-input-box" class="text-input-box" hidden>
+        <div class="text-input-toolbar">
+          <button id="text-input-history" class="text-input-toolbar-btn" type="button" data-tooltip="Command History" aria-label="Command history">History</button>
+        </div>
+        <div class="text-input-row">
+          <textarea id="text-input-textarea" class="text-input-textarea" rows="3" placeholder="Type command... (Ctrl+Enter to send)"></textarea>
+          <button id="text-input-send" class="text-input-send-btn" type="button" aria-label="Send">Send</button>
+        </div>
+      </div>
     </div>
 
     <!-- ファイラ -->
@@ -544,6 +554,7 @@
   <script src="/js/tls-trust.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/terminal.js"></script>
+  <script src="/js/text-input.js"></script>
   <script src="/js/snippet.js"></script>
   <script src="/js/float-terminal.js"></script>
   <script src="/js/keybar.js"></script>

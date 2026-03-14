@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet, ClipboardHistory */
+/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet, ClipboardHistory, TextInput */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -70,6 +70,11 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    if (e.key === 'Escape' && TextInput.isHistoryOpen()) {
+      TextInput.closeHistory();
+      return;
+    }
+
     if (e.key === 'Escape' && DenSnippet.isOpen()) {
       DenSnippet.close();
       return;
@@ -98,6 +103,13 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       switchTab('filer');
       DenFiler.showQuickOpen();
+      return;
+    }
+
+    // Ctrl+J テキスト入力ボックス toggle（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === 'j' && !anyModalOpen) {
+      e.preventDefault();
+      TextInput.toggle();
       return;
     }
 
@@ -180,6 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
       'filer-toggle-hidden': DenIcons.eyeOff,
       'clipboard-history-btn': DenIcons.clipboard,
       'snippet-btn': DenIcons.snippet,
+      'text-input-btn': DenIcons.edit,
       'float-terminal-btn': DenIcons.terminal,
       'keep-awake-btn': DenIcons.coffee,
       'settings-btn': DenIcons.gear,
@@ -238,6 +251,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     DenTerminal.connect(initialSession);
     DenTerminal.refreshSessionList();
+
+    // テキスト入力ボックス初期化
+    TextInput.init();
+    document.getElementById('text-input-btn')?.addEventListener('click', () => TextInput.toggle());
 
     // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
     FloatTerminal.init();
