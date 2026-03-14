@@ -13,6 +13,7 @@ const Keybar = (() => {
   let secondaryVisible = false;
   let currentPopup = null;
   let saveTimer = null;
+  let _lastActiveElement = null;
 
   // Floating state
   let collapsed = false;
@@ -113,6 +114,9 @@ const Keybar = (() => {
         toggleSecondary();
       });
     }
+
+    // Track which element had focus before keybar click (for text-input support)
+    container.addEventListener('pointerdown', () => { _lastActiveElement = document.activeElement; }, true);
 
     // Drag — entire keybar (except buttons and collapse) is draggable
     container.addEventListener('pointerdown', onContainerDragStart);
@@ -625,6 +629,16 @@ const Keybar = (() => {
       if (mods.alt) {
         data = '\x1b' + data;
       }
+    }
+
+    // If text-input textarea was focused before keybar click, insert into textarea
+    const textInputTextarea = document.getElementById('text-input-textarea');
+    if (textInputTextarea && _lastActiveElement === textInputTextarea) {
+      const char = data === '\r' ? '\n' : data;
+      textInputTextarea.setRangeText(char, textInputTextarea.selectionStart, textInputTextarea.selectionEnd, 'end');
+      textInputTextarea.focus();
+      resetModifiers();
+      return;
     }
 
     DenTerminal.sendInput(data);
