@@ -109,55 +109,21 @@ pub fn create_app_with_secret(
                 .delete(tls::remove_trusted),
         )
         .route("/api/remote/connect", post(remote::connect))
-        .route("/api/remote/status", get(remote::status))
-        .route("/api/remote/disconnect", post(remote::disconnect))
+        .route("/api/remote/connections", get(remote::list_connections))
+        .route("/api/remote/{id}/disconnect", post(remote::disconnect))
+        .route("/api/remote/{id}/ws", get(remote::remote_ws_handler))
         .route(
-            "/api/remote/terminal/sessions",
-            get(remote::proxy_list_sessions).post(remote::proxy_create_session),
+            "/api/remote/{id}/fwd-ws/{port}",
+            get(remote::remote_fwd_ws_root_handler),
         )
         .route(
-            "/api/remote/terminal/sessions/{session}",
-            put(remote::proxy_rename_session).delete(remote::proxy_delete_session),
+            "/api/remote/{id}/fwd-ws/{port}/{*path}",
+            get(remote::remote_fwd_ws_handler),
         )
         .route(
-            "/api/remote/settings",
-            get(remote::proxy_settings_get).put(remote::proxy_settings_put),
+            "/api/remote/{id}/{*rest}",
+            any(remote::remote_proxy_catch_all),
         )
-        .route("/api/remote/ws", get(remote::ws_relay_handler))
-        // Remote port forwarding proxy
-        .route("/api/remote/ports", get(remote::proxy_remote_ports))
-        .route(
-            "/api/remote/terminal/sessions/{name}/ports",
-            get(remote::proxy_remote_session_ports),
-        )
-        .route("/api/remote/fwd/{port}", any(remote::proxy_remote_fwd_root))
-        .route(
-            "/api/remote/fwd/{port}/{*path}",
-            any(remote::proxy_remote_fwd),
-        )
-        .route(
-            "/api/remote/fwd-ws/{port}",
-            get(remote::proxy_remote_fwd_ws_root),
-        )
-        .route(
-            "/api/remote/fwd-ws/{port}/{*path}",
-            get(remote::proxy_remote_fwd_ws),
-        )
-        .route("/api/remote/filer/list", get(remote::proxy_filer_list))
-        .route("/api/remote/filer/read", get(remote::proxy_filer_read))
-        .route("/api/remote/filer/write", put(remote::proxy_filer_write))
-        .route("/api/remote/filer/mkdir", post(remote::proxy_filer_mkdir))
-        .route("/api/remote/filer/rename", post(remote::proxy_filer_rename))
-        .route("/api/remote/filer/upload", post(remote::proxy_filer_upload))
-        .route(
-            "/api/remote/filer/download",
-            get(remote::proxy_filer_download),
-        )
-        .route(
-            "/api/remote/filer/delete",
-            delete(remote::proxy_filer_delete),
-        )
-        .route("/api/remote/filer/search", get(remote::proxy_filer_search))
         // Relay routes
         .route("/api/relay/connect", post(remote::relay_connect))
         .route("/api/relay/status", get(remote::relay_status))

@@ -1859,28 +1859,28 @@ async fn remote_connect_returns_409_when_fingerprint_changed() {
 }
 
 #[tokio::test]
-async fn remote_proxy_returns_428_when_not_connected() {
+async fn remote_proxy_returns_404_for_nonexistent_connection() {
     let app = test_app();
 
     let req = Request::builder()
         .method("GET")
-        .uri("/api/remote/terminal/sessions")
+        .uri("/api/remote/nonexistent-id/terminal/sessions")
         .header(header::AUTHORIZATION, auth_header())
         .body(Body::empty())
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::PRECONDITION_REQUIRED);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn remote_disconnect_clears_state() {
+async fn remote_connections_list_and_disconnect() {
     let (app, _state) = test_app_with_state();
 
-    // Verify initially not connected
+    // Verify initially no connections
     let req = Request::builder()
         .method("GET")
-        .uri("/api/remote/status")
+        .uri("/api/remote/connections")
         .header(header::AUTHORIZATION, auth_header())
         .body(Body::empty())
         .unwrap();
@@ -1888,27 +1888,15 @@ async fn remote_disconnect_clears_state() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["connected"], false);
+    assert!(json.as_array().unwrap().is_empty());
 
-    // Call disconnect (idempotent — no error even when not connected)
+    // Disconnect nonexistent returns 404
     let req = Request::builder()
         .method("POST")
-        .uri("/api/remote/disconnect")
+        .uri("/api/remote/nonexistent-id/disconnect")
         .header(header::AUTHORIZATION, auth_header())
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-    // Status should still show not connected
-    let req = Request::builder()
-        .method("GET")
-        .uri("/api/remote/status")
-        .header(header::AUTHORIZATION, auth_header())
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["connected"], false);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

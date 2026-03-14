@@ -218,18 +218,27 @@ const DenFiler = (() => {
     const btn = document.getElementById('filer-remote-btn');
     if (!btn) return;
     const info = FilerRemote.getInfo();
+    const denConns = FilerRemote.getDenConnections();
+    const denCount = Object.keys(denConns).length;
     if (info.mode === 'relay') {
       btn.textContent = info.hostPort || 'Relay';
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', `Connected via relay ${info.relayHostPort || ''}`);
     } else if (info.mode === 'den') {
-      btn.textContent = info.hostPort || 'Remote Den';
+      const activeConn = denConns[FilerRemote.getActiveDenId()];
+      const label = activeConn?.displayName || activeConn?.hostPort || 'Remote Den';
+      btn.textContent = denCount > 1 ? `${label} (+${denCount - 1})` : label;
       btn.classList.add('active');
-      btn.setAttribute('data-tooltip', 'Connected to remote Den');
+      btn.setAttribute('data-tooltip', `${denCount} Den connection${denCount !== 1 ? 's' : ''}`);
     } else if (info.mode === 'sftp') {
       btn.textContent = `${info.username}@${info.host}`;
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', 'Connected via SFTP');
+    } else if (denCount > 0) {
+      // Den connections exist but filer is in local mode
+      btn.textContent = `Remote (${denCount})`;
+      btn.classList.add('active');
+      btn.setAttribute('data-tooltip', `${denCount} Den connection${denCount !== 1 ? 's' : ''} (filer: local)`);
     } else {
       btn.textContent = 'Remote';
       btn.classList.remove('active');
@@ -250,31 +259,58 @@ const DenFiler = (() => {
     menu.className = 'new-session-menu';
     menu.addEventListener('click', (e) => e.stopPropagation());
 
-    // Disconnect option if connected
-    if (FilerRemote.isRemote()) {
-      const info = FilerRemote.getInfo();
-      let label;
-      if (info.mode === 'relay') {
-        label = `${info.hostPort || 'target'} via ${info.relayHostPort || 'relay'}`;
-      } else if (info.mode === 'den') {
-        label = info.hostPort || 'remote Den';
-      } else {
-        label = `${info.username}@${info.host}`;
-      }
+    const info = FilerRemote.getInfo();
+
+    // Relay disconnect
+    if (info.mode === 'relay') {
+      const label = `${info.hostPort || 'target'} via ${info.relayHostPort || 'relay'}`;
       const disconnItem = document.createElement('div');
       disconnItem.className = 'new-session-menu-item disconnect';
       disconnItem.textContent = `Disconnect ${label}`;
       disconnItem.addEventListener('click', () => {
         closeRemoteDropdown();
-        if (info.mode === 'sftp') {
-          doDisconnect();
-        } else if (info.mode === 'relay') {
-          doRelayDisconnect();
-        } else {
-          doDenDisconnect();
-        }
+        doRelayDisconnect();
       });
       menu.appendChild(disconnItem);
+
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      menu.appendChild(sep);
+    }
+
+    // SFTP disconnect
+    if (info.mode === 'sftp') {
+      const label = `${info.username}@${info.host}`;
+      const disconnItem = document.createElement('div');
+      disconnItem.className = 'new-session-menu-item disconnect';
+      disconnItem.textContent = `Disconnect ${label}`;
+      disconnItem.addEventListener('click', () => {
+        closeRemoteDropdown();
+        doDisconnect();
+      });
+      menu.appendChild(disconnItem);
+
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      menu.appendChild(sep);
+    }
+
+    // Per-Den-connection disconnect items
+    const denConns = FilerRemote.getDenConnections();
+    const denIds = Object.keys(denConns);
+    if (denIds.length > 0) {
+      for (const connId of denIds) {
+        const conn = denConns[connId];
+        const label = conn.displayName || conn.hostPort || connId;
+        const disconnItem = document.createElement('div');
+        disconnItem.className = 'new-session-menu-item disconnect';
+        disconnItem.textContent = `Disconnect ${label}`;
+        disconnItem.addEventListener('click', () => {
+          closeRemoteDropdown();
+          doDenDisconnect(connId);
+        });
+        menu.appendChild(disconnItem);
+      }
 
       const sep = document.createElement('div');
       sep.className = 'new-session-menu-separator';
@@ -572,9 +608,9 @@ const DenFiler = (() => {
     Toast.success('Disconnected');
   }
 
-  async function doDenDisconnect() {
+  async function doDenDisconnect(connectionId) {
     if (!(await Toast.confirm('Disconnect from remote Den?'))) return;
-    await FilerRemote.disconnectDen();
+    await FilerRemote.disconnectDen(connectionId);
     Toast.success('Disconnected');
   }
 

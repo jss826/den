@@ -4,7 +4,8 @@ const FilerRemote = (() => {
   // mode: 'local' | 'sftp' | 'den' | 'relay'
   let mode = 'local';
   let hostInfo = null; // { host, username } for SFTP
-  let denInfo = null; // { url, hostPort, fingerprint, displayName } for Quick Connect
+  let denConnections = {}; // connectionId → { url, hostPort, fingerprint, displayName }
+  let activeDenId = null; // current active Den connection for filer browsing
   let relayInfo = null; // { relaySessionId, relayHostPort, targetHostPort, targetFingerprint } for Relay
 
   /** Resolve display name from trusted TLS certs cache */
@@ -19,7 +20,7 @@ const FilerRemote = (() => {
   /** Current API base path */
   function getApiBase() {
     if (mode === 'relay') return `/api/relay/${relayInfo.relaySessionId}/filer`;
-    if (mode === 'den') return '/api/remote/filer';
+    if (mode === 'den' && activeDenId) return `/api/remote/${activeDenId}/filer`;
     if (mode === 'sftp') return '/api/sftp';
     return '/api/filer';
   }
@@ -44,14 +45,16 @@ const FilerRemote = (() => {
         username: null,
       };
     }
-    if (mode === 'den') {
+    if (mode === 'den' && activeDenId && denConnections[activeDenId]) {
+      const conn = denConnections[activeDenId];
       return {
         connected: true,
         mode: 'den',
-        url: denInfo?.url || null,
-        hostPort: denInfo?.hostPort || null,
-        fingerprint: denInfo?.fingerprint || null,
-        displayName: denInfo?.displayName || null,
+        connectionId: activeDenId,
+        url: conn.url || null,
+        hostPort: conn.hostPort || null,
+        fingerprint: conn.fingerprint || null,
+        displayName: conn.displayName || null,
         host: null,
         username: null,
       };
@@ -62,10 +65,9 @@ const FilerRemote = (() => {
     return { connected: false, mode: 'local', host: null, username: null };
   }
 
-  /** Connect to another Den over HTTPS/WSS */
+  /** Connect to another Den over HTTPS/WSS (supports multiple simultaneous connections) */
   async function connectDen(url, password) {
     if (mode === 'sftp') await disconnectSftpSilent();
-    if (mode === 'den') await disconnectDenSilent();
 
     let resp = await doDenConnectFetch(url, password);
     if (resp.status === 409) {
@@ -88,15 +90,20 @@ const FilerRemote = (() => {
     }
 
     const data = await resp.json();
-    mode = 'den';
-    denInfo = {
+    const connectionId = data.connection_id;
+    const connInfo = {
       url: data.url || url,
       hostPort: data.host_port || null,
       fingerprint: data.fingerprint || null,
       displayName: null,
     };
-    denInfo.displayName = await resolveDisplayName(denInfo.hostPort);
-    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
+    connInfo.displayName = await resolveDisplayName(connInfo.hostPort);
+    denConnections[connectionId] = connInfo;
+    activeDenId = connectionId;
+    mode = 'den';
+    document.dispatchEvent(new CustomEvent('den:remote-changed', {
+      detail: { mode: 'den', connectionId, hostPort: connInfo.hostPort },
+    }));
     return data;
   }
 
@@ -109,28 +116,49 @@ const FilerRemote = (() => {
     });
   }
 
-  async function disconnectDenSilent() {
-    await fetch('/api/remote/disconnect', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
-    mode = 'local';
-    denInfo = null;
+  /** Disconnect all Den connections silently (no event dispatch) */
+  async function disconnectAllDenSilent() {
+    const ids = Object.keys(denConnections);
+    await Promise.all(ids.map(id =>
+      fetch(`/api/remote/${id}/disconnect`, { method: 'POST', credentials: 'same-origin' }).catch(() => {})
+    ));
+    denConnections = {};
+    activeDenId = null;
+    if (mode === 'den') mode = 'local';
   }
 
-  async function disconnectDen() {
+  /** Disconnect a specific Den connection */
+  async function disconnectDen(connectionId) {
+    // If no connectionId provided, disconnect the active one
+    const id = connectionId || activeDenId;
+    if (!id) return;
+
     try {
-      await fetch('/api/remote/disconnect', {
+      await fetch(`/api/remote/${id}/disconnect`, {
         method: 'POST',
         credentials: 'same-origin',
       });
     } catch { /* ignore */ }
-    mode = 'local';
-    denInfo = null;
-    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
+
+    delete denConnections[id];
+    if (activeDenId === id) {
+      const remaining = Object.keys(denConnections);
+      activeDenId = remaining.length > 0 ? remaining[0] : null;
+    }
+    if (Object.keys(denConnections).length === 0 && mode === 'den') {
+      mode = 'local';
+    }
+    document.dispatchEvent(new CustomEvent('den:remote-changed', {
+      detail: Object.keys(denConnections).length > 0
+        ? { mode: 'den', connectionId: activeDenId }
+        : { mode: 'local' },
+    }));
   }
 
   /** Connect to a target Den through a relay Den */
   async function connectDenViaRelay(relayUrl, relayPassword, targetUrl, targetPassword) {
     if (mode === 'sftp') await disconnectSftpSilent();
-    if (mode === 'den') await disconnectDenSilent();
+    if (mode === 'den') await disconnectAllDenSilent();
     if (mode === 'relay') await disconnectRelaySilent();
 
     let resp = await doRelayConnectFetch(relayUrl, relayPassword, targetUrl, targetPassword);
@@ -231,7 +259,7 @@ const FilerRemote = (() => {
 
   /** SFTP connect */
   async function connect(host, port, username, authType, password, keyPath) {
-    if (mode === 'den') await disconnectDenSilent();
+    if (mode === 'den') await disconnectAllDenSilent();
     const body = { host, port: port || 22, username, auth_type: authType };
     if (authType === 'password') body.password = password;
     if (authType === 'key') body.key_path = keyPath;
@@ -354,7 +382,6 @@ const FilerRemote = (() => {
     await fetch('/api/sftp/disconnect', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
     mode = 'local';
     hostInfo = null;
-    denInfo = null;
   }
 
   /** SFTP disconnect */
@@ -367,7 +394,6 @@ const FilerRemote = (() => {
     } catch { /* ignore */ }
     mode = 'local';
     hostInfo = null;
-    denInfo = null;
     document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
   }
 
@@ -393,16 +419,28 @@ const FilerRemote = (() => {
         }
       }
     } catch { /* ignore */ }
-    // Check direct Den connection
+    // Check direct Den connections (multi-connection)
     try {
-      const resp = await fetch('/api/remote/status', { credentials: 'same-origin' });
+      const resp = await fetch('/api/remote/connections', { credentials: 'same-origin' });
       if (resp.ok) {
-        const data = await resp.json();
-        if (data.connected) {
+        const connections = await resp.json();
+        if (connections.length > 0) {
+          denConnections = {};
+          for (const conn of connections) {
+            const connInfo = {
+              url: conn.url || null,
+              hostPort: conn.host_port || null,
+              fingerprint: conn.fingerprint || null,
+              displayName: null,
+            };
+            connInfo.displayName = await resolveDisplayName(connInfo.hostPort);
+            denConnections[conn.connection_id] = connInfo;
+          }
+          activeDenId = connections[0].connection_id;
           mode = 'den';
-          denInfo = { url: data.url, hostPort: data.host_port, fingerprint: data.fingerprint, displayName: null };
-          denInfo.displayName = await resolveDisplayName(denInfo.hostPort);
-          document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'den', hostPort: denInfo.hostPort } }));
+          document.dispatchEvent(new CustomEvent('den:remote-changed', {
+            detail: { mode: 'den', connectionId: activeDenId, hostPort: denConnections[activeDenId].hostPort },
+          }));
           return;
         }
       }
@@ -420,6 +458,26 @@ const FilerRemote = (() => {
     } catch { /* ignore */ }
   }
 
+  /** Get all Den connections (copy) */
+  function getDenConnections() {
+    return { ...denConnections };
+  }
+
+  /** Get the active Den connection ID */
+  function getActiveDenId() {
+    return activeDenId;
+  }
+
+  /** Set the active Den connection for filer browsing */
+  function setActiveDen(id) {
+    if (!denConnections[id]) return;
+    activeDenId = id;
+    mode = 'den';
+    document.dispatchEvent(new CustomEvent('den:remote-changed', {
+      detail: { mode: 'den', connectionId: id, hostPort: denConnections[id].hostPort },
+    }));
+  }
+
   return {
     getApiBase,
     isRemote,
@@ -431,5 +489,8 @@ const FilerRemote = (() => {
     connectDenViaRelay,
     disconnectRelay,
     checkStatus,
+    getDenConnections,
+    getActiveDenId,
+    setActiveDen,
   };
 })();

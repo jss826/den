@@ -10,7 +10,7 @@ const FloatTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentRemote = null; // remote host:port (null for local sessions)
+  let currentRemote = null; // null for local, 'relay' for relay, connectionId for Den
   let connectGeneration = 0;
   const textEncoder = new TextEncoder();
 
@@ -266,10 +266,16 @@ const FloatTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Route WS through remote proxy if connected to another Den
-    const wsPath = currentRemote
-      ? '/api/remote/ws'
-      : '/api/ws';
+    // Route WS through remote/relay proxy if connected to another Den
+    let wsPath;
+    if (!currentRemote) {
+      wsPath = '/api/ws';
+    } else if (currentRemote === 'relay') {
+      const relayInfo = typeof FilerRemote !== 'undefined' ? FilerRemote.getInfo() : null;
+      wsPath = relayInfo?.relaySessionId ? `/api/relay/${relayInfo.relaySessionId}/ws` : '/api/ws';
+    } else {
+      wsPath = `/api/remote/${currentRemote}/ws`;
+    }
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
     let stallTimer = null;

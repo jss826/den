@@ -47,8 +47,12 @@ fn is_newer(current: &str, latest: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
 
     // Split off pre-release suffix: "2.0.0-rc.10" → ("2.0.0", true)
-    let (cur_ver, cur_pre) = current.split_once('-').map_or((current, false), |(v, _)| (v, true));
-    let (lat_ver, lat_pre) = latest.split_once('-').map_or((latest, false), |(v, _)| (v, true));
+    let (cur_ver, cur_pre) = current
+        .split_once('-')
+        .map_or((current, false), |(v, _)| (v, true));
+    let (lat_ver, lat_pre) = latest
+        .split_once('-')
+        .map_or((latest, false), |(v, _)| (v, true));
     let cur = parse(cur_ver);
     let lat = parse(lat_ver);
 

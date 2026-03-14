@@ -28,31 +28,63 @@ const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 
+const MAX_REMOTE_CONNECTIONS: usize = 10;
+
 #[derive(Clone)]
 pub struct RemoteManager {
-    current: Arc<Mutex<Option<RemoteSession>>>,
+    sessions: Arc<Mutex<HashMap<String, RemoteSession>>>,
 }
 
 impl Default for RemoteManager {
     fn default() -> Self {
         Self {
-            current: Arc::new(Mutex::new(None)),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
 
 impl RemoteManager {
-    pub fn get(&self) -> Option<RemoteSession> {
-        self.current.lock().unwrap().clone()
+    pub fn insert(&self, id: String, session: RemoteSession) -> Result<(), &'static str> {
+        let mut sessions = self.sessions.lock().unwrap();
+        if sessions.len() >= MAX_REMOTE_CONNECTIONS {
+            return Err("too many remote connections");
+        }
+        sessions.insert(id, session);
+        Ok(())
     }
 
-    pub fn set(&self, session: RemoteSession) {
-        *self.current.lock().unwrap() = Some(session);
+    pub fn get(&self, id: &str) -> Option<RemoteSession> {
+        self.sessions.lock().unwrap().get(id).cloned()
     }
 
-    pub fn clear(&self) {
-        *self.current.lock().unwrap() = None;
+    pub fn remove(&self, id: &str) -> bool {
+        self.sessions.lock().unwrap().remove(id).is_some()
     }
+
+    pub fn list(&self) -> Vec<(String, RemoteSessionInfo)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, s)| {
+                (
+                    id.clone(),
+                    RemoteSessionInfo {
+                        url: s.base_url.clone(),
+                        host_port: s.host_port.clone(),
+                        fingerprint: s.fingerprint.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+#[derive(Serialize, Clone)]
+pub struct RemoteSessionInfo {
+    pub url: String,
+    pub host_port: String,
+    pub fingerprint: String,
 }
 
 #[derive(Clone)]
@@ -74,6 +106,8 @@ pub struct ConnectRemoteRequest {
 #[derive(Serialize)]
 pub struct RemoteStatusResponse {
     connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -307,17 +341,23 @@ pub async fn connect(
     })
     .await;
 
-    state.remote_manager.set(RemoteSession {
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let session = RemoteSession {
         base_url: normalized.as_str().trim_end_matches('/').to_string(),
         host_port: host_port.clone(),
         fingerprint: probed.fingerprint.clone(),
         cookie_header,
         http_client,
         ws_client_config,
-    });
+    };
+
+    if let Err(msg) = state.remote_manager.insert(connection_id.clone(), session) {
+        return api_error(StatusCode::TOO_MANY_REQUESTS, msg);
+    }
 
     axum::Json(RemoteStatusResponse {
         connected: true,
+        connection_id: Some(connection_id),
         url: Some(normalized.to_string()),
         host_port: Some(host_port),
         fingerprint: Some(probed.fingerprint),
@@ -325,345 +365,104 @@ pub async fn connect(
     .into_response()
 }
 
-pub async fn status(State(state): State<Arc<AppState>>) -> axum::Json<RemoteStatusResponse> {
-    let body = match state.remote_manager.get() {
-        Some(remote) => RemoteStatusResponse {
+pub async fn list_connections(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<Vec<RemoteStatusResponse>> {
+    let connections: Vec<_> = state
+        .remote_manager
+        .list()
+        .into_iter()
+        .map(|(id, info)| RemoteStatusResponse {
             connected: true,
-            url: Some(remote.base_url),
-            host_port: Some(remote.host_port),
-            fingerprint: Some(remote.fingerprint),
-        },
-        None => RemoteStatusResponse {
-            connected: false,
-            url: None,
-            host_port: None,
-            fingerprint: None,
-        },
-    };
-    axum::Json(body)
+            connection_id: Some(id),
+            url: Some(info.url),
+            host_port: Some(info.host_port),
+            fingerprint: Some(info.fingerprint),
+        })
+        .collect();
+    axum::Json(connections)
 }
 
-pub async fn disconnect(State(state): State<Arc<AppState>>) -> StatusCode {
-    state.remote_manager.clear();
-    StatusCode::NO_CONTENT
-}
-
-pub async fn proxy_list_sessions(
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::GET,
-        "/api/terminal/sessions",
-        None,
-        None,
-        vec![],
-    )
-    .await
-}
-
-pub async fn proxy_create_session(
-    State(state): State<Arc<AppState>>,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
-    proxy_remote_request(
-        &state,
-        reqwest::Method::POST,
-        "/api/terminal/sessions",
-        None,
-        Some(headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-pub async fn proxy_rename_session(
-    State(state): State<Arc<AppState>>,
-    Path(session_name): Path<String>,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
-    proxy_remote_request(
-        &state,
-        reqwest::Method::PUT,
-        &format!("/api/terminal/sessions/{session_name}"),
-        None,
-        Some(headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-pub async fn proxy_delete_session(
-    State(state): State<Arc<AppState>>,
-    Path(session_name): Path<String>,
-) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::DELETE,
-        &format!("/api/terminal/sessions/{session_name}"),
-        None,
-        None,
-        vec![],
-    )
-    .await
-}
-
-pub async fn ws_relay_handler(
-    ws: WebSocketUpgrade,
-    RawQuery(query): RawQuery,
-    State(state): State<Arc<AppState>>,
-) -> Response {
-    let Some(remote) = state.remote_manager.get() else {
-        return StatusCode::PRECONDITION_REQUIRED.into_response();
-    };
-    ws.on_upgrade(move |socket| handle_remote_ws(socket, remote, query))
-        .into_response()
-}
-
-macro_rules! proxy_filer_get {
-    ($fn_name:ident, $subpath:literal) => {
-        pub async fn $fn_name(
-            State(state): State<Arc<AppState>>,
-            RawQuery(query): RawQuery,
-        ) -> Result<Response, StatusCode> {
-            proxy_remote_request(
-                &state,
-                reqwest::Method::GET,
-                concat!("/api/filer/", $subpath),
-                query.as_deref(),
-                None,
-                vec![],
-            )
-            .await
-        }
-    };
-}
-
-proxy_filer_get!(proxy_filer_list, "list");
-proxy_filer_get!(proxy_filer_read, "read");
-proxy_filer_get!(proxy_filer_download, "download");
-proxy_filer_get!(proxy_filer_search, "search");
-
-pub async fn proxy_filer_write(
-    State(state): State<Arc<AppState>>,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
-    proxy_remote_request(
-        &state,
-        reqwest::Method::PUT,
-        "/api/filer/write",
-        None,
-        Some(headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-pub async fn proxy_filer_mkdir(
-    State(state): State<Arc<AppState>>,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
-    proxy_remote_request(
-        &state,
-        reqwest::Method::POST,
-        "/api/filer/mkdir",
-        None,
-        Some(headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-pub async fn proxy_filer_rename(
-    State(state): State<Arc<AppState>>,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
-    proxy_remote_request(
-        &state,
-        reqwest::Method::POST,
-        "/api/filer/rename",
-        None,
-        Some(headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-pub async fn proxy_filer_upload(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let mut forwarded = HashMap::new();
-    if let Some(content_type) = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-    {
-        forwarded.insert("content-type".to_string(), content_type.to_string());
+pub async fn disconnect(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
+    if state.remote_manager.remove(&id) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
     }
-    proxy_remote_request(
-        &state,
-        reqwest::Method::POST,
-        "/api/filer/upload",
-        None,
-        Some(forwarded),
-        body.to_vec(),
-    )
-    .await
 }
 
-pub async fn proxy_filer_delete(
-    State(state): State<Arc<AppState>>,
+/// GET /api/remote/{id}/ws — WebSocket relay to remote Den
+pub async fn remote_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
     RawQuery(query): RawQuery,
-) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::DELETE,
-        "/api/filer/delete",
-        query.as_deref(),
-        None,
-        vec![],
-    )
-    .await
-}
-
-pub async fn proxy_settings_get(
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::GET,
-        "/api/settings",
-        None,
-        None,
-        vec![],
-    )
-    .await
+    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(ws
+        .on_upgrade(move |socket| handle_remote_ws(socket, remote, query))
+        .into_response())
 }
 
-pub async fn proxy_settings_put(
-    State(state): State<Arc<AppState>>,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    let headers = HashMap::from([("content-type".to_string(), "application/json".to_string())]);
-    proxy_remote_request(
-        &state,
-        reqwest::Method::PUT,
-        "/api/settings",
-        None,
-        Some(headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-// --- Remote port forwarding proxy ---
-
-/// GET /api/remote/ports — proxy to remote Den's /api/ports
-pub async fn proxy_remote_ports(
+/// GET /api/remote/{id}/fwd-ws/{port} — WebSocket proxy to remote Den's /fwd-ws/{port}
+pub async fn remote_fwd_ws_root_handler(
+    ws: WebSocketUpgrade,
+    Path((id, port)): Path<(String, u16)>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::GET,
-        "/api/ports",
-        None,
-        None,
-        vec![],
-    )
-    .await
+    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(ws
+        .on_upgrade(move |socket| handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}")))
+        .into_response())
 }
 
-/// GET /api/remote/terminal/sessions/{name}/ports — proxy to remote Den
-pub async fn proxy_remote_session_ports(
+/// GET /api/remote/{id}/fwd-ws/{port}/{*path} — WebSocket proxy to remote Den's /fwd-ws/{port}/{path}
+pub async fn remote_fwd_ws_handler(
+    ws: WebSocketUpgrade,
+    Path((id, port, path)): Path<(String, u16, String)>,
     State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
 ) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::GET,
-        // Session names are validated to contain only [a-zA-Z0-9-] (see is_valid_session_name),
-        // so no URL encoding is needed here.
-        &format!("/api/terminal/sessions/{name}/ports"),
-        None,
-        None,
-        vec![],
-    )
-    .await
+    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let path = sanitize_proxy_path(&path);
+    Ok(ws
+        .on_upgrade(move |socket| {
+            handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}/{path}"))
+        })
+        .into_response())
 }
 
-/// ANY /api/remote/fwd/{port} — proxy HTTP to remote Den's /fwd/{port}
-pub async fn proxy_remote_fwd_root(
+/// Catch-all proxy for /api/remote/{id}/{*rest}
+///
+/// Routes `rest` to the appropriate path on the remote Den:
+/// - `fwd/{port}` and `fwd/{port}/{path}` → `/fwd/{port}` and `/fwd/{port}/{path}` (not under /api/)
+/// - everything else → `/api/{rest}`
+pub async fn remote_proxy_catch_all(
     State(state): State<Arc<AppState>>,
-    Path(port): Path<u16>,
-    method: axum::http::Method,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response, StatusCode> {
-    proxy_remote_request(
-        &state,
-        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-        &format!("/fwd/{port}"),
-        None,
-        extract_forwarded_headers(&headers),
-        body.to_vec(),
-    )
-    .await
-}
-
-/// ANY /api/remote/fwd/{port}/{*path} — proxy HTTP to remote Den's /fwd/{port}/{path}
-pub async fn proxy_remote_fwd(
-    State(state): State<Arc<AppState>>,
-    Path((port, path)): Path<(u16, String)>,
+    Path((id, rest)): Path<(String, String)>,
     RawQuery(query): RawQuery,
     method: axum::http::Method,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, StatusCode> {
-    let path = sanitize_proxy_path(&path);
-    proxy_remote_request(
-        &state,
+    let session = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let rest = sanitize_proxy_path(&rest);
+
+    // fwd/ routes proxy to /fwd/ (not /api/fwd/)
+    let path = if rest.starts_with("fwd/") || rest == "fwd" {
+        format!("/{rest}")
+    } else {
+        format!("/api/{rest}")
+    };
+
+    proxy_to_remote_session(
+        &session,
         reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
-        &format!("/fwd/{port}/{path}"),
+        &path,
         query.as_deref(),
         extract_forwarded_headers(&headers),
         body.to_vec(),
     )
     .await
-}
-
-/// GET /api/remote/fwd-ws/{port} — WebSocket proxy to remote Den's /fwd-ws/{port}
-pub async fn proxy_remote_fwd_ws_root(
-    ws: WebSocketUpgrade,
-    Path(port): Path<u16>,
-    State(state): State<Arc<AppState>>,
-) -> Response {
-    let Some(remote) = state.remote_manager.get() else {
-        return StatusCode::PRECONDITION_REQUIRED.into_response();
-    };
-    ws.on_upgrade(move |socket| handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}")))
-        .into_response()
-}
-
-/// GET /api/remote/fwd-ws/{port}/{*path} — WebSocket proxy to remote Den's /fwd-ws/{port}/{path}
-pub async fn proxy_remote_fwd_ws(
-    ws: WebSocketUpgrade,
-    Path((port, path)): Path<(u16, String)>,
-    State(state): State<Arc<AppState>>,
-) -> Response {
-    let Some(remote) = state.remote_manager.get() else {
-        return StatusCode::PRECONDITION_REQUIRED.into_response();
-    };
-    let path = sanitize_proxy_path(&path);
-    ws.on_upgrade(move |socket| {
-        handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}/{path}"))
-    })
-    .into_response()
 }
 
 /// Generic WebSocket relay to a specific path on the remote Den.
@@ -882,74 +681,6 @@ fn extract_cookie_from_response(response: &reqwest::Response, name: &str) -> Opt
                 .and_then(|rest| rest.split(';').next())
                 .map(|value| format!("{name}={value}"))
         })
-}
-
-async fn proxy_remote_request(
-    state: &AppState,
-    method: reqwest::Method,
-    path: &str,
-    query: Option<&str>,
-    headers: Option<HashMap<String, String>>,
-    body: Vec<u8>,
-) -> Result<Response, StatusCode> {
-    let remote = state
-        .remote_manager
-        .get()
-        .ok_or(StatusCode::PRECONDITION_REQUIRED)?;
-
-    let mut url = format!("{}{}", remote.base_url.trim_end_matches('/'), path);
-    if let Some(query) = query.filter(|value| !value.is_empty()) {
-        url.push('?');
-        url.push_str(query);
-    }
-
-    let mut request = remote
-        .http_client
-        .request(method, url)
-        .timeout(REMOTE_REQUEST_TIMEOUT)
-        .header(header::COOKIE, remote.cookie_header.clone());
-
-    if let Some(headers) = headers {
-        for (name, value) in headers {
-            request = request.header(&name, value);
-        }
-    }
-    if !body.is_empty() {
-        request = request.body(body);
-    }
-
-    let response = request.send().await.map_err(|e| {
-        tracing::warn!("remote proxy request failed: {e}");
-        StatusCode::BAD_GATEWAY
-    })?;
-
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    let content_disposition = response
-        .headers()
-        .get(header::CONTENT_DISPOSITION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    let bytes = response.bytes().await.map_err(|e| {
-        tracing::warn!("remote proxy response body read failed: {e}");
-        StatusCode::BAD_GATEWAY
-    })?;
-
-    let mut builder = Response::builder().status(status);
-    if let Some(content_type) = content_type {
-        builder = builder.header(header::CONTENT_TYPE, content_type);
-    }
-    if let Some(content_disposition) = content_disposition {
-        builder = builder.header(header::CONTENT_DISPOSITION, content_disposition);
-    }
-    builder.body(axum::body::Body::from(bytes)).map_err(|e| {
-        tracing::warn!("remote proxy response build failed: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
 }
 
 async fn handle_remote_ws(browser_ws: WebSocket, remote: RemoteSession, query: Option<String>) {
