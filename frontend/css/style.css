@@ -497,7 +497,7 @@ html, body {
   top: 40px;        /* タブバー */
   left: 0;
   right: 0;
-  bottom: 0;        /* キーバーがあれば上書き */
+  bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* Terminal session bar */
