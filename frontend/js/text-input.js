@@ -13,6 +13,7 @@ const TextInput = (() => {
   let historyPopup = null;
   let historyRafId = null;
   let resizeObserver = null;
+  let fitRafId = null;
 
   function init() {
     box = document.getElementById('text-input-box');
@@ -39,10 +40,10 @@ const TextInput = (() => {
       }
     });
 
-    // F003: ResizeObserver to track textarea manual resize
+    // ResizeObserver to track textarea manual resize
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(() => {
-        if (box && !box.hidden) updateTerminalHeight();
+        if (box && !box.hidden) scheduleTerminalRefit();
       });
       resizeObserver.observe(textarea);
     }
@@ -57,7 +58,7 @@ const TextInput = (() => {
 
   function send() {
     const text = textarea.value;
-    if (!text) return;
+    if (!text || !text.trim()) return;
 
     // F002: check WebSocket connection before sending
     const term = DenTerminal.getTerminal();
@@ -78,7 +79,7 @@ const TextInput = (() => {
   function show() {
     if (!box) return;
     box.hidden = false;
-    updateTerminalHeight();
+    scheduleTerminalRefit();
     try { localStorage.setItem(VISIBLE_KEY, 'true'); } catch { /* F006 */ }
   }
 
@@ -86,7 +87,7 @@ const TextInput = (() => {
     if (!box) return;
     box.hidden = true;
     closeHistory();
-    updateTerminalHeight();
+    scheduleTerminalRefit();
     try { localStorage.setItem(VISIBLE_KEY, 'false'); } catch { /* F006 */ }
   }
 
@@ -110,8 +111,10 @@ const TextInput = (() => {
   }
 
   // Flexbox handles layout; just refit the terminal after toggle/resize
-  function updateTerminalHeight() {
-    requestAnimationFrame(() => {
+  function scheduleTerminalRefit() {
+    if (fitRafId !== null) cancelAnimationFrame(fitRafId);
+    fitRafId = requestAnimationFrame(() => {
+      fitRafId = null;
       DenTerminal.fitAndRefresh();
     });
   }
