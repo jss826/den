@@ -509,9 +509,14 @@ const DenFiler = (() => {
   function bookmarkHostPort(url) {
     try {
       const u = new URL(url);
-      return u.host; // includes port if explicit
+      // u.host includes port only if explicit; add default port to match Rust extract_host_port
+      if (u.port) return u.host;
+      const defaultPort = u.protocol === 'https:' ? '443' : '80';
+      return `${u.hostname}:${defaultPort}`;
     } catch {
-      return url.replace(/^https?:\/\//, '').split('/')[0];
+      const hp = url.replace(/^https?:\/\//, '').split('/')[0];
+      if (hp.includes(':')) return hp;
+      return url.startsWith('https') ? `${hp}:443` : `${hp}:80`;
     }
   }
 

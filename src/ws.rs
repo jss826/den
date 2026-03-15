@@ -132,11 +132,11 @@ async fn handle_socket(
                     }
                     let coalesced = std::mem::take(&mut buf);
                     let filtered = filter_conpty_private_modes(&coalesced);
-                    if ws_tx
-                        .send(Message::Binary(filtered.into_owned().into()))
-                        .await
-                        .is_err()
-                    {
+                    let bytes: Vec<u8> = match filtered {
+                        std::borrow::Cow::Borrowed(_) => coalesced,
+                        std::borrow::Cow::Owned(v) => v,
+                    };
+                    if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
                         break;
                     }
                 }

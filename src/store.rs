@@ -277,6 +277,7 @@ impl Store {
             _ => return,
         };
         let mut migrated = false;
+        let certs = self.load_trusted_tls();
         for bookmark in bookmarks.iter_mut() {
             let label = match bookmark.label.take() {
                 Some(l) if !l.is_empty() => l,
@@ -285,7 +286,6 @@ impl Store {
             // Extract host:port from bookmark URL (e.g. "https://host:8080" → "host:8080")
             let host_port = extract_host_port(&bookmark.url);
             // Copy label to TrustedTlsCert.display_name if not already set
-            let certs = self.load_trusted_tls();
             if let Some(cert) = certs.get(&host_port)
                 && cert.display_name.is_none()
             {

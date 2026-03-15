@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use russh::keys::ssh_key;
 use russh::server::{Auth, Handler, Msg, Server as _, Session};
 use russh::{ChannelId, CryptoVec, Pty};
-use tokio::net::TcpListener;
+
 use tokio::sync::mpsc;
 
 use crate::auth::constant_time_eq;
@@ -157,31 +157,6 @@ fn key_identity(openssh_line: &str) -> String {
     format!("{algo} {data}")
 }
 
-/// Bind a TCP listener with retries (handles port still held by previous process after update).
-async fn bind_with_retry(addr: &str, port: u16) -> anyhow::Result<TcpListener> {
-    const MAX_RETRIES: u32 = 10;
-    const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-
-    let mut last_err = None;
-    for attempt in 0..MAX_RETRIES {
-        match TcpListener::bind(addr).await {
-            Ok(listener) => return Ok(listener),
-            Err(e) => {
-                if attempt > 0 {
-                    tracing::warn!(
-                        "SSH port {port} not yet available (attempt {}/{}): {e}",
-                        attempt + 1,
-                        MAX_RETRIES
-                    );
-                }
-                last_err = Some(e);
-                tokio::time::sleep(RETRY_INTERVAL).await;
-            }
-        }
-    }
-    Err(last_err.unwrap().into())
-}
-
 /// SSH サーバーを起動
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -223,7 +198,7 @@ pub async fn run(
     };
 
     let addr = format!("{bind_address}:{port}");
-    let socket = bind_with_retry(&addr, port).await?;
+    let socket = crate::bind_with_retry(&bind_address, port).await?;
     tracing::info!("SSH server listening on {addr}");
 
     server.run_on_socket(config, &socket).await?;

@@ -118,7 +118,7 @@ async fn main() {
         });
     }
 
-    let listener = bind_with_retry(&bind_address, port)
+    let listener = den::bind_with_retry(&bind_address, port)
         .await
         .expect("Failed to bind port");
 
@@ -145,34 +145,6 @@ async fn main() {
             .await
             .unwrap();
     }
-}
-
-/// Bind a TCP listener with retries (handles port still held by previous process after update).
-async fn bind_with_retry(addr: &str, port: u16) -> Result<tokio::net::TcpListener, std::io::Error> {
-    const MAX_RETRIES: u32 = 10;
-    const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-
-    let bind_addr = format!("{addr}:{port}");
-    let mut last_err = None;
-
-    for attempt in 0..MAX_RETRIES {
-        match tokio::net::TcpListener::bind(&bind_addr).await {
-            Ok(listener) => return Ok(listener),
-            Err(e) => {
-                if attempt > 0 {
-                    tracing::warn!(
-                        "Port {port} not yet available (attempt {}/{}): {e}",
-                        attempt + 1,
-                        MAX_RETRIES
-                    );
-                }
-                last_err = Some(e);
-                tokio::time::sleep(RETRY_INTERVAL).await;
-            }
-        }
-    }
-
-    Err(last_err.unwrap())
 }
 
 /// Wait for shutdown signal (Ctrl+C) and persist sessions.

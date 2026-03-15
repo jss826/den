@@ -1,3 +1,5 @@
+use tokio::net::TcpListener;
+
 pub mod assets;
 pub mod auth;
 pub mod clipboard_api;
@@ -238,4 +240,30 @@ pub fn create_app_with_secret(
         .with_state(Arc::clone(&state));
 
     (router, state)
+}
+
+/// Bind a TCP listener with retries (handles port still held by previous process after update).
+pub async fn bind_with_retry(addr: &str, port: u16) -> Result<TcpListener, std::io::Error> {
+    const MAX_RETRIES: u32 = 10;
+    const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    let bind_addr = format!("{addr}:{port}");
+    let mut last_err = None;
+
+    for attempt in 0..MAX_RETRIES {
+        match TcpListener::bind(&bind_addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(e) => {
+                tracing::warn!(
+                    "Port {port} not yet available (attempt {}/{}): {e}",
+                    attempt + 1,
+                    MAX_RETRIES
+                );
+                last_err = Some(e);
+                tokio::time::sleep(RETRY_INTERVAL).await;
+            }
+        }
+    }
+
+    Err(last_err.unwrap())
 }
