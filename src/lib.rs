@@ -71,11 +71,6 @@ pub fn create_app_with_secret(
 
     let port_monitor = Arc::new(port_monitor::PortMonitor::new());
     let remote_manager = Arc::new(remote::RemoteManager::default());
-    let mut exclude_ports = vec![config.port];
-    if let Some(ssh_port) = config.ssh_port {
-        exclude_ports.push(ssh_port);
-    }
-    port_monitor.start(exclude_ports);
 
     let state = Arc::new(AppState {
         config,

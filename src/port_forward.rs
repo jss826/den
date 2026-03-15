@@ -209,12 +209,7 @@ async fn is_port_known(state: &AppState, port: u16) -> bool {
             return true;
         }
     }
-    // Check system-monitored ports
-    state
-        .port_monitor
-        .get_ports()
-        .iter()
-        .any(|p| p.port == port)
+    false
 }
 
 /// Proxy an HTTP request to localhost:{port}.

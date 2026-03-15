@@ -418,12 +418,11 @@ struct UnifiedPort {
     session: Option<String>,
 }
 
-/// GET /api/ports — all detected ports (system monitor + PTY detection).
+/// GET /api/ports — all detected ports (PTY detection only).
 pub async fn list_all_ports(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let mut ports: Vec<UnifiedPort> = Vec::new();
     let mut seen: std::collections::HashSet<u16> = std::collections::HashSet::new();
 
-    // 1. PTY-detected ports from all sessions
     let sessions = state.registry.list().await;
     for si in &sessions {
         for p in &si.detected_ports {
@@ -434,17 +433,6 @@ pub async fn list_all_ports(State(state): State<Arc<AppState>>) -> impl IntoResp
                     session: Some(si.name.clone()),
                 });
             }
-        }
-    }
-
-    // 2. System-level monitored ports
-    for mp in state.port_monitor.get_ports() {
-        if seen.insert(mp.port) {
-            ports.push(UnifiedPort {
-                port: mp.port,
-                source: "system".to_string(),
-                session: None,
-            });
         }
     }
 
