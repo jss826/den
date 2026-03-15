@@ -1318,10 +1318,15 @@ const DenTerminal = (() => {
   }
 
   /** Show dropdown menu for new session creation (local + SSH bookmarks). */
-  function showNewSessionMenu(anchorEl) {
+  async function showNewSessionMenu(anchorEl) {
     // Remove existing menu if any
     const existing = document.getElementById('new-session-menu');
     if (existing) { existing.remove(); return; }
+
+    // Refresh connections to remove stale/disconnected entries
+    if (typeof FilerRemote !== 'undefined' && FilerRemote.refreshDenConnections) {
+      await FilerRemote.refreshDenConnections();
+    }
 
     const menu = document.createElement('div');
     menu.id = 'new-session-menu';

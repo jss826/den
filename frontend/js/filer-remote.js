@@ -383,8 +383,11 @@ const FilerRemote = (() => {
       (typeof DenTlsTrust !== 'undefined' ? DenTlsTrust.list() : Promise.resolve({})).catch(() => ({})),
     ]);
 
+    // Rebuild from API response so stale/disconnected entries are removed
+    const fresh = {};
+
     for (const rc of relayResult) {
-      denConnections[rc.relay_session_id] = {
+      fresh[rc.relay_session_id] = {
         type: 'relay',
         hostPort: rc.target_host_port || null,
         fingerprint: rc.target_fingerprint || null,
@@ -394,7 +397,7 @@ const FilerRemote = (() => {
     }
 
     for (const conn of directResult) {
-      denConnections[conn.connection_id] = {
+      fresh[conn.connection_id] = {
         type: 'direct',
         url: conn.url || null,
         hostPort: conn.host_port || null,
@@ -403,10 +406,15 @@ const FilerRemote = (() => {
       };
     }
 
+    denConnections = fresh;
+
     // If we found any den connections, set mode
     const denIds = Object.keys(denConnections);
     if (denIds.length > 0) {
-      activeDenId = denIds[0];
+      // Preserve activeDenId if still valid, otherwise pick first
+      if (!activeDenId || !denConnections[activeDenId]) {
+        activeDenId = denIds[0];
+      }
       mode = 'den';
       document.dispatchEvent(new CustomEvent('den:remote-changed', {
         detail: { mode: 'den', connectionId: activeDenId, hostPort: denConnections[activeDenId].hostPort },
@@ -425,6 +433,40 @@ const FilerRemote = (() => {
         document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'sftp' } }));
       }
     } catch { /* ignore */ }
+  }
+
+  /** Refresh Den connections from backend (removes stale entries) */
+  async function refreshDenConnections() {
+    const [relayResult, directResult, certs] = await Promise.all([
+      fetch('/api/relay/connections', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch('/api/remote/connections', { credentials: 'same-origin' }).then(r => r.ok ? r.json() : []).catch(() => []),
+      (typeof DenTlsTrust !== 'undefined' ? DenTlsTrust.list() : Promise.resolve({})).catch(() => ({})),
+    ]);
+    const fresh = {};
+    for (const rc of relayResult) {
+      fresh[rc.relay_session_id] = {
+        type: 'relay',
+        hostPort: rc.target_host_port || null,
+        fingerprint: rc.target_fingerprint || null,
+        displayName: certs[rc.target_host_port]?.display_name || null,
+        relayHostPort: rc.relay_host_port || null,
+      };
+    }
+    for (const conn of directResult) {
+      fresh[conn.connection_id] = {
+        type: 'direct',
+        url: conn.url || null,
+        hostPort: conn.host_port || null,
+        fingerprint: conn.fingerprint || null,
+        displayName: certs[conn.host_port]?.display_name || null,
+      };
+    }
+    denConnections = fresh;
+    if (activeDenId && !denConnections[activeDenId]) {
+      const ids = Object.keys(denConnections);
+      activeDenId = ids.length > 0 ? ids[0] : null;
+      if (!activeDenId && mode === 'den') mode = 'local';
+    }
   }
 
   /** Get all Den connections (copy) */
@@ -458,6 +500,7 @@ const FilerRemote = (() => {
     connectDenViaRelay,
     checkStatus,
     getDenConnections,
+    refreshDenConnections,
     getActiveDenId,
     setActiveDen,
   };

@@ -738,6 +738,13 @@ html, body {
 /* xterm.js のオーバーライド */
 .xterm {
   padding: 4px;
+  overflow: hidden;
+}
+.xterm .xterm-viewport {
+  overflow-x: hidden;
+}
+.xterm .xterm-helpers {
+  overflow: hidden;
 }
 
 /* Text Input Box */

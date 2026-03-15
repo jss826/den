@@ -38,6 +38,7 @@ impl PtyManager {
 
         let mut cmd = CommandBuilder::new(shell);
         cmd.env("DEN_INSTANCE", instance_id);
+        cmd.env("TERM", "xterm-256color");
         // Windows の場合、ホームディレクトリで起動
         if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             cmd.cwd(home);
