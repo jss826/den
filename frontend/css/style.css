@@ -510,15 +510,6 @@ html, body {
   overflow: hidden;
 }
 
-#filer-pane {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-#filer-pane[hidden] {
-  display: none;
-}
-
 .terminal-session-bar {
   display: flex;
   align-items: center;
@@ -2102,9 +2093,7 @@ html, body {
 
 .filer-layout {
   display: flex;
-  flex: 1;
   height: 100%;
-  min-height: 0;
 }
 
 .filer-layout.tree-right {
