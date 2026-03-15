@@ -26,6 +26,12 @@ cargo test --target-dir target-test
 - 静的ファイル: rust-embed でバイナリ埋め込み
 - 永続化: JSON ファイル (`./data/` 配下)
 
+## CSS 注意点
+
+- `.pane` の子要素（`#terminal-pane` 等）に ID セレクタで `display: flex` を指定しているため、`hidden` 属性が効かない。`#terminal-pane[hidden] { display: none }` で明示的にオーバーライドが必要
+- `#filer-pane` は `display: flex` を追加してはいけない。absolute positioning + `.filer-layout { height: 100% }` で正しく動作している
+- E2E テスト（Playwright）で CSS レイアウト変更を必ず検証すること: `npx playwright test tests/e2e/filer-ui.e2e.ts`
+
 ## 言語規約
 
 - コミットメッセージ: 英語 (Conventional Commits: feat/fix/chore/refactor/docs/perf/test)
