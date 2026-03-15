@@ -145,16 +145,38 @@ async fn main() {
             .await
             .unwrap();
     }
+
+    // After graceful shutdown, check if we need to restart (update applied)
+    if den::update::is_restart_requested() {
+        den::update::spawn_and_exit();
+    }
 }
 
-/// Wait for shutdown signal (Ctrl+C) and persist sessions.
+/// Wait for shutdown signal (Ctrl+C or restart request) and persist sessions.
 async fn shutdown_signal(
     registry: Arc<SessionRegistry>,
     clipboard_handle: den::clipboard_monitor::ClipboardMonitorHandle,
 ) {
-    let _ = tokio::signal::ctrl_c().await;
-    tracing::info!("Shutdown signal received, persisting sessions...");
+    // Wait for either Ctrl+C or a restart request from the update system
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Shutdown signal received, persisting sessions...");
+        }
+        _ = wait_for_restart() => {
+            tracing::info!("Restart requested, shutting down gracefully...");
+        }
+    }
     clipboard_handle.stop();
     registry.persist_sessions().await;
     tracing::info!("Sessions persisted. Shutting down.");
+}
+
+/// Poll until a restart is requested (from update system).
+async fn wait_for_restart() {
+    loop {
+        if den::update::is_restart_requested() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }

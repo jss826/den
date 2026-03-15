@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::AppState;
 
 static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 const GITHUB_REPO: &str = "jss826/den";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -159,11 +160,9 @@ pub async fn do_update(State(_state): State<Arc<AppState>>) -> impl IntoResponse
 
     match result {
         Ok(Ok(())) => {
-            // Schedule restart after response is sent
-            tokio::spawn(async {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                restart_self();
-            });
+            // Signal the main server to shut down gracefully, then restart.
+            // The actual spawn happens in `spawn_and_exit()` after sockets are released.
+            request_restart();
             Json(serde_json::json!({ "success": true })).into_response()
         }
         Ok(Err(e)) => {
@@ -369,8 +368,19 @@ fn find_file_recursive(dir: &std::path::Path, name: &str) -> Option<std::path::P
     None
 }
 
-/// Restart the current process by spawning a new instance and exiting.
-fn restart_self() {
+/// Signal that a restart is needed. The main shutdown loop will pick this up.
+fn request_restart() {
+    RESTART_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Check if a restart has been requested (used by shutdown_signal).
+pub fn is_restart_requested() -> bool {
+    RESTART_REQUESTED.load(Ordering::SeqCst)
+}
+
+/// Spawn a new instance of the current process and exit.
+/// Called AFTER graceful shutdown so all sockets are released.
+pub fn spawn_and_exit() -> ! {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => {
