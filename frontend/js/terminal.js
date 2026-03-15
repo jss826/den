@@ -926,7 +926,7 @@ const DenTerminal = (() => {
         const key = `${s.remote || ''}:${p.port}`;
         if (!seenPorts.has(key)) {
           seenPorts.add(key);
-          allPorts.push({ ...p, session: s.name, remote: s.remote, sessionKey });
+          allPorts.push({ ...p, session: s.name, remote: s.remote, sshHost: s.ssh_host, sessionKey });
         }
       }
     }
@@ -1009,13 +1009,14 @@ const DenTerminal = (() => {
 
         const name = document.createElement('span');
         name.className = 'connection-name';
-        name.textContent = `Port ${p.port}`;
+        const host = p.sshHost || (p.remote ? p.remote : '');
+        name.textContent = host ? `${host}:${p.port}` : `Port ${p.port}`;
         header.appendChild(name);
 
         if (p.remote) {
           const badge = document.createElement('span');
           badge.className = 'connection-type-badge direct';
-          badge.textContent = p.remote;
+          badge.textContent = p.sshHost ? 'SSH' : p.remote;
           header.appendChild(badge);
         }
 

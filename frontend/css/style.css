@@ -510,6 +510,12 @@ html, body {
   overflow: hidden;
 }
 
+#filer-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .terminal-session-bar {
   display: flex;
   align-items: center;
@@ -1543,6 +1549,7 @@ html, body {
   padding: 10px 12px;
   margin-bottom: 8px;
   background: var(--bg);
+  overflow: hidden;
 }
 .connection-header {
   display: flex;
@@ -1552,6 +1559,9 @@ html, body {
 }
 .connection-name {
   font-size: 0.95rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .connection-type-badge {
   font-size: 0.7rem;
@@ -1571,6 +1581,10 @@ html, body {
 .connection-details {
   font-size: 0.8rem;
   color: var(--text-muted);
+  min-width: 0;
+}
+.connection-details code {
+  word-break: break-all;
 }
 .connection-detail {
   margin-bottom: 2px;
@@ -1582,6 +1596,7 @@ html, body {
 }
 .connection-fingerprint {
   font-size: 0.7rem;
+  word-break: break-all;
 }
 .connection-session {
   display: inline-block;
