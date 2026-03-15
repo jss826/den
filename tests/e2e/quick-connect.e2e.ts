@@ -6,7 +6,10 @@ import * as fs from 'fs';
 import * as https from 'https';
 
 const DEN_ROOT = path.resolve(__dirname, '..', '..');
-const DEN_BIN = path.join(DEN_ROOT, 'target', 'debug', 'den.exe');
+// Use target-test if available (avoids lock conflicts with dev server), fallback to debug
+const DEN_BIN = fs.existsSync(path.join(DEN_ROOT, 'target-test', 'debug', 'den.exe'))
+  ? path.join(DEN_ROOT, 'target-test', 'debug', 'den.exe')
+  : path.join(DEN_ROOT, 'target', 'debug', 'den.exe');
 const SECOND_PORT = 3942;
 const SECOND_DATA_DIR = path.join(DEN_ROOT, 'data-e2e2');
 const PASSWORD = 'test';
@@ -37,6 +40,16 @@ test.describe('Quick Connect to Den', () => {
   let secondServer: ChildProcess;
 
   test.beforeAll(async () => {
+    // Kill any leftover process on the second port from previous runs
+    try {
+      execSync(
+        `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${SECOND_PORT} ^| findstr LISTENING') do taskkill /F /PID %a`,
+        { stdio: 'ignore', shell: 'cmd.exe' },
+      );
+      // Wait for port release
+      await new Promise((r) => setTimeout(r, 1000));
+    } catch { /* no leftover process */ }
+
     // Ensure data dir exists
     fs.mkdirSync(SECOND_DATA_DIR, { recursive: true });
 
@@ -49,6 +62,7 @@ test.describe('Quick Connect to Den', () => {
         DEN_PORT: String(SECOND_PORT),
         DEN_DATA_DIR: SECOND_DATA_DIR,
         DEN_BIND_ADDRESS: '127.0.0.1',
+        DEN_SSH_PORT: '0',
         DEN_TLS: 'true',
       },
       stdio: 'pipe',
@@ -126,7 +140,8 @@ test.describe('Quick Connect to Den', () => {
     await page.locator('#session-new-btn').click();
     await expect(menu).toBeVisible({ timeout: 3000 });
 
-    const remoteSep = menu.locator('.new-session-menu-separator', { hasText: `Remote localhost:${SECOND_PORT}` });
+    // Separator shows "Remote localhost" (stripPort removes the port number, CSS uppercases)
+    const remoteSep = menu.locator('.new-session-menu-separator', { hasText: /Remote localhost/i });
     await expect(remoteSep).toBeVisible({ timeout: 5000 });
 
     // "New Terminal" should be present under the remote section

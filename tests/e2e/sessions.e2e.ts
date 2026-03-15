@@ -103,8 +103,10 @@ test.describe('Session Management', () => {
     await createSession(page, name);
     await expect(page.locator(`.session-tab[data-session="${name}"]`)).toBeVisible();
 
-    // Click close button on the tab
-    await page.locator(`.session-tab[data-session="${name}"] .session-tab-close`).click();
+    // Scroll tab into view and click close button
+    const closeBtn = page.locator(`.session-tab[data-session="${name}"] .session-tab-close`);
+    await closeBtn.scrollIntoViewIfNeeded();
+    await closeBtn.click();
 
     // Confirm dialog should appear
     const confirmModal = page.locator('#confirm-modal');
