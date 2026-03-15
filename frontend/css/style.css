@@ -515,6 +515,9 @@ html, body {
   flex-direction: column;
   overflow: hidden;
 }
+#filer-pane[hidden] {
+  display: none;
+}
 
 .terminal-session-bar {
   display: flex;
