@@ -218,7 +218,7 @@ ssh -t -p 2222 den@localhost new mysession
 
 - ユーザー名は任意（パスワード認証のみ、`DEN_PASSWORD` と同じ）
 - `attach` / `new` は対話セッションなので **`-t`（PTY 割当）が必須**
-- ホストキーは初回起動時に `DEN_DATA_DIR/ssh_host_key` に自動生成
+- ホストキーは初回起動時に `DEN_DATA_DIR/ssh_host_key` に自動生成（操作不要 — 削除するとクライアント側でホスト鍵警告が発生）
 
 ### 公開鍵認証
 

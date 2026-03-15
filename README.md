@@ -218,7 +218,7 @@ ssh -t -p 2222 den@localhost new mysession
 
 - Username can be anything (password auth only, same as `DEN_PASSWORD`)
 - `attach` / `new` are interactive sessions — **`-t` (PTY allocation) is required**
-- Host key is auto-generated at `DEN_DATA_DIR/ssh_host_key` on first start
+- Host key is auto-generated at `DEN_DATA_DIR/ssh_host_key` on first start (no user action needed — deleting it will trigger host key warnings on clients)
 
 ### Public Key Authentication
 
