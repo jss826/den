@@ -499,6 +499,10 @@ html, body {
   right: 0;
   bottom: env(safe-area-inset-bottom, 0px);
 }
+.pane[hidden],
+#terminal-pane[hidden] {
+  display: none;
+}
 
 /* Terminal session bar */
 #terminal-pane {
