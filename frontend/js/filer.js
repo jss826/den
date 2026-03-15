@@ -266,40 +266,47 @@ const DenFiler = (() => {
     menu.addEventListener('click', (e) => e.stopPropagation());
 
     const info = FilerRemote.getInfo();
-
-    // SFTP disconnect
-    if (info.mode === 'sftp') {
-      const label = `${info.username}@${info.host}`;
-      const disconnItem = document.createElement('div');
-      disconnItem.className = 'new-session-menu-item disconnect';
-      disconnItem.textContent = `Disconnect ${label}`;
-      disconnItem.addEventListener('click', () => {
-        closeRemoteDropdown();
-        doDisconnect();
-      });
-      menu.appendChild(disconnItem);
-
-      const sep = document.createElement('div');
-      sep.className = 'new-session-menu-separator';
-      menu.appendChild(sep);
-    }
-
-    // Per-Den-connection disconnect items (direct + relay unified)
     const denConns = FilerRemote.getDenConnections();
     const denIds = Object.keys(denConns);
-    if (denIds.length > 0) {
+    const activeId = FilerRemote.getActiveDenId();
+
+    // --- Browse section: switch between local / remote targets ---
+    if (denIds.length > 0 || info.mode !== 'local') {
+      // Local
+      const localItem = document.createElement('div');
+      localItem.className = 'new-session-menu-item';
+      if (info.mode === 'local') localItem.classList.add('current');
+      localItem.textContent = 'Local';
+      localItem.addEventListener('click', () => {
+        closeRemoteDropdown();
+        FilerRemote.switchToLocal();
+        updateRemoteButton();
+      });
+      menu.appendChild(localItem);
+
+      // Each Den connection
       for (const connId of denIds) {
         const conn = denConns[connId];
         let label = conn.displayName || conn.hostPort || connId;
         if (conn.type === 'relay') label += ' (relay)';
-        const disconnItem = document.createElement('div');
-        disconnItem.className = 'new-session-menu-item disconnect';
-        disconnItem.textContent = `Disconnect ${label}`;
-        disconnItem.addEventListener('click', () => {
+        const item = document.createElement('div');
+        item.className = 'new-session-menu-item';
+        if (info.mode === 'den' && connId === activeId) item.classList.add('current');
+        item.textContent = label;
+        item.addEventListener('click', () => {
           closeRemoteDropdown();
-          doDenDisconnect(connId);
+          FilerRemote.setActiveDen(connId);
+          updateRemoteButton();
         });
-        menu.appendChild(disconnItem);
+        menu.appendChild(item);
+      }
+
+      // SFTP (if connected)
+      if (info.mode === 'sftp') {
+        const sftpCurrent = document.createElement('div');
+        sftpCurrent.className = 'new-session-menu-item current';
+        sftpCurrent.textContent = `${info.username}@${info.host}`;
+        menu.appendChild(sftpCurrent);
       }
 
       const sep = document.createElement('div');
@@ -307,6 +314,7 @@ const DenFiler = (() => {
       menu.appendChild(sep);
     }
 
+    // --- Connect section ---
     const denItem = document.createElement('div');
     denItem.className = 'new-session-menu-item';
     denItem.textContent = 'Quick Connect Den\u2026';
@@ -316,11 +324,6 @@ const DenFiler = (() => {
     });
     menu.appendChild(denItem);
 
-    const denSep = document.createElement('div');
-    denSep.className = 'new-session-menu-separator';
-    menu.appendChild(denSep);
-
-    // SFTP Connect
     const sftpItem = document.createElement('div');
     sftpItem.className = 'new-session-menu-item';
     sftpItem.textContent = 'SFTP Connect\u2026';
@@ -329,6 +332,33 @@ const DenFiler = (() => {
       showSftpModal();
     });
     menu.appendChild(sftpItem);
+
+    // --- Disconnect section ---
+    const disconnectTargets = [];
+    if (info.mode === 'sftp') {
+      disconnectTargets.push({ label: `${info.username}@${info.host}`, action: () => doDisconnect() });
+    }
+    for (const connId of denIds) {
+      const conn = denConns[connId];
+      let label = conn.displayName || conn.hostPort || connId;
+      if (conn.type === 'relay') label += ' (relay)';
+      disconnectTargets.push({ label, action: () => doDenDisconnect(connId) });
+    }
+    if (disconnectTargets.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      menu.appendChild(sep);
+      for (const t of disconnectTargets) {
+        const item = document.createElement('div');
+        item.className = 'new-session-menu-item disconnect';
+        item.textContent = `Disconnect ${t.label}`;
+        item.addEventListener('click', () => {
+          closeRemoteDropdown();
+          t.action();
+        });
+        menu.appendChild(item);
+      }
+    }
 
     const rect = anchorBtn.getBoundingClientRect();
     menu.style.position = 'fixed';

@@ -719,6 +719,10 @@ html, body {
   border-top: 1px solid var(--border);
   margin-top: 2px;
 }
+.new-session-menu-item.current {
+  font-weight: 600;
+  color: var(--accent);
+}
 .new-session-menu-item.disconnect {
   color: var(--error);
 }

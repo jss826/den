@@ -489,6 +489,13 @@ const FilerRemote = (() => {
     }));
   }
 
+  /** Switch filer to local mode */
+  function switchToLocal() {
+    if (mode === 'local') return;
+    mode = 'local';
+    document.dispatchEvent(new CustomEvent('den:remote-changed', { detail: { mode: 'local' } }));
+  }
+
   return {
     getApiBase,
     isRemote,
@@ -503,5 +510,6 @@ const FilerRemote = (() => {
     refreshDenConnections,
     getActiveDenId,
     setActiveDen,
+    switchToLocal,
   };
 })();
