@@ -6,7 +6,9 @@ const Keybar = (() => {
   let secondaryButtonsContainer = null;
   let secondaryToggleBtn = null;
   let collapseBtn = null;
+  let orientationBtn = null;
   let tabEl = null;
+  let orientation = 'horizontal'; // "horizontal" | "vertical"
   let modifiers = { ctrl: false, alt: false, shift: false };
   let activeKeys = [];
   let activeSecondaryKeys = [];
@@ -100,6 +102,7 @@ const Keybar = (() => {
     secondaryToggleBtn = container.querySelector('.keybar-secondary-toggle');
     container.querySelector('.keybar-drag-handle');
     collapseBtn = container.querySelector('.keybar-collapse-btn');
+    orientationBtn = container.querySelector('.keybar-orientation-btn');
     tabEl = document.getElementById('keybar-tab');
 
     activeKeys = customKeys && customKeys.length > 0 ? customKeys : DEFAULT_KEYS;
@@ -120,6 +123,14 @@ const Keybar = (() => {
 
     // Drag — entire keybar (except buttons and collapse) is draggable
     container.addEventListener('pointerdown', onContainerDragStart);
+
+    // Orientation toggle
+    if (orientationBtn) {
+      orientationBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleOrientation();
+      });
+    }
 
     // Collapse/expand
     collapseBtn.addEventListener('click', collapse);
@@ -215,6 +226,39 @@ const Keybar = (() => {
     return keybarVisible;
   }
 
+  // --- Orientation ---
+
+  function toggleOrientation() {
+    orientation = orientation === 'horizontal' ? 'vertical' : 'horizontal';
+    applyOrientation();
+    // Reset position for new orientation
+    if (orientation === 'vertical') {
+      container.style.removeProperty('top');
+      container.style.removeProperty('left');
+      container.style.removeProperty('right');
+      container.dataset.side = collapseSide;
+    } else {
+      container.style.removeProperty('left');
+      container.style.removeProperty('right');
+      setDefaultPosition();
+    }
+    requestAnimationFrame(() => clampToViewport());
+    schedulePositionSave();
+  }
+
+  function applyOrientation() {
+    container.dataset.orientation = orientation;
+    if (orientation === 'vertical') {
+      container.dataset.side = collapseSide;
+    } else {
+      delete container.dataset.side;
+    }
+    updateSecondaryToggleIcon();
+    if (orientationBtn) {
+      orientationBtn.textContent = orientation === 'vertical' ? '\u21C5' : '\u21C4';
+    }
+  }
+
   // --- Secondary row toggle ---
 
   function toggleSecondary() {
@@ -222,10 +266,17 @@ const Keybar = (() => {
     if (secondaryContainer) {
       secondaryContainer.hidden = !secondaryVisible;
     }
-    if (secondaryToggleBtn) {
+    updateSecondaryToggleIcon();
+    schedulePositionSave();
+  }
+
+  function updateSecondaryToggleIcon() {
+    if (!secondaryToggleBtn) return;
+    if (orientation === 'vertical') {
+      secondaryToggleBtn.textContent = secondaryVisible ? '\u25C0' : '\u25B6';
+    } else {
       secondaryToggleBtn.textContent = secondaryVisible ? '\u25B2' : '\u25BC';
     }
-    schedulePositionSave();
   }
 
   function applySecondaryVisibility() {
@@ -233,7 +284,7 @@ const Keybar = (() => {
       secondaryContainer.hidden = !secondaryVisible;
     }
     if (secondaryToggleBtn) {
-      secondaryToggleBtn.textContent = secondaryVisible ? '\u25B2' : '\u25BC';
+      updateSecondaryToggleIcon();
       // Show toggle only if there are secondary keys
       secondaryToggleBtn.hidden = activeSecondaryKeys.length === 0;
     }
@@ -245,11 +296,16 @@ const Keybar = (() => {
     if (collapsed) return;
     collapsed = true;
     const barRect = container.getBoundingClientRect();
-    // Place tab at bar's Y position, snapped to collapseSide edge
     tabEl.dataset.side = collapseSide;
     tabEl.style.removeProperty('left');
     tabEl.style.removeProperty('right');
-    tabEl.style.top = barRect.top + 'px';
+    if (orientation === 'vertical') {
+      // For vertical, place tab at midpoint of bar height
+      const midY = barRect.top + barRect.height / 2 - 22;
+      tabEl.style.top = Math.max(0, midY) + 'px';
+    } else {
+      tabEl.style.top = barRect.top + 'px';
+    }
     applyVisibility();
     schedulePositionSave();
   }
@@ -257,11 +313,14 @@ const Keybar = (() => {
   function expand() {
     if (!collapsed) return;
     collapsed = false;
-    const tabRect = tabEl.getBoundingClientRect();
-    // Place bar at tab's Y position (X is always full-width)
-    container.style.top = tabRect.top + 'px';
+    if (orientation === 'vertical') {
+      container.dataset.side = collapseSide;
+      container.style.removeProperty('top');
+    } else {
+      const tabRect = tabEl.getBoundingClientRect();
+      container.style.top = tabRect.top + 'px';
+    }
     applyVisibility();
-    // After showing, clamp to viewport
     requestAnimationFrame(() => clampToViewport());
     schedulePositionSave();
   }
@@ -272,15 +331,17 @@ const Keybar = (() => {
 
   function onContainerDragStart(e) {
     if (e.button !== 0) return;
-    // Don't drag when clicking on buttons, collapse, or secondary toggle
-    if (e.target.closest('.key-btn, .keybar-collapse-btn, .keybar-secondary-toggle')) return;
+    // Don't drag when clicking on buttons, collapse, orientation, or secondary toggle
+    if (e.target.closest('.key-btn, .keybar-collapse-btn, .keybar-orientation-btn, .keybar-secondary-toggle')) return;
     e.preventDefault();
     const rect = container.getBoundingClientRect();
     dragState = {
       startX: e.clientX,
       startY: e.clientY,
       origTop: rect.top,
+      origLeft: rect.left,
       vh: window.innerHeight,
+      vw: window.innerWidth,
       dist: 0,
     };
     container.setPointerCapture(e.pointerId);
@@ -294,17 +355,31 @@ const Keybar = (() => {
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
     dragState.dist = Math.max(dragState.dist, Math.abs(dx) + Math.abs(dy));
-    let newTop = dragState.origTop + dy;
 
-    newTop = Math.max(0, Math.min(newTop, dragState.vh - 40));
-
-    container.style.top = newTop + 'px';
+    if (orientation === 'vertical') {
+      // Vertical: drag along X axis, snap to left/right
+      const newSide = e.clientX < dragState.vw / 2 ? 'left' : 'right';
+      const currentSide = dragState.pendingSide || collapseSide;
+      if (currentSide !== newSide) {
+        container.dataset.side = newSide;
+        // collapseSide is finalized in onDragEnd
+        dragState.pendingSide = newSide;
+      }
+    } else {
+      let newTop = dragState.origTop + dy;
+      newTop = Math.max(0, Math.min(newTop, dragState.vh - 40));
+      container.style.top = newTop + 'px';
+    }
   }
 
   function onDragEnd(e) {
     const wasTap = dragState && dragState.dist < DOUBLE_TAP_MOVE_THRESHOLD
       && e && e.type === 'pointerup';
     if (!wasTap) lastTapTime = 0;
+    // Finalize side change from vertical drag
+    if (dragState && dragState.pendingSide) {
+      collapseSide = dragState.pendingSide;
+    }
     dragState = null;
     document.removeEventListener('pointermove', onDragMove);
     document.removeEventListener('pointerup', onDragEnd);
@@ -444,6 +519,7 @@ const Keybar = (() => {
       collapsed: collapsed,
       collapse_side: collapseSide,
       secondary_visible: secondaryVisible,
+      orientation: orientation,
     };
   }
 
@@ -457,8 +533,14 @@ const Keybar = (() => {
       secondaryVisible = !!pos.secondary_visible;
       collapseSide = (pos.collapse_side === 'left' || pos.collapse_side === 'right')
         ? pos.collapse_side : 'right';
+      orientation = (pos.orientation === 'vertical') ? 'vertical' : 'horizontal';
 
-      container.style.top = pos.top + 'px';
+      if (orientation === 'vertical') {
+        container.dataset.side = collapseSide;
+        container.style.removeProperty('top');
+      } else {
+        container.style.top = pos.top + 'px';
+      }
       tabEl.style.top = pos.top + 'px';
       tabEl.dataset.side = collapseSide;
       tabEl.style.removeProperty('left');
@@ -468,6 +550,7 @@ const Keybar = (() => {
       setDefaultPosition();
     }
 
+    applyOrientation();
     applyVisibility();
     requestAnimationFrame(() => clampToViewport());
   }
@@ -495,16 +578,24 @@ const Keybar = (() => {
     const barRect = barVisible ? container.getBoundingClientRect() : null;
     const tabRect = tabVisible ? tabEl.getBoundingClientRect() : null;
 
-    // Write phase — bar (Y-axis only, full-width)
-    if (barRect) {
-      const top = Math.max(0, Math.min(barRect.top, vh - 40));
-      container.style.top = top + 'px';
-    }
+    if (orientation === 'vertical') {
+      // Vertical: no top clamping needed (full height), just ensure tab Y is valid
+      if (tabRect) {
+        const top = Math.max(0, Math.min(tabRect.top, vh - 44));
+        tabEl.style.top = top + 'px';
+      }
+    } else {
+      // Write phase — bar (Y-axis only, full-width)
+      if (barRect) {
+        const top = Math.max(0, Math.min(barRect.top, vh - 40));
+        container.style.top = top + 'px';
+      }
 
-    // Write phase — tab (Y-axis only, side handled by CSS)
-    if (tabRect) {
-      const top = Math.max(0, Math.min(tabRect.top, vh - 44));
-      tabEl.style.top = top + 'px';
+      // Write phase — tab (Y-axis only, side handled by CSS)
+      if (tabRect) {
+        const top = Math.max(0, Math.min(tabRect.top, vh - 44));
+        tabEl.style.top = top + 'px';
+      }
     }
   }
 
@@ -934,6 +1025,6 @@ const Keybar = (() => {
   return {
     init, reload, getDefaultKeys, getDefaultSecondaryKeys, isTouchDevice,
     getModifiers, resetModifiers, executeKey: executeNormalKey,
-    toggleVisibility, collapse, expand, isVisible, unescapeSend,
+    toggleVisibility, collapse, expand, isVisible, unescapeSend, toggleOrientation,
   };
 })();

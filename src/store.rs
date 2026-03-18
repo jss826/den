@@ -157,6 +157,8 @@ pub struct KeybarPosition {
     pub collapse_side: String,
     #[serde(default)]
     pub secondary_visible: bool,
+    #[serde(default = "default_orientation")]
+    pub orientation: String,
 }
 
 fn default_true() -> bool {
@@ -165,6 +167,10 @@ fn default_true() -> bool {
 
 fn default_collapse_side() -> String {
     "right".to_string()
+}
+
+fn default_orientation() -> String {
+    "horizontal".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

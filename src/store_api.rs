@@ -136,6 +136,10 @@ pub async fn put_settings(
         if pos.collapse_side != "left" && pos.collapse_side != "right" {
             pos.collapse_side = "right".to_string();
         }
+        // Validate orientation: only "horizontal" or "vertical" allowed
+        if pos.orientation != "horizontal" && pos.orientation != "vertical" {
+            pos.orientation = "horizontal".to_string();
+        }
     }
     // Validate snippets: limit count, label/command length, reject empty
     if let Some(ref snips) = settings.snippets {

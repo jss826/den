@@ -1068,6 +1068,102 @@ html, body {
   background: var(--hover);
 }
 
+/* Orientation toggle button */
+.keybar-orientation-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1rem;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.keybar-orientation-btn:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+/* Vertical orientation */
+#keybar[data-orientation="vertical"] {
+  left: auto;
+  right: auto;
+  top: 0;
+  bottom: 0;
+  flex-direction: column;
+  width: auto;
+  height: auto;
+  border-top: none;
+  border-bottom: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  cursor: ew-resize;
+}
+
+#keybar[data-orientation="vertical"][data-side="right"] {
+  right: 0;
+  left: auto;
+}
+
+#keybar[data-orientation="vertical"][data-side="left"] {
+  left: 0;
+  right: auto;
+}
+
+#keybar[data-orientation="vertical"] .keybar-drag-handle {
+  width: auto;
+  height: 28px;
+  cursor: ew-resize;
+}
+
+#keybar[data-orientation="vertical"] .keybar-drag-handle:active {
+  cursor: ew-resize;
+}
+
+#keybar[data-orientation="vertical"] .keybar-content {
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+#keybar[data-orientation="vertical"] .keybar-row {
+  flex-direction: column;
+  width: auto;
+  padding: 0 4px 4px 4px;
+}
+
+#keybar[data-orientation="vertical"] .keybar-buttons,
+#keybar[data-orientation="vertical"] .keybar-buttons-secondary {
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#keybar[data-orientation="vertical"] .keybar-secondary {
+  padding: 0 4px 4px 4px;
+}
+
+#keybar[data-orientation="vertical"] .keybar-secondary-toggle {
+  width: 100%;
+}
+
+#keybar[data-orientation="vertical"] .keybar-orientation-btn {
+  width: 100%;
+}
+
+#keybar[data-orientation="vertical"] .keybar-collapse-btn {
+  width: 100%;
+}
+
 .key-btn {
   flex-shrink: 0;
   background: var(--keybar-key);
