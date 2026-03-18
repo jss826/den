@@ -41,7 +41,7 @@ cargo clippy -- -D warnings 2>&1
 tests ディレクトリまたは `#[test]` が存在する場合のみ実行:
 
 ```bash
-cargo test 2>&1
+cargo test --target-dir target-test 2>&1
 ```
 
 ## 報告フォーマット

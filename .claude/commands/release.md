@@ -29,10 +29,11 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 2. `cargo generate-lockfile` で Cargo.lock を更新（Cargo.toml の version 変更を反映）
 3. バージョン更新をコミット＆プッシュ: `git add Cargo.toml Cargo.lock && git commit -m "chore: bump version to <version>" && git push`
 4. `gh release create <version> --title "<version>" --notes "<リリースノート>"` で GitHub Release を作成（タグも自動作成される）
-5. CI がトリガーされたことを確認: `gh run list --limit 1`
-6. CI 完了を待つ: `gh run watch <run_id>`
-7. リリースにバイナリが添付されたことを確認: `gh release view <version>`
-8. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + CI ステータス）
+5. `git fetch --tags` でリモートタグをローカルに同期（次回リリース時のタグ参照に必要）
+6. CI がトリガーされたことを確認: `gh run list --limit 1`
+7. CI 完了を待つ: `gh run watch <run_id>`
+8. リリースにバイナリが添付されたことを確認: `gh release view <version>`
+9. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + CI ステータス）
 
 ## ルール
 

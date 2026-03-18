@@ -34,7 +34,7 @@ paths: ['src/**/*.rs', 'frontend/**', 'tests/**']
 ## タスク管理
 
 - タスク番号（#54 など）は Claude Code の TaskCreate/TaskUpdate で管理するローカル番号
-- GitHub Issues は使用していない。`gh issue` コマンドや GitHub API を叩かないこと
+- GitHub Issues は機能要望・バグ報告に使用。`/ship` の Phase 3 で関連 Issue のクローズを行う
 
 ## エスカレーション
 
