@@ -29,6 +29,11 @@ const Keybar = (() => {
   const DOUBLE_TAP_THRESHOLD = 300; // ms
   const DOUBLE_TAP_MOVE_THRESHOLD = 3; // px
 
+  /** Read --keybar-vertical-top from CSS (synced with tab-bar + session-bar height) */
+  function verticalTop() {
+    return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--keybar-vertical-top')) || 80;
+  }
+
   // スクロールアクション → ターミナルメソッドのディスパッチマップ
   const SCROLL_ACTIONS = {
     'scroll-page-up':   t => t.scrollPages(-1),
@@ -231,15 +236,15 @@ const Keybar = (() => {
   function toggleOrientation() {
     orientation = orientation === 'horizontal' ? 'vertical' : 'horizontal';
     applyOrientation();
-    // Reset position for new orientation
+    // Reset inline position styles for new orientation
+    container.style.removeProperty('top');
+    container.style.removeProperty('bottom');
+    container.style.removeProperty('left');
+    container.style.removeProperty('right');
     if (orientation === 'vertical') {
-      container.style.removeProperty('top');
-      container.style.removeProperty('left');
-      container.style.removeProperty('right');
+      // top/bottom are set by CSS; just set the side
       container.dataset.side = collapseSide;
     } else {
-      container.style.removeProperty('left');
-      container.style.removeProperty('right');
       setDefaultPosition();
     }
     requestAnimationFrame(() => clampToViewport());
@@ -300,9 +305,9 @@ const Keybar = (() => {
     tabEl.style.removeProperty('left');
     tabEl.style.removeProperty('right');
     if (orientation === 'vertical') {
-      // For vertical, place tab at midpoint of bar height
+      // For vertical, place tab at midpoint of bar height (within terminal area)
       const midY = barRect.top + barRect.height / 2 - 22;
-      tabEl.style.top = Math.max(0, midY) + 'px';
+      tabEl.style.top = Math.max(verticalTop(), midY) + 'px';
     } else {
       tabEl.style.top = barRect.top + 'px';
     }
@@ -431,9 +436,10 @@ const Keybar = (() => {
 
     if (tabDragState.dist < TAB_DRAG_THRESHOLD) return; // Not a drag yet
 
-    // Y-axis movement only
+    // Y-axis movement only (respect terminal area in vertical mode)
+    const minTop = orientation === 'vertical' ? verticalTop() : 0;
     let newTop = tabDragState.origTop + dy;
-    newTop = Math.max(0, Math.min(newTop, tabDragState.vh - 44));
+    newTop = Math.max(minTop, Math.min(newTop, tabDragState.vh - 44));
     tabEl.style.top = newTop + 'px';
 
     // Live preview: snap side based on pointer X position
@@ -510,7 +516,8 @@ const Keybar = (() => {
     // Use style.top instead of getBoundingClientRect() — hidden elements
     // (display:none via hidden attribute) return {top:0} from getBoundingClientRect(),
     // which corrupts the saved position when keybar is hidden via Ctrl+K toggle.
-    const el = collapsed ? tabEl : container;
+    // In vertical mode, container top is CSS-controlled; save tabEl top for collapse restore.
+    const el = (collapsed || orientation === 'vertical') ? tabEl : container;
     const top = parseFloat(el.style.top);
     return {
       left: 0,
@@ -537,11 +544,13 @@ const Keybar = (() => {
 
       if (orientation === 'vertical') {
         container.dataset.side = collapseSide;
-        container.style.removeProperty('top');
+        container.style.removeProperty('top'); // CSS handles top/bottom
+        // Ensure tab stays within terminal area
+        tabEl.style.top = Math.max(verticalTop(), pos.top) + 'px';
       } else {
         container.style.top = pos.top + 'px';
+        tabEl.style.top = pos.top + 'px';
       }
-      tabEl.style.top = pos.top + 'px';
       tabEl.dataset.side = collapseSide;
       tabEl.style.removeProperty('left');
       tabEl.style.removeProperty('right');
@@ -572,27 +581,24 @@ const Keybar = (() => {
     if (!keybarVisible) return;
     const vh = window.innerHeight;
 
-    // Read phase
-    const barVisible = !container.hidden;
-    const tabVisible = !tabEl.hidden;
-    const barRect = barVisible ? container.getBoundingClientRect() : null;
-    const tabRect = tabVisible ? tabEl.getBoundingClientRect() : null;
-
     if (orientation === 'vertical') {
-      // Vertical: no top clamping needed (full height), just ensure tab Y is valid
-      if (tabRect) {
-        const top = Math.max(0, Math.min(tabRect.top, vh - 44));
+      // Vertical: CSS controls bar top/bottom; just ensure tab Y is valid
+      if (!tabEl.hidden) {
+        const tabRect = tabEl.getBoundingClientRect();
+        const top = Math.max(verticalTop(), Math.min(tabRect.top, vh - 44));
         tabEl.style.top = top + 'px';
       }
     } else {
       // Write phase — bar (Y-axis only, full-width)
-      if (barRect) {
+      if (!container.hidden) {
+        const barRect = container.getBoundingClientRect();
         const top = Math.max(0, Math.min(barRect.top, vh - 40));
         container.style.top = top + 'px';
       }
 
       // Write phase — tab (Y-axis only, side handled by CSS)
-      if (tabRect) {
+      if (!tabEl.hidden) {
+        const tabRect = tabEl.getBoundingClientRect();
         const top = Math.max(0, Math.min(tabRect.top, vh - 44));
         tabEl.style.top = top + 'px';
       }

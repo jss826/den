@@ -28,6 +28,7 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --keybar-vertical-top: 80px; /* tab-bar(40px) + session-bar(40px) */
 }
 
 [data-theme="light"],
@@ -634,6 +635,10 @@ html, body {
   }
 
   .session-tab-close { opacity: 0.65; }
+
+  :root {
+    --keybar-vertical-top: 84px; /* tab-bar(40px) + session-bar(44px) */
+  }
 }
 
 .session-select {
@@ -1090,12 +1095,12 @@ html, body {
   background: var(--hover);
 }
 
-/* Vertical orientation */
+/* Vertical orientation — spans terminal area (below tab-bar + session-bar) */
 #keybar[data-orientation="vertical"] {
   left: auto;
   right: auto;
-  top: 0;
-  bottom: 0;
+  top: var(--keybar-vertical-top);
+  bottom: env(safe-area-inset-bottom, 0px);
   flex-direction: column;
   width: auto;
   height: auto;
@@ -1126,19 +1131,21 @@ html, body {
   cursor: ew-resize;
 }
 
+/* Content: row layout so primary + secondary become side-by-side columns */
 #keybar[data-orientation="vertical"] .keybar-content {
-  flex-direction: column;
-  overflow-y: auto;
-  overflow-x: hidden;
+  flex-direction: row;
+  overflow: hidden;
   min-width: 0;
   min-height: 0;
   flex: 1;
 }
 
+/* Each row becomes a column; children (.keybar-buttons) handle scrolling */
 #keybar[data-orientation="vertical"] .keybar-row {
   flex-direction: column;
   width: auto;
   padding: 0 4px 4px 4px;
+  min-height: 0;
 }
 
 #keybar[data-orientation="vertical"] .keybar-buttons,
@@ -1146,6 +1153,7 @@ html, body {
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
+  min-height: 0;
 }
 
 #keybar[data-orientation="vertical"] .keybar-secondary {
