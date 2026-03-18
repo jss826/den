@@ -362,14 +362,18 @@ const Keybar = (() => {
     dragState.dist = Math.max(dragState.dist, Math.abs(dx) + Math.abs(dy));
 
     if (orientation === 'vertical') {
-      // Vertical: drag along X axis, snap to left/right
-      const newSide = e.clientX < dragState.vw / 2 ? 'left' : 'right';
-      const currentSide = dragState.pendingSide || collapseSide;
-      if (currentSide !== newSide) {
-        container.dataset.side = newSide;
-        // collapseSide is finalized in onDragEnd
-        dragState.pendingSide = newSide;
-      }
+      // Vertical: freely follow pointer along X axis during drag
+      let newLeft = dragState.origLeft + dx;
+      const barWidth = container.offsetWidth;
+      newLeft = Math.max(0, Math.min(newLeft, dragState.vw - barWidth));
+      // Override CSS positioning — use left + auto right for free movement
+      container.style.left = newLeft + 'px';
+      container.style.right = 'auto';
+      // Remove data-side during drag so CSS left/right:0 rules don't fight inline style
+      delete container.dataset.side;
+      // Determine which side to snap to on release
+      const center = newLeft + barWidth / 2;
+      dragState.pendingSide = center < dragState.vw / 2 ? 'left' : 'right';
     } else {
       let newTop = dragState.origTop + dy;
       newTop = Math.max(0, Math.min(newTop, dragState.vh - 40));
@@ -381,9 +385,12 @@ const Keybar = (() => {
     const wasTap = dragState && dragState.dist < DOUBLE_TAP_MOVE_THRESHOLD
       && e && e.type === 'pointerup';
     if (!wasTap) lastTapTime = 0;
-    // Finalize side change from vertical drag
+    // Finalize side change from vertical drag — snap to edge and clear inline styles
     if (dragState && dragState.pendingSide) {
       collapseSide = dragState.pendingSide;
+      container.dataset.side = collapseSide;
+      container.style.removeProperty('left');
+      container.style.removeProperty('right');
     }
     dragState = null;
     document.removeEventListener('pointermove', onDragMove);
