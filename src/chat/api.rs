@@ -128,10 +128,22 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
             match msg {
                 Message::Text(text) => {
                     if let Ok(cmd) = serde_json::from_str::<ChatWsCommand>(&text) {
-                        let ChatWsCommand::Message { text } = cmd;
-                        if let Err(e) = session_for_write.send_message(&text).await {
-                            tracing::warn!("Chat send_message failed: {e}");
-                            break;
+                        match cmd {
+                            ChatWsCommand::Message { text } => {
+                                if let Err(e) = session_for_write.send_message(&text).await {
+                                    tracing::warn!("Chat send_message failed: {e}");
+                                    break;
+                                }
+                            }
+                            ChatWsCommand::ApproveTool { tool_name } => {
+                                session_for_write.approve_tool(&tool_name).await;
+                            }
+                            ChatWsCommand::AskResponse { text } => {
+                                if let Err(e) = session_for_write.send_message(&text).await {
+                                    tracing::warn!("Chat ask_response failed: {e}");
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -154,6 +166,12 @@ enum ChatWsCommand {
     /// Send a user message (will be wrapped in stream-json format).
     #[serde(rename = "message")]
     Message { text: String },
+    /// Pre-approve a tool for this session ("always allow").
+    #[serde(rename = "approve_tool")]
+    ApproveTool { tool_name: String },
+    /// Respond to an AskUserQuestion (sent as a follow-up user message).
+    #[serde(rename = "ask_response")]
+    AskResponse { text: String },
 }
 
 fn chat_error_response(e: ChatError) -> axum::response::Response {

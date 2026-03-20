@@ -631,6 +631,93 @@ html, body {
 .chat-tool-error {
   color: #f44;
 }
+
+/* Approval card for dangerous tools */
+.chat-approval {
+  border-left: 3px solid var(--accent, #4a9eff);
+  background: rgba(74, 158, 255, 0.05);
+}
+.chat-approval-header {
+  padding: 6px 10px;
+  font-family: monospace;
+  font-weight: bold;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px 6px 0 0;
+}
+.chat-approval-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border, #333);
+}
+.chat-approval-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-approval-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.chat-approval-btn.primary {
+  background: var(--accent, #4a9eff);
+  color: #fff;
+  border-color: var(--accent, #4a9eff);
+}
+.chat-approval-btn.primary:hover {
+  opacity: 0.9;
+}
+.chat-approval-resolved {
+  opacity: 0.7;
+}
+
+/* AskUserQuestion inline dialog */
+.chat-ask-dialog {
+  border-left: 3px solid #f0a020;
+  background: rgba(240, 160, 32, 0.05);
+}
+.chat-ask-question {
+  padding: 8px 10px;
+  font-weight: bold;
+}
+.chat-ask-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 10px 8px;
+}
+.chat-ask-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border, #333);
+}
+.chat-ask-input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 13px;
+  outline: none;
+}
+.chat-ask-input:focus {
+  border-color: #f0a020;
+}
+.chat-ask-resolved {
+  opacity: 0.7;
+}
+.chat-ask-answered {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--dim, #888);
+  font-style: italic;
+  border-top: 1px solid var(--border, #333);
+}
 .chat-input-area {
   display: flex;
   gap: 8px;

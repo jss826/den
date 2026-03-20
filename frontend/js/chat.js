@@ -16,6 +16,12 @@ const DenChat = (() => {
   let isStreaming = false;
   let renderPending = false;
 
+  // ── Approval state ──
+  const DANGEROUS_TOOLS = new Set([
+    'Edit', 'Write', 'MultiEdit', 'Bash', 'NotebookEdit',
+  ]);
+  const preApprovedTools = new Set();
+
   // ── Init ──
   function init() {
     messagesEl = document.getElementById('chat-messages');
@@ -36,6 +42,9 @@ const DenChat = (() => {
 
   // ── Session management ──
   async function createSession() {
+    // Reset pre-approved tools on new session
+    preApprovedTools.clear();
+
     try {
       const resp = await fetch('/api/chat/sessions', {
         method: 'POST',
@@ -133,7 +142,11 @@ const DenChat = (() => {
           appendThinking(block.thinking);
           break;
         case 'tool_use':
-          appendToolUse(block);
+          if (block.name === 'AskUserQuestion') {
+            appendAskDialog(block);
+          } else {
+            appendToolUse(block);
+          }
           break;
       }
     }
@@ -241,6 +254,18 @@ const DenChat = (() => {
     currentAssistantBubble = null;
     currentThinkingBlock = null;
 
+    const isDangerous = DANGEROUS_TOOLS.has(block.name);
+    const isApproved = preApprovedTools.has(block.name);
+
+    if (isDangerous && !isApproved) {
+      appendApprovalCard(block);
+    } else {
+      appendToolBlock(block);
+    }
+  }
+
+  /** Standard collapsible tool block (safe or pre-approved tools). */
+  function appendToolBlock(block) {
     const details = document.createElement('details');
     details.className = 'chat-msg chat-tool';
     details.id = 'tool-' + block.id;
@@ -255,6 +280,141 @@ const DenChat = (() => {
     details.appendChild(inputPre);
 
     messagesEl.appendChild(details);
+    scrollToBottom();
+  }
+
+  /** Approval card for dangerous tools — shown expanded with action buttons. */
+  function appendApprovalCard(block) {
+    const card = document.createElement('div');
+    card.className = 'chat-msg chat-tool chat-approval';
+    card.id = 'tool-' + block.id;
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'chat-approval-header';
+    header.textContent = block.name;
+    card.appendChild(header);
+
+    // Input preview
+    const inputPre = document.createElement('pre');
+    inputPre.className = 'chat-tool-input';
+    inputPre.textContent = JSON.stringify(block.input, null, 2);
+    card.appendChild(inputPre);
+
+    // Action buttons
+    const actions = document.createElement('div');
+    actions.className = 'chat-approval-actions';
+
+    const allowOnce = document.createElement('button');
+    allowOnce.className = 'chat-approval-btn';
+    allowOnce.textContent = 'OK';
+    allowOnce.addEventListener('click', () => {
+      card.classList.remove('chat-approval');
+      card.classList.add('chat-approval-resolved');
+      actions.remove();
+    });
+
+    const allowAlways = document.createElement('button');
+    allowAlways.className = 'chat-approval-btn primary';
+    allowAlways.textContent = 'Always Allow';
+    allowAlways.addEventListener('click', () => {
+      preApprovedTools.add(block.name);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'approve_tool', tool_name: block.name }));
+      }
+      card.classList.remove('chat-approval');
+      card.classList.add('chat-approval-resolved');
+      actions.remove();
+    });
+
+    actions.appendChild(allowOnce);
+    actions.appendChild(allowAlways);
+    card.appendChild(actions);
+
+    messagesEl.appendChild(card);
+    scrollToBottom();
+  }
+
+  /** Inline dialog for AskUserQuestion tool_use events. */
+  function appendAskDialog(block) {
+    currentAssistantBubble = null;
+    currentThinkingBlock = null;
+
+    const card = document.createElement('div');
+    card.className = 'chat-msg chat-tool chat-ask-dialog';
+    card.id = 'tool-' + block.id;
+
+    // Question text
+    const question = (block.input && block.input.question) || 'Claude has a question:';
+    const questionEl = document.createElement('div');
+    questionEl.className = 'chat-ask-question';
+    questionEl.textContent = question;
+    card.appendChild(questionEl);
+
+    // Options (if provided)
+    const options = block.input && block.input.options;
+    if (Array.isArray(options) && options.length > 0) {
+      const optionsEl = document.createElement('div');
+      optionsEl.className = 'chat-ask-options';
+      for (const opt of options) {
+        const btn = document.createElement('button');
+        btn.className = 'chat-approval-btn';
+        btn.textContent = opt;
+        btn.addEventListener('click', () => {
+          submitAskResponse(card, opt);
+        });
+        optionsEl.appendChild(btn);
+      }
+      card.appendChild(optionsEl);
+    }
+
+    // Free-text input
+    const inputRow = document.createElement('div');
+    inputRow.className = 'chat-ask-input-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'chat-ask-input';
+    input.placeholder = 'Type your answer...';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (text) submitAskResponse(card, text);
+      }
+    });
+
+    const sendAsk = document.createElement('button');
+    sendAsk.className = 'chat-approval-btn primary';
+    sendAsk.textContent = 'Send';
+    sendAsk.addEventListener('click', () => {
+      const text = input.value.trim();
+      if (text) submitAskResponse(card, text);
+    });
+
+    inputRow.appendChild(input);
+    inputRow.appendChild(sendAsk);
+    card.appendChild(inputRow);
+
+    messagesEl.appendChild(card);
+    scrollToBottom();
+    input.focus();
+  }
+
+  /** Submit an AskUserQuestion response via WebSocket. */
+  function submitAskResponse(card, answer) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ask_response', text: answer }));
+    }
+    // Replace card content with resolved state
+    card.classList.add('chat-ask-resolved');
+    const resolved = document.createElement('div');
+    resolved.className = 'chat-ask-answered';
+    resolved.textContent = 'Answered: ' + answer;
+    // Remove interactive elements
+    const interactive = card.querySelectorAll('.chat-ask-options, .chat-ask-input-row');
+    interactive.forEach((el) => el.remove());
+    card.appendChild(resolved);
     scrollToBottom();
   }
 
