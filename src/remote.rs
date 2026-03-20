@@ -563,6 +563,15 @@ async fn handle_remote_ws_path(browser_ws: WebSocket, remote: RemoteSession, pat
     relay_ws_bidirectional(browser_ws, remote_ws).await;
 }
 
+/// Convert an HTTP(S) base URL to its WebSocket equivalent.
+fn to_ws_base(base_url: &str) -> String {
+    if base_url.starts_with("https://") {
+        base_url.replacen("https://", "wss://", 1)
+    } else {
+        base_url.replacen("http://", "ws://", 1)
+    }
+}
+
 /// Sanitize a proxy path to prevent path traversal attacks.
 /// Removes `..` segments that could escape the `/fwd/` scope.
 fn sanitize_proxy_path(path: &str) -> String {
@@ -1610,7 +1619,7 @@ pub async fn relay_chat_ws_handler(
             .on_upgrade(move |socket| handle_remote_ws_path(socket, target, chat_path))
             .into_response(),
         RelayResolve::Client(rc) => {
-            let ws_base = rc.relay.base_url.replacen("https://", "wss://", 1);
+            let ws_base = to_ws_base(&rc.relay.base_url);
             let relay_ws_url = if let Some(q) = &query {
                 format!("{ws_base}/api/relay/{}/chat-ws?{q}", rc.relay_session_id)
             } else {

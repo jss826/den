@@ -229,10 +229,11 @@ impl ChatManager {
             if path.is_dir() {
                 Some(dir.to_string())
             } else {
+                tracing::warn!("Chat session cwd does not exist: {dir}");
                 self.sessions.write().await.remove(&id);
-                return Err(ChatError::SpawnFailed(format!(
-                    "directory does not exist: {dir}"
-                )));
+                return Err(ChatError::SpawnFailed(
+                    "specified directory does not exist".to_string(),
+                ));
             }
         } else {
             None
@@ -294,8 +295,7 @@ impl ChatManager {
             while let Ok(Some(line)) = lines.next_line().await {
                 // Extract claude_session_id from system init event
                 if let Some(sess) = sess_weak.upgrade() {
-                    extract_claude_session_id(&sess, &line).await;
-                    update_session_state(&sess, &line);
+                    process_stdout_event(&sess, &line).await;
 
                     // Cap history to prevent unbounded growth
                     let mut hist = sess.history.lock().await;
@@ -617,56 +617,57 @@ impl ChatSession {
     }
 }
 
-/// Update session state based on stream-json events.
-fn update_session_state(session: &ChatSession, line: &str) {
-    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-        let new_state = match event.get("type").and_then(|t| t.as_str()) {
-            Some("assistant") => {
-                // Determine sub-state from content blocks
-                if let Some(content) = event
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_array())
+/// F014: Process stdout event — extract session ID and update state with a single parse.
+async fn process_stdout_event(session: &ChatSession, line: &str) {
+    let event = match serde_json::from_str::<serde_json::Value>(line) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let event_type = event.get("type").and_then(|t| t.as_str());
+
+    // Extract claude_session_id from system init event
+    if event_type == Some("system") {
+        let has_id = session.claude_session_id.lock().await.is_some();
+        if !has_id
+            && event.get("subtype").and_then(|t| t.as_str()) == Some("init")
+            && let Some(sid) = event.get("session_id").and_then(|s| s.as_str())
+        {
+            *session.claude_session_id.lock().await = Some(sid.to_string());
+            tracing::debug!("Captured claude session_id: {sid}");
+        }
+        return;
+    }
+
+    // Update session state
+    let new_state = match event_type {
+        Some("assistant") => {
+            if let Some(content) = event
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
+                if content
+                    .iter()
+                    .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"))
                 {
-                    if content
-                        .iter()
-                        .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"))
-                    {
-                        SessionState::Thinking
-                    } else if content
-                        .iter()
-                        .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
-                    {
-                        SessionState::ToolUse
-                    } else {
-                        SessionState::Streaming
-                    }
+                    SessionState::Thinking
+                } else if content
+                    .iter()
+                    .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                {
+                    SessionState::ToolUse
                 } else {
                     SessionState::Streaming
                 }
+            } else {
+                SessionState::Streaming
             }
-            Some("result") => SessionState::Idle,
-            _ => return,
-        };
-        session.state.store(new_state.as_u8(), Ordering::Release);
-    }
-}
-
-/// Extract claude session ID from system init event.
-async fn extract_claude_session_id(session: &ChatSession, line: &str) {
-    // Only try if we haven't extracted it yet
-    let has_id = session.claude_session_id.lock().await.is_some();
-    if has_id {
-        return;
-    }
-    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line)
-        && event.get("type").and_then(|t| t.as_str()) == Some("system")
-        && event.get("subtype").and_then(|t| t.as_str()) == Some("init")
-        && let Some(sid) = event.get("session_id").and_then(|s| s.as_str())
-    {
-        *session.claude_session_id.lock().await = Some(sid.to_string());
-        tracing::debug!("Captured claude session_id: {sid}");
-    }
+        }
+        Some("result") => SessionState::Idle,
+        _ => return,
+    };
+    session.state.store(new_state.as_u8(), Ordering::Release);
 }
 
 /// F004: Estimate history entry count from raw JSON without full deserialization.

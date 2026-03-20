@@ -72,6 +72,33 @@ const DenChat = (() => {
       if (!cwdBar.hidden) cwdInput.focus();
     });
 
+    // Desktop sidebar toggle (F011)
+    const treeToggle = document.getElementById('chat-tree-toggle');
+    const chatSidebar = document.querySelector('.chat-sidebar');
+    if (treeToggle && chatSidebar) {
+      const wasCollapsed = localStorage.getItem('chat-sidebar-collapsed') === 'true';
+      if (wasCollapsed) chatSidebar.classList.add('collapsed');
+      treeToggle.addEventListener('click', () => {
+        chatSidebar.classList.toggle('collapsed');
+        localStorage.setItem('chat-sidebar-collapsed', String(chatSidebar.classList.contains('collapsed')));
+      });
+    }
+
+    // Listen for remote connection changes (F002)
+    document.addEventListener('den:remote-changed', (e) => {
+      const { mode, connectionId } = e.detail || {};
+      if (mode === 'den' && connectionId) {
+        const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+        const conn = conns[connectionId];
+        setRemote(connectionId, conn?.type || 'direct');
+      } else {
+        setRemote(null);
+      }
+      disconnectWs();
+      clearMessages();
+      refreshSidebar().then(() => createSession());
+    });
+
     // Request notification permission early
     requestNotificationPermission();
 
@@ -81,8 +108,15 @@ const DenChat = (() => {
     // Load sessions and auto-create a new one
     refreshSidebar().then(() => createSession());
 
-    // Start polling for active session states
+    // Start polling for active session states (pauses when hidden)
     startPolling();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+      }
+    });
   }
 
   // ── Remote-aware URL helpers ──
@@ -91,9 +125,9 @@ const DenChat = (() => {
   let chatRemoteType = null; // 'direct' or 'relay'
 
   function getApiBase() {
-    if (!chatRemoteId) return '';
-    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}`;
-    return `/api/remote/${chatRemoteId}`;
+    if (!chatRemoteId) return '/api';
+    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}/chat`;
+    return `/api/remote/${chatRemoteId}/chat`;
   }
 
   function getChatWsUrl(sid) {
@@ -168,13 +202,13 @@ const DenChat = (() => {
 
     try {
       const [activeResp, historyResp] = await Promise.all([
-        fetch(`${base}/api/chat/sessions`, { credentials: 'same-origin' }),
-        fetch(`${base}/api/chat/history`, { credentials: 'same-origin' }),
+        fetch(`${base}/chat/sessions`, { credentials: 'same-origin' }),
+        fetch(`${base}/chat/history`, { credentials: 'same-origin' }),
       ]);
       if (activeResp.ok) activeSessions = await activeResp.json();
       if (historyResp.ok) historySessions = await historyResp.json();
-    } catch {
-      // Silently ignore
+    } catch (e) {
+      console.warn('refreshSidebar failed:', e); // F008
     }
 
     renderSessionList(activeSessions, historySessions);
@@ -345,15 +379,20 @@ const DenChat = (() => {
     }
   }
 
+  let pollInFlight = false;
   async function pollActiveSessions() {
+    if (pollInFlight) return; // F015: prevent overlapping polls
+    pollInFlight = true;
     const base = getApiBase();
     try {
-      const resp = await fetch(`${base}/api/chat/sessions`, { credentials: 'same-origin' });
+      const resp = await fetch(`${base}/chat/sessions`, { credentials: 'same-origin' });
       if (!resp.ok) return;
       const sessions = await resp.json();
       updateActiveStates(sessions);
-    } catch {
-      // Silently ignore
+    } catch (e) {
+      console.warn('Chat poll failed:', e); // F008
+    } finally {
+      pollInFlight = false;
     }
   }
 
@@ -387,7 +426,7 @@ const DenChat = (() => {
     await createSession();
   }
 
-  async function switchToActiveSession(id) {
+  function switchToActiveSession(id) {
     if (id === sessionId) return;
     disconnectWs();
     clearMessages();
@@ -411,7 +450,7 @@ const DenChat = (() => {
 
     // Load persisted history for display
     try {
-      const histResp = await fetch(`${base}/api/chat/history/${encodeURIComponent(persistedId)}`, {
+      const histResp = await fetch(`${base}/chat/history/${encodeURIComponent(persistedId)}`, {
         credentials: 'same-origin',
       });
       if (histResp.ok) {
@@ -428,7 +467,7 @@ const DenChat = (() => {
 
     // Create a new active session with --resume
     try {
-      const resp = await fetch(`${base}/api/chat/sessions`, {
+      const resp = await fetch(`${base}/chat/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -456,7 +495,7 @@ const DenChat = (() => {
   async function destroyActiveSession(id) {
     const base = getApiBase();
     try {
-      const resp = await fetch(`${base}/api/chat/sessions/${encodeURIComponent(id)}`, {
+      const resp = await fetch(`${base}/chat/sessions/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -466,8 +505,11 @@ const DenChat = (() => {
           clearMessages();
         }
         refreshSidebar();
+      } else {
+        appendSystem('Failed to destroy session.'); // F007
       }
-    } catch {
+    } catch (e) {
+      console.warn('destroyActiveSession failed:', e); // F008
       appendSystem('Failed to destroy session.');
     }
   }
@@ -475,7 +517,7 @@ const DenChat = (() => {
   async function deleteHistorySession(id) {
     const base = getApiBase();
     try {
-      const resp = await fetch(`${base}/api/chat/history/${encodeURIComponent(id)}`, {
+      const resp = await fetch(`${base}/chat/history/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
@@ -498,7 +540,7 @@ const DenChat = (() => {
       const body = {};
       if (cwd) body.cwd = cwd;
 
-      const resp = await fetch(`${base}/api/chat/sessions`, {
+      const resp = await fetch(`${base}/chat/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -634,9 +676,15 @@ const DenChat = (() => {
     } else if (event.type === 'result') {
       currentSessionState = 'idle';
     }
-    // Update sidebar indicator for current session immediately
-    const el = sessionListEl && sessionListEl.querySelector(`.chat-session-item[data-session-id="${sessionId}"] .chat-session-state`);
-    if (el) el.dataset.state = currentSessionState;
+    // Update sidebar indicator for current session immediately (F003/F012: avoid querySelector injection)
+    if (!sessionId || !sessionListEl) return;
+    for (const item of sessionListEl.querySelectorAll('.chat-session-item')) {
+      if (item.dataset.sessionId === sessionId) {
+        const stateEl = item.querySelector('.chat-session-state');
+        if (stateEl) stateEl.dataset.state = currentSessionState;
+        break;
+      }
+    }
   }
 
   function handleSystemEvent(event) {
