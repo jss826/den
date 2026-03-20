@@ -101,6 +101,8 @@ pub struct PersistedSession {
     pub history: Vec<String>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// Lightweight metadata for listing persisted sessions without loading full history.
@@ -112,6 +114,8 @@ struct PersistedSessionMeta {
     last_active: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
     // history is skipped during deserialization — we count from the raw JSON instead
 }
 
@@ -123,6 +127,7 @@ pub struct PersistedSessionInfo {
     pub last_active: chrono::DateTime<chrono::Utc>,
     pub message_count: usize,
     pub name: Option<String>,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -437,6 +442,7 @@ impl ChatManager {
                     last_active: meta.last_active,
                     message_count,
                     name: meta.name,
+                    cwd: meta.cwd,
                 });
             }
         }
@@ -659,6 +665,7 @@ impl ChatSession {
             last_active: chrono::Utc::now(),
             history,
             name: session_name,
+            cwd: self.cwd.clone(),
         };
         let path = self.chat_dir.join(format!("{}.json", self.id));
         let tmp_path = self.chat_dir.join(format!("{}.json.tmp", self.id));

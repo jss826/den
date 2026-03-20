@@ -534,7 +534,7 @@ pub async fn remote_proxy_catch_all(
 
 /// Generic WebSocket relay to a specific path on the remote Den.
 async fn handle_remote_ws_path(browser_ws: WebSocket, remote: RemoteSession, path: String) {
-    let ws_base = remote.base_url.replacen("https://", "wss://", 1);
+    let ws_base = to_ws_base(&remote.base_url);
     let remote_url = format!("{}{path}", ws_base.trim_end_matches('/'));
 
     let mut request = match remote_url.into_client_request() {
@@ -760,7 +760,7 @@ fn extract_cookie_from_response(response: &reqwest::Response, name: &str) -> Opt
 }
 
 async fn handle_remote_ws(browser_ws: WebSocket, remote: RemoteSession, query: Option<String>) {
-    let ws_base = remote.base_url.replacen("https://", "wss://", 1);
+    let ws_base = to_ws_base(&remote.base_url);
     let remote_url = match query.as_deref() {
         Some(q) if !q.is_empty() => format!("{ws_base}/api/ws?{q}"),
         _ => format!("{ws_base}/api/ws"),
@@ -1652,7 +1652,7 @@ pub async fn relay_ws_handler(
             .on_upgrade(move |socket| handle_remote_ws(socket, target, query))
             .into_response(),
         RelayResolve::Client(rc) => {
-            let ws_base = rc.relay.base_url.replacen("https://", "wss://", 1);
+            let ws_base = to_ws_base(&rc.relay.base_url);
             let relay_ws_url = match query.as_deref() {
                 Some(q) if !q.is_empty() => {
                     format!("{ws_base}/api/relay/{}/ws?{q}", rc.relay_session_id)
