@@ -96,13 +96,14 @@ async fn main() {
     let (app, app_state) = den::create_app(config, registry, store, tls_runtime.as_ref());
 
     // SSH サーバー（opt-in: DEN_SSH_PORT 設定時のみ起動）
-    if let Some(ssh_port) = ssh_port {
+    // JoinHandle を保持して graceful shutdown 時に abort する
+    let ssh_handle = if let Some(ssh_port) = ssh_port {
         let ssh_registry = Arc::clone(&app_state.registry);
         let ssh_password = app_state.config.password.clone();
         let ssh_data_dir = app_state.config.data_dir.clone();
         let ssh_bind = app_state.config.bind_address.clone();
         let ssh_store = app_state.store.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             if let Err(e) = den::ssh::server::run(
                 ssh_registry,
                 ssh_password,
@@ -115,8 +116,10 @@ async fn main() {
             {
                 tracing::error!("SSH server error: {e}");
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     let listener = den::bind_with_retry(&bind_address, port)
         .await
@@ -146,8 +149,17 @@ async fn main() {
             .unwrap();
     }
 
+    // Abort SSH server task so its TCP listener is released before restart
+    if let Some(handle) = ssh_handle {
+        handle.abort();
+        let _ = handle.await;
+        tracing::info!("SSH server stopped.");
+    }
+
     // After graceful shutdown, check if we need to restart (update applied)
     if den::update::is_restart_requested() {
+        // Brief delay to allow OS to release sockets (Windows TIME_WAIT)
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         den::update::spawn_and_exit();
     }
 }
