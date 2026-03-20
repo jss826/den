@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
-  const allModals = ['confirm-modal', 'prompt-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
+  const allModals = ['confirm-modal', 'prompt-modal', 'choose-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
 
   // Esc キーで開いているモーダルを閉じる + Ctrl+1/2 タブ切替
   document.addEventListener('keydown', (e) => {

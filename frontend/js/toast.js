@@ -4,6 +4,7 @@ const Toast = (() => {
   let container = null;
   let confirmModal = null;
   let promptModal = null;
+  let chooseModal = null;
 
   /** フォーカストラップ: Tab/Shift+Tab でダイアログ内要素を循環 */
   function trapFocus(modalEl, origHandler) {
@@ -69,6 +70,25 @@ const Toast = (() => {
         '</div>' +
       '</div>';
     document.body.appendChild(promptModal);
+
+    // Choose dialog (3-button: e.g. Save / Discard / Cancel)
+    chooseModal = document.createElement('div');
+    chooseModal.id = 'choose-modal';
+    chooseModal.className = 'modal';
+    chooseModal.hidden = true;
+    chooseModal.setAttribute('role', 'dialog');
+    chooseModal.setAttribute('aria-modal', 'true');
+    chooseModal.setAttribute('aria-label', 'Choose action');
+    chooseModal.innerHTML =
+      '<div class="modal-content confirm-dialog">' +
+        '<p id="choose-message"></p>' +
+        '<div class="modal-actions">' +
+          '<button id="choose-cancel" class="modal-btn">Cancel</button>' +
+          '<button id="choose-secondary" class="modal-btn">Discard</button>' +
+          '<button id="choose-primary" class="modal-btn primary">Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(chooseModal);
   }
 
   function show(message, type = 'info', duration = 3000, opts) {
@@ -187,5 +207,51 @@ const Toast = (() => {
     });
   }
 
-  return { show, success, error, info, warn, confirm, prompt };
+  /**
+   * 3-choice dialog — returns Promise<'primary'|'secondary'|null>
+   * primary = first action (e.g. Save), secondary = second action (e.g. Discard), null = Cancel
+   */
+  function choose(message, { primary = 'Save', secondary = 'Discard', cancel = 'Cancel' } = {}) {
+    ensureInit();
+    return new Promise((resolve) => {
+      chooseModal.querySelector('#choose-message').textContent = message;
+      chooseModal.querySelector('#choose-primary').textContent = primary;
+      chooseModal.querySelector('#choose-secondary').textContent = secondary;
+      chooseModal.querySelector('#choose-cancel').textContent = cancel;
+      chooseModal.hidden = false;
+
+      const primaryBtn = chooseModal.querySelector('#choose-primary');
+      const secondaryBtn = chooseModal.querySelector('#choose-secondary');
+      const cancelBtn = chooseModal.querySelector('#choose-cancel');
+
+      function cleanup(result) {
+        chooseModal.hidden = true;
+        primaryBtn.removeEventListener('click', onPrimary);
+        secondaryBtn.removeEventListener('click', onSecondary);
+        cancelBtn.removeEventListener('click', onCancel);
+        chooseModal.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(result);
+      }
+
+      function onPrimary() { cleanup('primary'); }
+      function onSecondary() { cleanup('secondary'); }
+      function onCancel() { cleanup(null); }
+      function onBackdrop(e) { if (e.target === chooseModal) cleanup(null); }
+      function onKeyBase(e) {
+        if (e.key === 'Escape') cleanup(null);
+      }
+      const onKey = trapFocus(chooseModal, onKeyBase);
+
+      primaryBtn.addEventListener('click', onPrimary);
+      secondaryBtn.addEventListener('click', onSecondary);
+      cancelBtn.addEventListener('click', onCancel);
+      chooseModal.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onKey);
+
+      primaryBtn.focus();
+    });
+  }
+
+  return { show, success, error, info, warn, confirm, prompt, choose };
 })();

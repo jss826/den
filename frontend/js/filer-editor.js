@@ -15,6 +15,7 @@ const FilerEditor = (() => {
   let statusLang;
   let statusCursor;
   let statusSize;
+  let saveBtn;
 
   function init(editorEl, tabsEl) {
     editorContainer = editorEl;
@@ -38,6 +39,10 @@ const FilerEditor = (() => {
     statusLang = document.getElementById('filer-status-lang');
     statusCursor = document.getElementById('filer-status-cursor');
     statusSize = document.getElementById('filer-status-size');
+
+    // Save button
+    saveBtn = document.getElementById('filer-save-btn');
+    if (saveBtn) saveBtn.addEventListener('click', () => saveActive());
 
     // Ctrl+S 保存
     document.addEventListener('keydown', (e) => {
@@ -315,9 +320,21 @@ const FilerEditor = (() => {
     if (!file) return;
 
     if (file.dirty) {
-      if (!(await Toast.confirm(`"${fileName(filePath)}" has unsaved changes. Close anyway?`))) {
-        return;
+      const choice = await Toast.choose(
+        `"${fileName(filePath)}" has unsaved changes.`,
+        { primary: 'Save', secondary: 'Discard', cancel: 'Cancel' }
+      );
+      if (choice === null) return; // Cancel
+      if (choice === 'primary') {
+        // Save before closing
+        const prev = activePath;
+        activePath = filePath;
+        await saveActive();
+        activePath = prev;
+        // If save failed (still dirty), abort close
+        if (file.dirty) return;
       }
+      // 'secondary' = Discard — continue to close
     }
 
     // エディタ/プレビュー破棄
@@ -453,6 +470,7 @@ const FilerEditor = (() => {
       activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
     updateScrollButtons();
+    updateSaveButton();
   }
 
   function updateScrollButtons() {
@@ -461,6 +479,12 @@ const FilerEditor = (() => {
     const hasOverflow = scrollWidth > clientWidth;
     scrollLeftBtn.hidden = !hasOverflow || scrollLeft <= 0;
     scrollRightBtn.hidden = !hasOverflow || scrollLeft >= scrollWidth - clientWidth - 1;
+  }
+
+  function updateSaveButton() {
+    if (!saveBtn) return;
+    const file = activePath && openFiles.get(activePath);
+    saveBtn.hidden = !(file && file.dirty);
   }
 
   function hasUnsavedChanges() {
