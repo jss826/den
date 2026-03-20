@@ -118,6 +118,11 @@
           <button id="chat-new-btn" class="chat-bar-btn" type="button" aria-label="New session" data-tooltip="New Session">+</button>
           <button id="chat-resume-btn" class="chat-bar-btn" type="button" aria-label="Resume session" data-tooltip="Resume" hidden>Resume</button>
           <button id="chat-delete-btn" class="chat-bar-btn chat-bar-btn-danger" type="button" aria-label="Delete session" data-tooltip="Delete" hidden>Del</button>
+          <span class="chat-bar-spacer"></span>
+          <button class="chat-bar-btn" type="button" aria-label="Collapse all" data-tooltip="Collapse all" onclick="DenChat.toggleAllDetails(false)">&minus;</button>
+          <button class="chat-bar-btn" type="button" aria-label="Expand all" data-tooltip="Expand all" onclick="DenChat.toggleAllDetails(true)">+</button>
+          <button class="chat-bar-btn" type="button" aria-label="Export Markdown" data-tooltip="Export MD" onclick="DenChat.exportConversation('md')">MD</button>
+          <button class="chat-bar-btn" type="button" aria-label="Export JSON" data-tooltip="Export JSON" onclick="DenChat.exportConversation('json')">JSON</button>
         </div>
         <div id="chat-messages" class="chat-messages"></div>
         <div class="chat-input-area">

@@ -33,6 +33,11 @@ const DenChat = (() => {
   // ── Push notification state ──
   let notificationsEnabled = false;
 
+  // ── Cumulative cost state (#58) ──
+  let sessionCostUsd = 0;
+  let sessionInputTokens = 0;
+  let sessionOutputTokens = 0;
+
   // ── Init ──
   function init() {
     messagesEl = document.getElementById('chat-messages');
@@ -50,6 +55,7 @@ const DenChat = (() => {
         sendMessage();
       }
     });
+    inputEl.addEventListener('input', autoResizeInput);
 
     // Session bar controls
     newBtn.addEventListener('click', () => startNewSession());
@@ -311,6 +317,9 @@ const DenChat = (() => {
     if (messagesEl) messagesEl.innerHTML = '';
     currentAssistantBubble = null;
     currentThinkingBlock = null;
+    sessionCostUsd = 0;
+    sessionInputTokens = 0;
+    sessionOutputTokens = 0;
   }
 
   // ── Event handling ──
@@ -407,7 +416,11 @@ const DenChat = (() => {
       const inp = tokens.input_tokens || 0;
       const out = tokens.output_tokens || 0;
       const cached = tokens.cache_read_input_tokens || 0;
-      appendCost(`$${cost} | in:${inp} out:${out} cached:${cached}`);
+      // Cumulative tracking (#58)
+      sessionCostUsd += event.total_cost_usd;
+      sessionInputTokens += inp;
+      sessionOutputTokens += out;
+      appendCost(`$${cost} (total: $${sessionCostUsd.toFixed(4)}) | in:${inp} out:${out} cached:${cached}`);
     }
 
     // Push notification for completion
@@ -458,6 +471,7 @@ const DenChat = (() => {
             currentAssistantBubble.innerHTML = DenMarkdown.sanitize(
               DenMarkdown.renderMarkdown(currentAssistantBubble._rawText)
             );
+            injectCopyButtons(currentAssistantBubble);
           } else {
             currentAssistantBubble.textContent = currentAssistantBubble._rawText;
           }
@@ -705,6 +719,7 @@ const DenChat = (() => {
     appendUserMessage(text);
     ws.send(JSON.stringify({ type: 'message', text }));
     inputEl.value = '';
+    resetInputHeight();
     isStreaming = true;
     currentAssistantBubble = null;
     currentThinkingBlock = null;
@@ -718,6 +733,95 @@ const DenChat = (() => {
 
   function scrollToBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ── Textarea auto-resize (#60) ──
+  function autoResizeInput() {
+    inputEl.style.height = 'auto';
+    const maxRows = 5;
+    const lineHeight = parseInt(getComputedStyle(inputEl).lineHeight) || 20;
+    const maxHeight = lineHeight * maxRows;
+    inputEl.style.height = Math.min(inputEl.scrollHeight, maxHeight) + 'px';
+  }
+
+  function resetInputHeight() {
+    inputEl.style.height = '';
+  }
+
+  // ── Code block copy buttons (#61) ──
+  function injectCopyButtons(container) {
+    for (const pre of container.querySelectorAll('pre')) {
+      if (pre.querySelector('.code-copy-btn')) continue;
+      const btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.textContent = 'Copy';
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        const code = pre.querySelector('code');
+        const text = code ? code.textContent : pre.textContent;
+        navigator.clipboard.writeText(text).then(() => {
+          btn.textContent = '\u2713';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+        });
+      });
+      pre.style.position = 'relative';
+      pre.appendChild(btn);
+    }
+  }
+
+  // ── Bulk collapse/expand (#62) ──
+  function toggleAllDetails(expand) {
+    for (const d of messagesEl.querySelectorAll('details')) {
+      d.open = expand;
+    }
+  }
+
+  // ── Export conversation (#59) ──
+  function exportConversation(format) {
+    const msgs = messagesEl.querySelectorAll('.chat-msg');
+    let content, filename, mime;
+
+    if (format === 'json') {
+      const items = [];
+      for (const el of msgs) {
+        const role = el.classList.contains('chat-user') ? 'user'
+          : el.classList.contains('chat-assistant') ? 'assistant'
+          : el.classList.contains('chat-system') ? 'system'
+          : el.classList.contains('chat-cost') ? 'cost'
+          : el.classList.contains('chat-thinking') ? 'thinking'
+          : 'tool';
+        items.push({ role, text: el.textContent });
+      }
+      content = JSON.stringify(items, null, 2);
+      filename = `chat-${sessionId || 'unknown'}-${new Date().toISOString().slice(0, 10)}.json`;
+      mime = 'application/json';
+    } else {
+      const lines = [];
+      for (const el of msgs) {
+        if (el.classList.contains('chat-user')) {
+          lines.push('## User\n\n' + el.textContent + '\n');
+        } else if (el.classList.contains('chat-assistant')) {
+          lines.push('## Assistant\n\n' + (el._rawText || el.textContent) + '\n');
+        } else if (el.classList.contains('chat-cost')) {
+          lines.push('> ' + el.textContent + '\n');
+        } else if (el.classList.contains('chat-system')) {
+          lines.push('*' + el.textContent + '*\n');
+        } else {
+          lines.push('### Tool\n\n```\n' + el.textContent + '\n```\n');
+        }
+      }
+      content = lines.join('\n---\n\n');
+      filename = `chat-${sessionId || 'unknown'}-${new Date().toISOString().slice(0, 10)}.md`;
+      mime = 'text/markdown';
+    }
+
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ── Mobile viewport handling ──
@@ -741,5 +845,7 @@ const DenChat = (() => {
   // ── Public API ──
   return {
     init,
+    toggleAllDetails,
+    exportConversation,
   };
 })();

@@ -801,6 +801,34 @@ html, body {
   color: #f44;
 }
 
+/* Chat bar spacer — pushes toolbar buttons to the right */
+.chat-bar-spacer {
+  flex: 1;
+}
+
+/* Code block copy button (#61) */
+.code-copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--bg, #181818);
+  color: var(--dim, #888);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+pre:hover .code-copy-btn {
+  opacity: 1;
+}
+.code-copy-btn:hover {
+  color: var(--fg, #ccc);
+  background: var(--pane-bg, #1e1e1e);
+}
+
 /* Mobile optimization for Chat */
 @media (max-width: 768px) {
   .chat-msg {
