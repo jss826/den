@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncWriteExt;
@@ -27,8 +27,6 @@ pub struct ChatSession {
     child: Mutex<Option<Child>>,
     /// Capped event history for replay on reconnect.
     history: Mutex<Vec<String>>,
-    /// Tools the user has pre-approved for this session ("always allow").
-    pre_approved_tools: Mutex<HashSet<String>>,
 }
 
 #[derive(serde::Serialize)]
@@ -130,7 +128,6 @@ impl ChatManager {
             output_tx: output_tx.clone(),
             child: Mutex::new(Some(child)),
             history: Mutex::new(Vec::new()),
-            pre_approved_tools: Mutex::new(HashSet::new()),
         });
 
         // Spawn stdout reader task
@@ -225,7 +222,6 @@ impl ChatSession {
             output_tx: tx,
             child: Mutex::new(None),
             history: Mutex::new(Vec::new()),
-            pre_approved_tools: Mutex::new(HashSet::new()),
         }
     }
 
@@ -286,14 +282,6 @@ impl ChatSession {
     /// Get event history for replay on reconnect.
     pub async fn history(&self) -> Vec<String> {
         self.history.lock().await.clone()
-    }
-
-    /// Add a tool to the pre-approved set for this session.
-    pub async fn approve_tool(&self, tool_name: &str) {
-        self.pre_approved_tools
-            .lock()
-            .await
-            .insert(tool_name.to_string());
     }
 
     /// Kill the child process.

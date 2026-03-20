@@ -632,25 +632,25 @@ html, body {
   color: #f44;
 }
 
-/* Approval card for dangerous tools */
-.chat-approval {
+/* Notification card for modifying tools (not blocking — tools already executed in -p mode) */
+.chat-tool-notification {
   border-left: 3px solid var(--accent, #4a9eff);
   background: rgba(74, 158, 255, 0.05);
 }
-.chat-approval-header {
+.chat-tool-notification-header {
   padding: 6px 10px;
   font-family: monospace;
   font-weight: bold;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 6px 6px 0 0;
 }
-.chat-approval-actions {
+.chat-tool-notification-actions {
   display: flex;
   gap: 8px;
   padding: 8px 10px;
   border-top: 1px solid var(--border, #333);
 }
-.chat-approval-btn {
+.chat-notification-btn {
   padding: 4px 12px;
   border: 1px solid var(--border, #333);
   border-radius: 4px;
@@ -659,18 +659,18 @@ html, body {
   font-size: 12px;
   cursor: pointer;
 }
-.chat-approval-btn:hover {
+.chat-notification-btn:hover {
   background: rgba(255, 255, 255, 0.1);
 }
-.chat-approval-btn.primary {
+.chat-notification-btn.primary {
   background: var(--accent, #4a9eff);
   color: #fff;
   border-color: var(--accent, #4a9eff);
 }
-.chat-approval-btn.primary:hover {
+.chat-notification-btn.primary:hover {
   opacity: 0.9;
 }
-.chat-approval-resolved {
+.chat-tool-notification-resolved {
   opacity: 0.7;
 }
 

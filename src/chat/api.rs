@@ -73,7 +73,7 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // F008: subscribe BEFORE reading history to prevent message gaps
+    // Subscribe BEFORE reading history to prevent message gaps
     let mut output_rx = session.subscribe();
 
     // Send replay history
@@ -84,7 +84,7 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
         }
     }
 
-    // Claude stdout → WebSocket (F003: check alive to avoid hanging)
+    // Claude stdout → WebSocket
     let session_for_read = Arc::clone(&session);
     let claude_to_ws = async move {
         loop {
@@ -121,29 +121,41 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
         }
     };
 
-    // WebSocket → Claude stdin (F007: removed Raw command)
+    // WebSocket → Claude stdin
     let session_for_write = Arc::clone(&session);
     let ws_to_claude = async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Text(text) => {
-                    if let Ok(cmd) = serde_json::from_str::<ChatWsCommand>(&text) {
-                        match cmd {
+                    match serde_json::from_str::<ChatWsCommand>(&text) {
+                        Ok(cmd) => match cmd {
                             ChatWsCommand::Message { text } => {
                                 if let Err(e) = session_for_write.send_message(&text).await {
                                     tracing::warn!("Chat send_message failed: {e}");
                                     break;
                                 }
                             }
-                            ChatWsCommand::ApproveTool { tool_name } => {
-                                session_for_write.approve_tool(&tool_name).await;
-                            }
-                            ChatWsCommand::AskResponse { text } => {
+                            // F003: AskResponse includes tool_use_id for protocol correctness
+                            ChatWsCommand::AskResponse { text, tool_use_id } => {
+                                // F008/F010: Distinguish ask_response from regular message in logs
+                                tracing::debug!(
+                                    target: "chat",
+                                    tool_use_id = tool_use_id.as_deref().unwrap_or("none"),
+                                    "ask_response received"
+                                );
                                 if let Err(e) = session_for_write.send_message(&text).await {
                                     tracing::warn!("Chat ask_response failed: {e}");
                                     break;
                                 }
                             }
+                        },
+                        // F007: Log WS command parse failures for observability
+                        Err(e) => {
+                            tracing::debug!(
+                                target: "chat",
+                                error = %e,
+                                "Failed to parse chat WS command"
+                            );
                         }
                     }
                 }
@@ -166,12 +178,13 @@ enum ChatWsCommand {
     /// Send a user message (will be wrapped in stream-json format).
     #[serde(rename = "message")]
     Message { text: String },
-    /// Pre-approve a tool for this session ("always allow").
-    #[serde(rename = "approve_tool")]
-    ApproveTool { tool_name: String },
     /// Respond to an AskUserQuestion (sent as a follow-up user message).
     #[serde(rename = "ask_response")]
-    AskResponse { text: String },
+    AskResponse {
+        text: String,
+        /// F003: Tool use ID for protocol correctness (currently informational).
+        tool_use_id: Option<String>,
+    },
 }
 
 fn chat_error_response(e: ChatError) -> axum::response::Response {

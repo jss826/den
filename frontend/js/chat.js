@@ -15,12 +15,16 @@ const DenChat = (() => {
   let currentThinkingBlock = null;
   let isStreaming = false;
   let renderPending = false;
+  let thinkingRenderPending = false;
 
-  // ── Approval state ──
-  const DANGEROUS_TOOLS = new Set([
+  // ── Tool notification state ──
+  // Tools that modify files or run commands — shown with expanded notification card.
+  // Note: In -p mode, claude CLI auto-executes tools. These cards are notifications,
+  // not blocking approvals. The user can dismiss or auto-dismiss future notifications.
+  const MODIFYING_TOOLS = new Set([
     'Edit', 'Write', 'MultiEdit', 'Bash', 'NotebookEdit',
   ]);
-  const preApprovedTools = new Set();
+  const autoDismissedTools = new Set();
 
   // ── Init ──
   function init() {
@@ -42,8 +46,8 @@ const DenChat = (() => {
 
   // ── Session management ──
   async function createSession() {
-    // Reset pre-approved tools on new session
-    preApprovedTools.clear();
+    // F006: Reset auto-dismissed tools on new session
+    autoDismissedTools.clear();
 
     try {
       const resp = await fetch('/api/chat/sessions', {
@@ -84,6 +88,8 @@ const DenChat = (() => {
       appendSystem('Session ended.');
       ws = null;
       isStreaming = false;
+      // F006: Clear auto-dismissed tools on disconnect
+      autoDismissedTools.clear();
       updateInputState();
     };
 
@@ -213,7 +219,6 @@ const DenChat = (() => {
       messagesEl.appendChild(currentAssistantBubble);
     }
     currentAssistantBubble._rawText += text;
-    // F005 + F009: correct API + rAF batch rendering
     if (!renderPending) {
       renderPending = true;
       requestAnimationFrame(() => {
@@ -232,6 +237,7 @@ const DenChat = (() => {
     }
   }
 
+  // F005: rAF batch rendering for thinking blocks (same pattern as appendAssistantText)
   function appendThinking(text) {
     if (!currentThinkingBlock) {
       const details = document.createElement('details');
@@ -246,7 +252,13 @@ const DenChat = (() => {
       currentThinkingBlock = content;
     }
     currentThinkingBlock.textContent += text;
-    scrollToBottom();
+    if (!thinkingRenderPending) {
+      thinkingRenderPending = true;
+      requestAnimationFrame(() => {
+        thinkingRenderPending = false;
+        scrollToBottom();
+      });
+    }
   }
 
   function appendToolUse(block) {
@@ -254,17 +266,18 @@ const DenChat = (() => {
     currentAssistantBubble = null;
     currentThinkingBlock = null;
 
-    const isDangerous = DANGEROUS_TOOLS.has(block.name);
-    const isApproved = preApprovedTools.has(block.name);
+    const isModifying = MODIFYING_TOOLS.has(block.name);
+    const isDismissed = autoDismissedTools.has(block.name);
 
-    if (isDangerous && !isApproved) {
-      appendApprovalCard(block);
+    // F001: Notification card (not approval — tools already executed in -p mode)
+    if (isModifying && !isDismissed) {
+      appendToolNotification(block);
     } else {
       appendToolBlock(block);
     }
   }
 
-  /** Standard collapsible tool block (safe or pre-approved tools). */
+  /** Standard collapsible tool block (safe or auto-dismissed tools). */
   function appendToolBlock(block) {
     const details = document.createElement('details');
     details.className = 'chat-msg chat-tool';
@@ -283,15 +296,19 @@ const DenChat = (() => {
     scrollToBottom();
   }
 
-  /** Approval card for dangerous tools — shown expanded with action buttons. */
-  function appendApprovalCard(block) {
+  /**
+   * F001: Notification card for modifying tools — shown expanded with dismiss buttons.
+   * This is NOT a blocking approval. In -p mode, claude CLI auto-executes tools.
+   * The card informs the user what was executed and lets them control future notifications.
+   */
+  function appendToolNotification(block) {
     const card = document.createElement('div');
-    card.className = 'chat-msg chat-tool chat-approval';
+    card.className = 'chat-msg chat-tool chat-tool-notification';
     card.id = 'tool-' + block.id;
 
     // Header
     const header = document.createElement('div');
-    header.className = 'chat-approval-header';
+    header.className = 'chat-tool-notification-header';
     header.textContent = block.name;
     card.appendChild(header);
 
@@ -303,32 +320,29 @@ const DenChat = (() => {
 
     // Action buttons
     const actions = document.createElement('div');
-    actions.className = 'chat-approval-actions';
+    actions.className = 'chat-tool-notification-actions';
 
-    const allowOnce = document.createElement('button');
-    allowOnce.className = 'chat-approval-btn';
-    allowOnce.textContent = 'OK';
-    allowOnce.addEventListener('click', () => {
-      card.classList.remove('chat-approval');
-      card.classList.add('chat-approval-resolved');
+    const dismiss = document.createElement('button');
+    dismiss.className = 'chat-notification-btn';
+    dismiss.textContent = 'Dismiss';
+    dismiss.addEventListener('click', () => {
+      card.classList.remove('chat-tool-notification');
+      card.classList.add('chat-tool-notification-resolved');
       actions.remove();
     });
 
-    const allowAlways = document.createElement('button');
-    allowAlways.className = 'chat-approval-btn primary';
-    allowAlways.textContent = 'Always Allow';
-    allowAlways.addEventListener('click', () => {
-      preApprovedTools.add(block.name);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'approve_tool', tool_name: block.name }));
-      }
-      card.classList.remove('chat-approval');
-      card.classList.add('chat-approval-resolved');
+    const autoDismiss = document.createElement('button');
+    autoDismiss.className = 'chat-notification-btn primary';
+    autoDismiss.textContent = 'Auto-dismiss';
+    autoDismiss.addEventListener('click', () => {
+      autoDismissedTools.add(block.name);
+      card.classList.remove('chat-tool-notification');
+      card.classList.add('chat-tool-notification-resolved');
       actions.remove();
     });
 
-    actions.appendChild(allowOnce);
-    actions.appendChild(allowAlways);
+    actions.appendChild(dismiss);
+    actions.appendChild(autoDismiss);
     card.appendChild(actions);
 
     messagesEl.appendChild(card);
@@ -343,6 +357,8 @@ const DenChat = (() => {
     const card = document.createElement('div');
     card.className = 'chat-msg chat-tool chat-ask-dialog';
     card.id = 'tool-' + block.id;
+    // F003: Store tool_use_id on the card element for submitAskResponse
+    card.dataset.toolUseId = block.id;
 
     // Question text
     const question = (block.input && block.input.question) || 'Claude has a question:';
@@ -358,7 +374,7 @@ const DenChat = (() => {
       optionsEl.className = 'chat-ask-options';
       for (const opt of options) {
         const btn = document.createElement('button');
-        btn.className = 'chat-approval-btn';
+        btn.className = 'chat-notification-btn';
         btn.textContent = opt;
         btn.addEventListener('click', () => {
           submitAskResponse(card, opt);
@@ -385,7 +401,7 @@ const DenChat = (() => {
     });
 
     const sendAsk = document.createElement('button');
-    sendAsk.className = 'chat-approval-btn primary';
+    sendAsk.className = 'chat-notification-btn primary';
     sendAsk.textContent = 'Send';
     sendAsk.addEventListener('click', () => {
       const text = input.value.trim();
@@ -403,9 +419,15 @@ const DenChat = (() => {
 
   /** Submit an AskUserQuestion response via WebSocket. */
   function submitAskResponse(card, answer) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'ask_response', text: answer }));
+    // F002: Only resolve UI if WS send succeeds
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendSystem('Cannot send answer: connection lost.');
+      return;
     }
+    // F003: Include tool_use_id in the response
+    const toolUseId = card.dataset.toolUseId || null;
+    ws.send(JSON.stringify({ type: 'ask_response', text: answer, tool_use_id: toolUseId }));
+
     // Replace card content with resolved state
     card.classList.add('chat-ask-resolved');
     const resolved = document.createElement('div');
