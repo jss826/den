@@ -1,0 +1,173 @@
+use axum::{
+    Json,
+    extract::{
+        Path, Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    http::StatusCode,
+    response::IntoResponse,
+};
+use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+use super::manager::{ChatError, ChatManager};
+use crate::AppState;
+
+// ── REST endpoints ──────────────────────────────────────────────
+
+/// POST /api/chat/sessions — create a new chat session.
+pub async fn create_session(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.chat_manager.create().await {
+        Ok(session) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": session.id })),
+        )
+            .into_response(),
+        Err(e) => chat_error_response(e),
+    }
+}
+
+/// GET /api/chat/sessions — list all chat sessions.
+pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let sessions = state.chat_manager.list().await;
+    Json(sessions).into_response()
+}
+
+/// DELETE /api/chat/sessions/{id} — destroy a chat session.
+pub async fn destroy_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.chat_manager.destroy(&id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => chat_error_response(e),
+    }
+}
+
+// ── WebSocket endpoint ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ChatWsQuery {
+    pub session: String,
+}
+
+/// GET /api/chat/ws?session={id} — WebSocket for chat streaming.
+pub async fn chat_ws_handler(
+    ws: WebSocketUpgrade,
+    Query(query): Query<ChatWsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let chat_manager = Arc::clone(&state.chat_manager);
+    let session_id = query.session;
+
+    ws.on_upgrade(move |socket| handle_chat_socket(socket, chat_manager, session_id))
+}
+
+async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, session_id: String) {
+    let session = match chat_manager.get(&session_id).await {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // F008: subscribe BEFORE reading history to prevent message gaps
+    let mut output_rx = session.subscribe();
+
+    // Send replay history
+    let history = session.history().await;
+    for event in history {
+        if ws_tx.send(Message::Text(event.into())).await.is_err() {
+            return;
+        }
+    }
+
+    // Claude stdout → WebSocket (F003: check alive to avoid hanging)
+    let session_for_read = Arc::clone(&session);
+    let claude_to_ws = async move {
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
+                Ok(Ok(event)) => {
+                    if ws_tx.send(Message::Text(event.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Err(broadcast::error::RecvError::Closed)) => {
+                    let _ = ws_tx
+                        .send(Message::Text(
+                            r#"{"type":"session_ended"}"#.to_string().into(),
+                        ))
+                        .await;
+                    break;
+                }
+                Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+                    tracing::warn!("Chat WS client lagged {n} messages");
+                    continue;
+                }
+                Err(_) => {
+                    // Timeout — check if session is still alive
+                    if !session_for_read.is_alive() {
+                        let _ = ws_tx
+                            .send(Message::Text(
+                                r#"{"type":"session_ended"}"#.to_string().into(),
+                            ))
+                            .await;
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    // WebSocket → Claude stdin (F007: removed Raw command)
+    let session_for_write = Arc::clone(&session);
+    let ws_to_claude = async move {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            match msg {
+                Message::Text(text) => {
+                    if let Ok(cmd) = serde_json::from_str::<ChatWsCommand>(&text) {
+                        let ChatWsCommand::Message { text } = cmd;
+                        if let Err(e) = session_for_write.send_message(&text).await {
+                            tracing::warn!("Chat send_message failed: {e}");
+                            break;
+                        }
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    };
+
+    tokio::select! {
+        _ = claude_to_ws => {},
+        _ = ws_to_claude => {},
+    }
+}
+
+/// WebSocket commands from the frontend.
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum ChatWsCommand {
+    /// Send a user message (will be wrapped in stream-json format).
+    #[serde(rename = "message")]
+    Message { text: String },
+}
+
+fn chat_error_response(e: ChatError) -> axum::response::Response {
+    let (status, msg) = match &e {
+        ChatError::TooManySessions => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
+        ChatError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
+        ChatError::Dead => (StatusCode::GONE, e.to_string()),
+        ChatError::ClaudeNotFound => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "claude CLI is not installed or not in PATH".to_string(),
+        ),
+        ChatError::SpawnFailed(_) | ChatError::WriteFailed(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        }
+    };
+    (status, Json(serde_json::json!({ "error": msg }))).into_response()
+}

@@ -2,6 +2,7 @@ use tokio::net::TcpListener;
 
 pub mod assets;
 pub mod auth;
+pub mod chat;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
@@ -42,6 +43,7 @@ pub struct AppState {
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
+    pub chat_manager: Arc<chat::manager::ChatManager>,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -87,6 +89,7 @@ pub fn create_app_with_secret(
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
+        chat_manager: Arc::new(chat::manager::ChatManager::new()),
     });
 
     // 認証不要のルート
@@ -217,6 +220,16 @@ pub fn create_app_with_secret(
         // WebSocket proxy for forwarded ports
         .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
         .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
+        // Chat API
+        .route(
+            "/api/chat/sessions",
+            get(chat::api::list_sessions).post(chat::api::create_session),
+        )
+        .route(
+            "/api/chat/sessions/{id}",
+            delete(chat::api::destroy_session),
+        )
+        .route("/api/chat/ws", get(chat::api::chat_ws_handler))
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

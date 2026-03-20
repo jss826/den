@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginError = document.getElementById('login-error');
 
   let filerInitialized = false;
+  let chatInitialized = false;
 
   // ログイン処理
   loginForm.addEventListener('submit', async (e) => {
@@ -131,7 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Ctrl+1/2 タブ切替（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !anyModalOpen) {
-      const tabs = { '1': 'terminal', '2': 'filer' };
+      const tabs = { '1': 'terminal', '2': 'filer', '3': 'chat' };
       const tab = tabs[e.key];
       if (tab) {
         e.preventDefault();
@@ -354,6 +355,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ペイン表示切り替え
     document.getElementById('terminal-pane').hidden = tabName !== 'terminal';
     document.getElementById('filer-pane').hidden = tabName !== 'filer';
+    document.getElementById('chat-pane').hidden = tabName !== 'chat';
 
     if (tabName === 'terminal') {
       DenTerminal.fitAndRefresh();
@@ -368,6 +370,12 @@ document.addEventListener('DOMContentLoaded', () => {
       DenFiler.init();
     }
 
+    // Chat 初期化（初回のみ）
+    if (tabName === 'chat' && !chatInitialized) {
+      chatInitialized = true;
+      DenChat.init();
+    }
+
     // ハッシュ更新
     setHash(buildHash(tabName, tabName === 'terminal' ? DenTerminal.getCurrentSession() : null));
   }
@@ -375,7 +383,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Hash routing ---
   let lastSetHash = '';
 
-  const TAB_MAP = { files: 'filer', terminal: 'terminal' };
+  const TAB_MAP = { files: 'filer', terminal: 'terminal', chat: 'chat' };
 
   function parseHash() {
     const hash = location.hash.replace(/^#/, '');
