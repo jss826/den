@@ -25,6 +25,12 @@ pub struct CreateSessionRequest {
     /// Working directory for the new session.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// If true, continue the most recent persisted session (ignored if resume_session_id is set).
+    #[serde(default)]
+    pub continue_last: bool,
+    /// Allowed tools for this session (passed as --allowedTools to claude CLI).
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 /// POST /api/chat/sessions — create a new chat session (optionally resuming).
@@ -32,9 +38,22 @@ pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
+    // Resolve resume ID: explicit > continue_last > none
+    let resume_id = if body.resume_session_id.is_some() {
+        body.resume_session_id.clone()
+    } else if body.continue_last {
+        state.chat_manager.latest_persisted_claude_session_id()
+    } else {
+        None
+    };
+
     match state
         .chat_manager
-        .create(body.resume_session_id.as_deref(), body.cwd.as_deref())
+        .create(
+            resume_id.as_deref(),
+            body.cwd.as_deref(),
+            body.allowed_tools.as_deref(),
+        )
         .await
     {
         Ok(session) => {
@@ -56,6 +75,40 @@ pub async fn create_session(
 pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let sessions = state.chat_manager.list().await;
     Json(sessions).into_response()
+}
+
+/// POST /api/chat/sessions/{id}/stop — interrupt a running chat session.
+pub async fn stop_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.chat_manager.get(&id).await {
+        Ok(session) => {
+            session.interrupt().await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => chat_error_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RenameSessionRequest {
+    pub name: Option<String>,
+}
+
+/// PATCH /api/chat/sessions/{id} — update session metadata (e.g. name).
+pub async fn rename_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameSessionRequest>,
+) -> impl IntoResponse {
+    match state.chat_manager.get(&id).await {
+        Ok(session) => {
+            session.set_name(body.name).await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => chat_error_response(e),
+    }
 }
 
 /// DELETE /api/chat/sessions/{id} — destroy an active chat session.
@@ -107,6 +160,30 @@ pub async fn get_history(
             Json(serde_json::json!({"error": "persisted session not found"})),
         )
             .into_response(),
+    }
+}
+
+/// PATCH /api/chat/history/{id} — rename a persisted session.
+pub async fn rename_history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<RenameSessionRequest>,
+) -> impl IntoResponse {
+    let renamed = tokio::task::spawn_blocking({
+        let mgr = Arc::clone(&state.chat_manager);
+        let name = body.name;
+        move || mgr.rename_persisted(&id, name)
+    })
+    .await
+    .unwrap_or(false);
+    if renamed {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "persisted session not found"})),
+        )
+            .into_response()
     }
 }
 

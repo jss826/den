@@ -563,6 +563,72 @@ html, body {
 .chat-cwd-input:focus {
   border-color: var(--accent, #4a9eff);
 }
+.chat-tools-bar {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border, #333);
+}
+.chat-tools-select {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+.chat-tools-select:focus {
+  border-color: var(--accent, #4a9eff);
+}
+.chat-tools-custom {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+.chat-search-bar {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border, #333);
+}
+.chat-search-input {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 12px;
+  outline: none;
+  box-sizing: border-box;
+}
+.chat-search-input:focus {
+  border-color: var(--accent, #4a9eff);
+}
+.chat-rename-input {
+  width: 100%;
+  padding: 2px 4px;
+  border: 1px solid var(--accent, #4a9eff);
+  border-radius: 3px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+.chat-stop-btn {
+  background: var(--danger, #e55);
+  color: #fff;
+}
+.chat-stop-btn:hover {
+  background: var(--danger-hover, #c44);
+}
 .chat-session-list {
   flex: 1;
   overflow-y: auto;

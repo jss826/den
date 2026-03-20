@@ -116,10 +116,24 @@
           <button class="sidebar-toggle chat-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
           <div class="chat-sidebar-header">
             <button id="chat-new-btn" class="chat-bar-btn chat-new-btn" type="button" aria-label="New session" data-tooltip="New Session">+ New</button>
+            <button id="chat-continue-btn" class="chat-bar-btn" type="button" aria-label="Continue last session" data-tooltip="Continue Last">&#9654;</button>
             <button id="chat-cwd-toggle" class="chat-bar-btn" type="button" aria-label="Set folder" data-tooltip="Set working directory">&#128193;</button>
+            <button id="chat-tools-toggle" class="chat-bar-btn" type="button" aria-label="Allowed tools" data-tooltip="Allowed Tools">&#128295;</button>
           </div>
           <div id="chat-cwd-bar" class="chat-cwd-bar" hidden>
             <input type="text" id="chat-cwd-input" class="chat-cwd-input" placeholder="Working directory..." aria-label="Working directory" />
+          </div>
+          <div id="chat-tools-bar" class="chat-tools-bar" hidden>
+            <select id="chat-tools-select" class="chat-tools-select" aria-label="Allowed tools preset">
+              <option value="">All tools (default)</option>
+              <option value="Read,Glob,Grep,WebSearch,WebFetch">Read only</option>
+              <option value="Read,Glob,Grep,Edit,Write,MultiEdit">Edit (no Bash)</option>
+              <option value="custom">Custom...</option>
+            </select>
+            <input type="text" id="chat-tools-custom" class="chat-tools-custom" placeholder="Tool1,Tool2,..." hidden aria-label="Custom tools" />
+          </div>
+          <div id="chat-search-bar" class="chat-search-bar">
+            <input type="text" id="chat-search-input" class="chat-search-input" placeholder="Search sessions..." aria-label="Search sessions" />
           </div>
           <div id="chat-session-list" class="chat-session-list" role="list" aria-label="Chat sessions"></div>
         </div>

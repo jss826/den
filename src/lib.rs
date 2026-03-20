@@ -237,13 +237,19 @@ pub fn create_app_with_secret(
         )
         .route(
             "/api/chat/sessions/{id}",
-            delete(chat::api::destroy_session),
+            delete(chat::api::destroy_session).patch(chat::api::rename_session),
+        )
+        .route(
+            "/api/chat/sessions/{id}/stop",
+            post(chat::api::stop_session),
         )
         .route("/api/chat/ws", get(chat::api::chat_ws_handler))
         .route("/api/chat/history", get(chat::api::list_history))
         .route(
             "/api/chat/history/{id}",
-            get(chat::api::get_history).delete(chat::api::delete_history),
+            get(chat::api::get_history)
+                .delete(chat::api::delete_history)
+                .patch(chat::api::rename_history),
         )
         // System update API
         .route("/api/system/version", get(update::get_version))

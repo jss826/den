@@ -13,15 +13,28 @@ const DenChat = (() => {
   let sendBtn = null;
   let sessionListEl = null;
   let newBtn = null;
+  let continueBtn = null;
   let cwdToggle = null;
   let cwdInput = null;
   let cwdBar = null;
+  let toolsToggle = null;
+  let toolsBar = null;
+  let toolsSelect = null;
+  let toolsCustom = null;
+  let searchInput = null;
   let mainTitle = null;
   let currentAssistantBubble = null;
   let currentThinkingBlock = null;
   let isStreaming = false;
   let renderPending = false;
   let thinkingRenderPending = false;
+
+  // Session search filter
+  let searchFilter = '';
+
+  // Cached session lists for client-side filtering
+  let cachedActiveSessions = [];
+  let cachedHistorySessions = [];
 
   // ── Tool notification state ──
   const MODIFYING_TOOLS = new Set([
@@ -56,20 +69,43 @@ const DenChat = (() => {
     cwdBar = document.getElementById('chat-cwd-bar');
     mainTitle = document.getElementById('chat-main-title');
 
-    sendBtn.addEventListener('click', sendMessage);
+    continueBtn = document.getElementById('chat-continue-btn');
+    toolsToggle = document.getElementById('chat-tools-toggle');
+    toolsBar = document.getElementById('chat-tools-bar');
+    toolsSelect = document.getElementById('chat-tools-select');
+    toolsCustom = document.getElementById('chat-tools-custom');
+    searchInput = document.getElementById('chat-search-input');
+
+    sendBtn.addEventListener('click', handleSendOrStop);
     inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        sendMessage();
+        handleSendOrStop();
       }
     });
     inputEl.addEventListener('input', autoResizeInput);
 
     // Sidebar controls
     newBtn.addEventListener('click', () => startNewSession());
+    continueBtn.addEventListener('click', () => continueLastSession());
     cwdToggle.addEventListener('click', () => {
       cwdBar.hidden = !cwdBar.hidden;
+      if (toolsBar) toolsBar.hidden = true;
       if (!cwdBar.hidden) cwdInput.focus();
+    });
+    toolsToggle.addEventListener('click', () => {
+      toolsBar.hidden = !toolsBar.hidden;
+      if (cwdBar) cwdBar.hidden = true;
+    });
+    toolsSelect.addEventListener('change', () => {
+      toolsCustom.hidden = toolsSelect.value !== 'custom';
+      if (!toolsCustom.hidden) toolsCustom.focus();
+    });
+
+    // Search filtering
+    searchInput.addEventListener('input', () => {
+      searchFilter = searchInput.value.trim().toLowerCase();
+      renderSessionList(cachedActiveSessions, cachedHistorySessions);
     });
 
     // Desktop sidebar toggle (F011)
@@ -105,8 +141,8 @@ const DenChat = (() => {
     // Handle visualViewport for mobile keyboard avoidance
     setupMobileViewport();
 
-    // Load sessions and auto-create a new one
-    refreshSidebar().then(() => createSession());
+    // Restore last session or create a new one
+    refreshSidebar().then(() => restoreOrCreateSession());
 
     // Start polling for active session states (pauses when hidden)
     startPolling();
@@ -197,46 +233,56 @@ const DenChat = (() => {
   // ── Sidebar management ──
   async function refreshSidebar() {
     const base = getApiBase();
-    let activeSessions = [];
-    let historySessions = [];
 
     try {
       const [activeResp, historyResp] = await Promise.all([
         fetch(`${base}/chat/sessions`, { credentials: 'same-origin' }),
         fetch(`${base}/chat/history`, { credentials: 'same-origin' }),
       ]);
-      if (activeResp.ok) activeSessions = await activeResp.json();
-      if (historyResp.ok) historySessions = await historyResp.json();
+      if (activeResp.ok) cachedActiveSessions = await activeResp.json();
+      if (historyResp.ok) cachedHistorySessions = await historyResp.json();
     } catch (e) {
       console.warn('refreshSidebar failed:', e); // F008
     }
 
-    renderSessionList(activeSessions, historySessions);
+    renderSessionList(cachedActiveSessions, cachedHistorySessions);
+  }
+
+  function matchesSearch(s) {
+    if (!searchFilter) return true;
+    const name = (s.name || '').toLowerCase();
+    const cwd = (s.cwd || '').toLowerCase();
+    const id = (s.id || '').toLowerCase();
+    const date = new Date(s.created_at || s.last_active || 0).toLocaleString().toLowerCase();
+    return name.includes(searchFilter) || cwd.includes(searchFilter) || id.includes(searchFilter) || date.includes(searchFilter);
   }
 
   function renderSessionList(active, history) {
     sessionListEl.innerHTML = '';
 
+    const filteredActive = active.filter(matchesSearch);
+    const filteredHistory = history.filter(matchesSearch);
+
     // Active sessions section
-    if (active.length > 0) {
+    if (filteredActive.length > 0) {
       const header = document.createElement('div');
       header.className = 'chat-session-section';
       header.textContent = 'Active';
       sessionListEl.appendChild(header);
 
-      for (const s of active) {
+      for (const s of filteredActive) {
         sessionListEl.appendChild(createActiveSessionItem(s));
       }
     }
 
     // History section
-    if (history.length > 0) {
+    if (filteredHistory.length > 0) {
       const header = document.createElement('div');
       header.className = 'chat-session-section';
       header.textContent = 'History';
       sessionListEl.appendChild(header);
 
-      for (const s of history) {
+      for (const s of filteredHistory) {
         sessionListEl.appendChild(createHistorySessionItem(s));
       }
     }
@@ -262,8 +308,14 @@ const DenChat = (() => {
 
     const label = document.createElement('span');
     label.className = 'chat-session-item-label';
-    label.textContent = s.cwd ? shortenPath(s.cwd) : s.id.substring(0, 8);
+    label.textContent = s.name || (s.cwd ? shortenPath(s.cwd) : s.id.substring(0, 8));
     info.appendChild(label);
+
+    // Double-click to rename
+    label.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startInlineRename(label, s.id, 'active');
+    });
 
     const meta = document.createElement('span');
     meta.className = 'chat-session-item-meta';
@@ -308,8 +360,14 @@ const DenChat = (() => {
     const label = document.createElement('span');
     label.className = 'chat-session-item-label';
     const date = new Date(s.created_at).toLocaleString();
-    label.textContent = `${date}`;
+    label.textContent = s.name || date;
     info.appendChild(label);
+
+    // Double-click to rename
+    label.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      startInlineRename(label, s.id, 'history');
+    });
 
     const meta = document.createElement('span');
     meta.className = 'chat-session-item-meta';
@@ -344,6 +402,41 @@ const DenChat = (() => {
     item.appendChild(actions);
     item.addEventListener('click', () => resumeSession(s.id, s.claude_session_id));
     return item;
+  }
+
+  function startInlineRename(labelEl, id, type) {
+    const oldText = labelEl.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'chat-rename-input';
+    input.value = oldText;
+    labelEl.textContent = '';
+    labelEl.appendChild(input);
+    input.focus();
+    input.select();
+
+    function commit() {
+      const newName = input.value.trim();
+      labelEl.textContent = newName || oldText;
+      if (newName && newName !== oldText) {
+        const base = getApiBase();
+        const endpoint = type === 'active'
+          ? `${base}/chat/sessions/${encodeURIComponent(id)}`
+          : `${base}/chat/history/${encodeURIComponent(id)}`;
+        fetch(endpoint, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ name: newName }),
+        }).catch(() => {});
+      }
+    }
+
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.value = oldText; input.blur(); }
+    });
   }
 
   function updateActiveHighlight() {
@@ -419,6 +512,89 @@ const DenChat = (() => {
     }
   }
 
+  // ── Send or Stop ──
+  function handleSendOrStop() {
+    if (isStreaming) {
+      stopSession();
+    } else {
+      sendMessage();
+    }
+  }
+
+  async function stopSession() {
+    if (!sessionId) return;
+    const base = getApiBase();
+    try {
+      await fetch(`${base}/chat/sessions/${encodeURIComponent(sessionId)}/stop`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+    } catch (e) {
+      console.warn('stopSession failed:', e);
+    }
+  }
+
+  // ── Session auto-restore ──
+  async function restoreOrCreateSession() {
+    const savedId = localStorage.getItem('chat-active-session');
+    if (savedId) {
+      // Check if saved session is still alive
+      const base = getApiBase();
+      try {
+        const resp = await fetch(`${base}/chat/sessions`, { credentials: 'same-origin' });
+        if (resp.ok) {
+          const sessions = await resp.json();
+          const alive = sessions.find((s) => s.id === savedId && s.alive);
+          if (alive) {
+            switchToActiveSession(savedId);
+            return;
+          }
+        }
+      } catch {
+        // Fall through to create new
+      }
+      localStorage.removeItem('chat-active-session');
+    }
+    await createSession();
+  }
+
+  function saveSessionToStorage() {
+    if (sessionId) {
+      localStorage.setItem('chat-active-session', sessionId);
+    } else {
+      localStorage.removeItem('chat-active-session');
+    }
+  }
+
+  // ── Continue last session ──
+  async function continueLastSession() {
+    disconnectWs();
+    clearMessages();
+    appendSystem('Continuing last session...');
+
+    const base = getApiBase();
+    try {
+      const resp = await fetch(`${base}/chat/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ continue_last: true }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        appendSystem('Failed to continue: ' + (err.error || resp.statusText));
+        return;
+      }
+      const data = await resp.json();
+      sessionId = data.id;
+      connectWs();
+      refreshSidebar();
+      saveSessionToStorage();
+    } catch (e) {
+      appendSystem('Failed to continue: ' + e.message);
+    }
+  }
+
   // ── Session actions ──
   async function startNewSession() {
     disconnectWs();
@@ -434,6 +610,7 @@ const DenChat = (() => {
     connectWs();
     updateActiveHighlight();
     updateMainTitle();
+    saveSessionToStorage();
   }
 
   async function resumeSession(persistedId, claudeSessionId) {
@@ -482,6 +659,7 @@ const DenChat = (() => {
       sessionId = data.id;
       connectWs();
       refreshSidebar();
+      saveSessionToStorage();
     } catch (e) {
       appendSystem('Failed to resume: ' + e.message);
     } finally {
@@ -531,14 +709,27 @@ const DenChat = (() => {
     }
   }
 
+  function getAllowedTools() {
+    if (!toolsSelect) return undefined;
+    const val = toolsSelect.value;
+    if (!val) return undefined;
+    if (val === 'custom') {
+      const custom = toolsCustom ? toolsCustom.value.trim() : '';
+      return custom ? custom.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+    }
+    return val.split(',').map((t) => t.trim());
+  }
+
   async function createSession() {
     autoDismissedTools.clear();
     const base = getApiBase();
     const cwd = cwdInput ? cwdInput.value.trim() : '';
+    const tools = getAllowedTools();
 
     try {
       const body = {};
       if (cwd) body.cwd = cwd;
+      if (tools) body.allowed_tools = tools;
 
       const resp = await fetch(`${base}/chat/sessions`, {
         method: 'POST',
@@ -556,6 +747,7 @@ const DenChat = (() => {
       connectWs();
       refreshSidebar();
       updateMainTitle();
+      saveSessionToStorage();
     } catch (e) {
       appendSystem('Failed to create chat session: ' + e.message);
     }
@@ -614,6 +806,7 @@ const DenChat = (() => {
     currentSessionState = 'idle';
     autoDismissedTools.clear();
     updateInputState();
+    // Don't clear localStorage here — only clear when session truly ends
   }
 
   function clearMessages() {
@@ -1034,7 +1227,15 @@ const DenChat = (() => {
   }
 
   function updateInputState() {
-    sendBtn.disabled = isStreaming;
+    if (isStreaming) {
+      sendBtn.textContent = 'Stop';
+      sendBtn.classList.add('chat-stop-btn');
+      sendBtn.disabled = false;
+    } else {
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('chat-stop-btn');
+      sendBtn.disabled = false;
+    }
   }
 
   function scrollToBottom() {

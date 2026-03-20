@@ -77,6 +77,8 @@ pub struct ChatSession {
     state: AtomicU8,
     /// Working directory for this session.
     pub cwd: Option<String>,
+    /// User-editable display name.
+    name: Mutex<Option<String>>,
 }
 
 #[derive(serde::Serialize)]
@@ -86,6 +88,7 @@ pub struct ChatSessionInfo {
     pub alive: bool,
     pub state: SessionState,
     pub cwd: Option<String>,
+    pub name: Option<String>,
 }
 
 /// Persisted session (full data stored as JSON).
@@ -96,6 +99,8 @@ pub struct PersistedSession {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_active: chrono::DateTime<chrono::Utc>,
     pub history: Vec<String>,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Lightweight metadata for listing persisted sessions without loading full history.
@@ -105,6 +110,8 @@ struct PersistedSessionMeta {
     claude_session_id: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     last_active: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    name: Option<String>,
     // history is skipped during deserialization — we count from the raw JSON instead
 }
 
@@ -115,6 +122,7 @@ pub struct PersistedSessionInfo {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_active: chrono::DateTime<chrono::Utc>,
     pub message_count: usize,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -160,13 +168,21 @@ impl ChatManager {
         }
     }
 
+    /// Return the claude_session_id of the most recently persisted session, if any.
+    pub fn latest_persisted_claude_session_id(&self) -> Option<String> {
+        let sessions = self.list_persisted();
+        sessions.into_iter().find_map(|s| s.claude_session_id)
+    }
+
     /// Create a new chat session by spawning a `claude` CLI process.
     /// If `resume_id` is provided, the claude CLI is started with `--resume <id>`.
     /// If `cwd` is provided, the process starts in that directory.
+    /// If `allowed_tools` is provided, each tool is passed via `--allowedTools`.
     pub async fn create(
         &self,
         resume_id: Option<&str>,
         cwd: Option<&str>,
+        allowed_tools: Option<&[String]>,
     ) -> Result<Arc<ChatSession>, ChatError> {
         // F007: Validate resume_id format before passing to CLI
         if let Some(rid) = resume_id
@@ -212,10 +228,18 @@ impl ChatManager {
             "--verbose".to_string(),
         ];
 
-        // If resuming a previous session, add --resume flag
+        // If resuming a previous session, add --continue flag
         if let Some(claude_sid) = resume_id {
-            args.push("--resume".to_string());
+            args.push("--continue".to_string());
             args.push(claude_sid.to_string());
+        }
+
+        // Pass allowed tools if specified
+        if let Some(tools) = allowed_tools {
+            for tool in tools {
+                args.push("--allowedTools".to_string());
+                args.push(tool.clone());
+            }
         }
 
         cmd.args(&args);
@@ -283,6 +307,7 @@ impl ChatManager {
             dirty: AtomicBool::new(false),
             state: AtomicU8::new(SessionState::Idle.as_u8()),
             cwd: effective_cwd,
+            name: Mutex::new(None),
         });
 
         // Spawn stdout reader task
@@ -361,18 +386,19 @@ impl ChatManager {
 
     /// List all active chat sessions.
     pub async fn list(&self) -> Vec<ChatSessionInfo> {
-        self.sessions
-            .read()
-            .await
-            .values()
-            .map(|s| ChatSessionInfo {
+        let sessions = self.sessions.read().await;
+        let mut result = Vec::with_capacity(sessions.len());
+        for s in sessions.values() {
+            result.push(ChatSessionInfo {
                 id: s.id.clone(),
                 created_at: s.created_at,
                 alive: s.is_alive(),
                 state: s.session_state(),
                 cwd: s.cwd.clone(),
-            })
-            .collect()
+                name: s.name.lock().await.clone(),
+            });
+        }
+        result
     }
 
     /// F004: List persisted sessions using lightweight metadata deserialization.
@@ -400,6 +426,7 @@ impl ChatManager {
                     created_at: meta.created_at,
                     last_active: meta.last_active,
                     message_count,
+                    name: meta.name,
                 });
             }
         }
@@ -416,6 +443,27 @@ impl ChatManager {
         let path = self.chat_dir.join(format!("{id}.json"));
         let data = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&data).ok()
+    }
+
+    /// Rename a persisted session on disk.
+    pub fn rename_persisted(&self, id: &str, name: Option<String>) -> bool {
+        if !is_valid_session_id(id) {
+            return false;
+        }
+        let path = self.chat_dir.join(format!("{id}.json"));
+        let data = match std::fs::read_to_string(&path) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        let mut session: PersistedSession = match serde_json::from_str(&data) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        session.name = name;
+        match serde_json::to_string(&session) {
+            Ok(json) => std::fs::write(&path, json).is_ok(),
+            Err(_) => false,
+        }
     }
 
     /// F001: Delete a persisted session from disk with path traversal protection.
@@ -489,6 +537,7 @@ impl ChatSession {
             dirty: AtomicBool::new(false),
             state: AtomicU8::new(SessionState::Idle.as_u8()),
             cwd: None,
+            name: Mutex::new(None),
         }
     }
 
@@ -571,12 +620,14 @@ impl ChatSession {
             return;
         }
         let claude_sid = self.claude_session_id.lock().await.clone();
+        let session_name = self.name.lock().await.clone();
         let persisted = PersistedSession {
             id: self.id.clone(),
             claude_session_id: claude_sid,
             created_at: self.created_at,
             last_active: chrono::Utc::now(),
             history,
+            name: session_name,
         };
         let path = self.chat_dir.join(format!("{}.json", self.id));
         let tmp_path = self.chat_dir.join(format!("{}.json.tmp", self.id));
@@ -605,6 +656,23 @@ impl ChatSession {
                 tracing::warn!("Failed to serialize chat session {}: {e}", self.id);
             }
         }
+    }
+
+    /// Interrupt the running response — flush history, then kill.
+    pub async fn interrupt(&self) {
+        self.flush_to_disk().await;
+        self.kill().await;
+    }
+
+    /// Set the user-editable display name.
+    pub async fn set_name(&self, name: Option<String>) {
+        *self.name.lock().await = name;
+        self.dirty.store(true, Ordering::Release);
+    }
+
+    /// Get the display name.
+    pub async fn name(&self) -> Option<String> {
+        self.name.lock().await.clone()
     }
 
     /// Kill the child process.
