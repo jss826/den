@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "den"
-version = "2.5.1"
+version = "2.5.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
