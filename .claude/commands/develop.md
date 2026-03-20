@@ -1,18 +1,33 @@
 ---
-description: 要件確認→仕様設計→実装→検証の開発ワークフロー
-argument-hint: 要件の説明（例: WebSocket reconnect 機能を追加）
+description: 要件確認→設計→実装→検証→出荷→振り返りの開発ワークフロー
+argument-hint: 要件の説明（例: "Issue #54" / "WebSocket reconnect 機能を追加"）
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, TaskGet, TaskUpdate, TaskList, TaskCreate, AskUserQuestion, EnterPlanMode
 ---
 
-引数テキストを要件として扱う。
+# 開発ワークフロー
+
+要件を1件実装するフェーズ型ワークフロー。
+
+### 承認モデル
+
+| フェーズ | 承認 |
+|---------|------|
+| Phase 1: 要件確認 | **承認待ち** |
+| Phase 2: 設計 | **承認待ち** |
+| Phase 3〜4: 実装・検証 | 自律実行 |
+| Phase 5: 出荷 | **5-4 のみ承認待ち** |
+| Phase 6: 振り返り | 自律実行 |
+
+「承認待ち」と明記されていないステップでは人間に判断を求めない。
+外部スキル（ai-review 等）を呼び出す場合も、呼び出し元フェーズの承認モデルに従う。
 
 ## Phase 1: 要件確認
 
-1. 要件に関連する既存コードを調査:
-   - Glob/Grep で影響するファイルを特定
-   - `src/` の関連モジュールを確認
-   - `frontend/` の関連ファイルを確認
-2. 以下をまとめてユーザーに提示:
+1. 対象 Issue の内容を確認（引数で Issue 番号が渡される場合は `gh issue view` で取得）
+2. 関連コードを Glob/Grep/Read で調査
+   - `src/` の関連モジュール
+   - `frontend/` の関連ファイル
+3. 以下をまとめてユーザーに提示:
    - **やること**: 要件の箇条書き
    - **影響範囲**: 変更が必要なファイル一覧
    - **制約・注意点**: 既存機能への影響
@@ -20,7 +35,7 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, TaskGet, TaskUpdate, T
 
 → **承認待ち**
 
-## Phase 2: 仕様設計
+## Phase 2: 設計
 
 1. 実装アプローチを検討（複数案がある場合は比較表を作成）
 2. 以下を設計してユーザーに提示:
@@ -35,29 +50,110 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, TaskGet, TaskUpdate, T
 ## Phase 3: 実装
 
 1. 仕様に基づいて段階的に実装
-2. 各ステップでビルド確認:
-   ```
-   cargo check
-   ```
+2. 各ステップでビルド確認: `cargo check`
 3. コンパイルエラーがあれば即修正（最大3回試行）
 4. 実装完了後、変更差分の概要をユーザーに提示
 
-→ **承認待ち**（差分レビュー）
-
 ## Phase 4: 検証
 
-1. Task ツールで checker エージェントを起動し自動検証を実行
+checker エージェントで自動検証を実行。
+
+1. Task ツールで checker エージェントを起動
 2. 失敗がある場合は修正して再検証（最大3回）
 3. フロントエンド変更がある場合は e2e テストも実行:
    ```
    npx playwright test --project=chromium
    ```
-   - 失敗したテストが今回の変更に起因する場合は修正する
+   - 今回の変更に起因する失敗は修正する
    - 既存の `test.fixme` テストの失敗は無視してよい
-4. 全パス後:
-   - 手動確認が必要な項目があればチェックリストで提示
 
-→ **完了報告**
+### フィードバックループ
+
+| 失敗項目 | 対応 | 上限 |
+|---------|------|------|
+| cargo fmt | `cargo fmt` で自動修正 | — |
+| clippy 警告 | 警告箇所を修正 | 3回 |
+| テスト失敗 | 失敗テストを分析して修正 | 3回 |
+| E2E 失敗 | 失敗テストのみ再実行して原因特定 | 3回 |
+
+**修正上限に達した場合**: ユーザーに報告してエスカレーション。
+
+## Phase 5: 出荷
+
+Claude 主導で以下を連続実行する。承認待ちはコミット前のみ。
+
+### 5-1: コミット・プッシュ
+
+1. 変更内容に基づいてコミットメッセージを生成（英語、Conventional Commits）
+2. 関連ファイルを `git add`（個別指定、`-A` は使わない）
+3. コミット（末尾に `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`）
+4. `git push`
+
+### 5-2: AI レビュー
+
+`/ai-review:review auto` を実行（承認なしでトリアージまで自動完了）。
+- AI: `.claude/ai-review.local.md` の設定に従う
+- 観点: 全て
+- ai-review の修正フェーズは実行しない — 修正判断は 5-3 で行う
+
+### 5-3: Finding 対応判断
+
+`.ai-review/findings.md` を読み、各 Finding を以下の基準で分類・対応する。Claude が自律判断する。
+
+#### 判断基準
+
+各 Finding を「修正の価値」と「放置のリスク」で評価する。
+今回の Issue スコープ内外は考慮しない。工数は判断を覆す要因にしない。
+
+| 判断 | 基準 | アクション |
+|------|------|-----------|
+| **即時修正** | 価値が明確 or 放置リスクあり | その場で修正、再検証、追加コミット |
+| **Issue 登録** | 価値はあるが設計判断を伴う | `gh issue create --label ai-review` |
+| **見送り** | 価値も放置リスクも低い | findings.md にチェックを入れてスキップ |
+
+#### 判断の指針
+
+- **セキュリティ**（injection, IDOR, 認証バイパス）→ severity によらず即時修正
+- **データ整合性・正確性**のリスク → 即時修正を優先
+- **可観測性・ログ不足** → 障害調査を阻むなら即時修正
+- **パフォーマンス** → ボトルネック顕在化の蓋然性で判断
+- **confidence 1 かつ実害の根拠が薄い** → 見送り候補
+- Issue 登録時は本文に対応優先度を記載: `next` / `backlog`
+- 工数が大きくても価値・リスクが高ければ即時修正する。分割が必要なら最小限の修正を即時 + 残りを Issue 化
+
+#### 即時修正を行った場合
+
+1. 修正コミット追加（`fix: address ai-review findings for ...`）
+2. checker エージェントで再検証
+3. プッシュ
+
+### 5-4: Issue クローズ
+
+1. 関連 Issue がある場合は `gh issue view <num> --json state` で確認
+2. OPEN なら「Issue #N をクローズしますか？」と確認
+
+→ **承認待ち**
+
+3. 承認後 `gh issue close <num>`
+
+### 5-5: 対応サマリー
+
+ai-review の対応結果を報告:
+- 即時修正: N 件（内容の要約）
+- Issue 登録: N 件（Issue URL 一覧）
+- 見送り: N 件
+
+## Phase 6: 振り返り
+
+この Issue の実装を通じてワークフロー・ルールに不都合や改善点を感じたか振り返る。
+
+確認項目:
+- /develop のフェーズ構成は適切だったか（冗長 or 不足）
+- CLAUDE.md / rules のルールで実態と合わなかったものはないか
+- CI / テスト戦略で問題はなかったか
+- 次の Issue で活かせる知見はあるか
+
+該当があれば変更提案を提示する。なければ「特になし」で完了。
 
 ## エスカレーション
 
@@ -67,8 +163,10 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Task, TaskGet, TaskUpdate, T
 
 ## 完了条件
 
-- [ ] `cargo check` 通過
-- [ ] `cargo build` 成功
+- [ ] `cargo fmt` 差分なし
 - [ ] `cargo clippy` 警告なし
-- [ ] `cargo test` 通過（テストがある場合）
+- [ ] `cargo test` 通過
 - [ ] `npx playwright test` 通過（フロントエンド変更がある場合）
+- [ ] コミット・プッシュ完了
+- [ ] ai-review 完了（Finding 対応済み）
+- [ ] 関連 Issue クローズ（該当時）
