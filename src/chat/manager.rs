@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Mutex, RwLock, broadcast};
@@ -27,6 +27,37 @@ pub struct ChatManager {
     chat_dir: PathBuf,
 }
 
+/// Session activity state derived from stream-json events.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionState {
+    #[default]
+    Idle,
+    Thinking,
+    ToolUse,
+    Streaming,
+}
+
+impl SessionState {
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Thinking => 1,
+            Self::ToolUse => 2,
+            Self::Streaming => 3,
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Thinking,
+            2 => Self::ToolUse,
+            3 => Self::Streaming,
+            _ => Self::Idle,
+        }
+    }
+}
+
 pub struct ChatSession {
     pub id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -42,6 +73,10 @@ pub struct ChatSession {
     chat_dir: PathBuf,
     /// Whether history has been modified since last flush.
     dirty: AtomicBool,
+    /// Current activity state (idle/thinking/tool_use/streaming).
+    state: AtomicU8,
+    /// Working directory for this session.
+    pub cwd: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -49,6 +84,8 @@ pub struct ChatSessionInfo {
     pub id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub alive: bool,
+    pub state: SessionState,
+    pub cwd: Option<String>,
 }
 
 /// Persisted session (full data stored as JSON).
@@ -125,7 +162,12 @@ impl ChatManager {
 
     /// Create a new chat session by spawning a `claude` CLI process.
     /// If `resume_id` is provided, the claude CLI is started with `--resume <id>`.
-    pub async fn create(&self, resume_id: Option<&str>) -> Result<Arc<ChatSession>, ChatError> {
+    /// If `cwd` is provided, the process starts in that directory.
+    pub async fn create(
+        &self,
+        resume_id: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Result<Arc<ChatSession>, ChatError> {
         // F007: Validate resume_id format before passing to CLI
         if let Some(rid) = resume_id
             && !is_valid_claude_session_id(rid)
@@ -181,8 +223,23 @@ impl ChatManager {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        // Default to user's home directory
-        if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        // Use specified cwd, or default to user's home directory
+        let effective_cwd = if let Some(dir) = cwd {
+            let path = std::path::Path::new(dir);
+            if path.is_dir() {
+                Some(dir.to_string())
+            } else {
+                self.sessions.write().await.remove(&id);
+                return Err(ChatError::SpawnFailed(format!(
+                    "directory does not exist: {dir}"
+                )));
+            }
+        } else {
+            None
+        };
+        if let Some(ref dir) = effective_cwd {
+            cmd.current_dir(dir);
+        } else if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             cmd.current_dir(home);
         }
 
@@ -223,6 +280,8 @@ impl ChatManager {
             claude_session_id: Mutex::new(resume_id.map(|s| s.to_string())),
             chat_dir: self.chat_dir.clone(),
             dirty: AtomicBool::new(false),
+            state: AtomicU8::new(SessionState::Idle.as_u8()),
+            cwd: effective_cwd,
         });
 
         // Spawn stdout reader task
@@ -236,6 +295,7 @@ impl ChatManager {
                 // Extract claude_session_id from system init event
                 if let Some(sess) = sess_weak.upgrade() {
                     extract_claude_session_id(&sess, &line).await;
+                    update_session_state(&sess, &line);
 
                     // Cap history to prevent unbounded growth
                     let mut hist = sess.history.lock().await;
@@ -309,6 +369,8 @@ impl ChatManager {
                 id: s.id.clone(),
                 created_at: s.created_at,
                 alive: s.is_alive(),
+                state: s.session_state(),
+                cwd: s.cwd.clone(),
             })
             .collect()
     }
@@ -425,11 +487,18 @@ impl ChatSession {
             claude_session_id: Mutex::new(None),
             chat_dir,
             dirty: AtomicBool::new(false),
+            state: AtomicU8::new(SessionState::Idle.as_u8()),
+            cwd: None,
         }
     }
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// Get the current session activity state.
+    pub fn session_state(&self) -> SessionState {
+        SessionState::from_u8(self.state.load(Ordering::Acquire))
     }
 
     /// Get the claude CLI session ID (if known).
@@ -545,6 +614,41 @@ impl ChatSession {
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
         }
+    }
+}
+
+/// Update session state based on stream-json events.
+fn update_session_state(session: &ChatSession, line: &str) {
+    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+        let new_state = match event.get("type").and_then(|t| t.as_str()) {
+            Some("assistant") => {
+                // Determine sub-state from content blocks
+                if let Some(content) = event
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    if content
+                        .iter()
+                        .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("thinking"))
+                    {
+                        SessionState::Thinking
+                    } else if content
+                        .iter()
+                        .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                    {
+                        SessionState::ToolUse
+                    } else {
+                        SessionState::Streaming
+                    }
+                } else {
+                    SessionState::Streaming
+                }
+            }
+            Some("result") => SessionState::Idle,
+            _ => return,
+        };
+        session.state.store(new_state.as_u8(), Ordering::Release);
     }
 }
 

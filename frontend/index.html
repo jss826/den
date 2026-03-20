@@ -111,23 +111,33 @@
     <!-- チャット -->
     <div id="chat-pane" class="pane" hidden role="tabpanel" aria-label="Chat">
       <div class="chat-layout">
-        <div class="chat-session-bar">
-          <select id="chat-session-select" class="chat-session-select" aria-label="Chat sessions">
-            <option value="">New Session</option>
-          </select>
-          <button id="chat-new-btn" class="chat-bar-btn" type="button" aria-label="New session" data-tooltip="New Session">+</button>
-          <button id="chat-resume-btn" class="chat-bar-btn" type="button" aria-label="Resume session" data-tooltip="Resume" hidden>Resume</button>
-          <button id="chat-delete-btn" class="chat-bar-btn chat-bar-btn-danger" type="button" aria-label="Delete session" data-tooltip="Delete" hidden>Del</button>
-          <span class="chat-bar-spacer"></span>
-          <button class="chat-bar-btn" type="button" aria-label="Collapse all" data-tooltip="Collapse all" onclick="DenChat.toggleAllDetails(false)">&minus;</button>
-          <button class="chat-bar-btn" type="button" aria-label="Expand all" data-tooltip="Expand all" onclick="DenChat.toggleAllDetails(true)">+</button>
-          <button class="chat-bar-btn" type="button" aria-label="Export Markdown" data-tooltip="Export MD" onclick="DenChat.exportConversation('md')">MD</button>
-          <button class="chat-bar-btn" type="button" aria-label="Export JSON" data-tooltip="Export JSON" onclick="DenChat.exportConversation('json')">JSON</button>
+        <!-- サイドバー: セッション一覧 -->
+        <div class="chat-sidebar">
+          <button class="sidebar-toggle chat-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
+          <div class="chat-sidebar-header">
+            <button id="chat-new-btn" class="chat-bar-btn chat-new-btn" type="button" aria-label="New session" data-tooltip="New Session">+ New</button>
+            <button id="chat-cwd-toggle" class="chat-bar-btn" type="button" aria-label="Set folder" data-tooltip="Set working directory">&#128193;</button>
+          </div>
+          <div id="chat-cwd-bar" class="chat-cwd-bar" hidden>
+            <input type="text" id="chat-cwd-input" class="chat-cwd-input" placeholder="Working directory..." aria-label="Working directory" />
+          </div>
+          <div id="chat-session-list" class="chat-session-list" role="list" aria-label="Chat sessions"></div>
         </div>
-        <div id="chat-messages" class="chat-messages"></div>
-        <div class="chat-input-area">
-          <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..."></textarea>
-          <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send">Send</button>
+        <!-- メインエリア -->
+        <div class="chat-main">
+          <div class="chat-main-header">
+            <span id="chat-main-title" class="chat-main-title"></span>
+            <span class="chat-bar-spacer"></span>
+            <button class="chat-bar-btn" type="button" aria-label="Collapse all" data-tooltip="Collapse all" onclick="DenChat.toggleAllDetails(false)">&minus;</button>
+            <button class="chat-bar-btn" type="button" aria-label="Expand all" data-tooltip="Expand all" onclick="DenChat.toggleAllDetails(true)">+</button>
+            <button class="chat-bar-btn" type="button" aria-label="Export Markdown" data-tooltip="Export MD" onclick="DenChat.exportConversation('md')">MD</button>
+            <button class="chat-bar-btn" type="button" aria-label="Export JSON" data-tooltip="Export JSON" onclick="DenChat.exportConversation('json')">JSON</button>
+          </div>
+          <div id="chat-messages" class="chat-messages"></div>
+          <div class="chat-input-area">
+            <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..."></textarea>
+            <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send">Send</button>
+          </div>
         </div>
       </div>
     </div>

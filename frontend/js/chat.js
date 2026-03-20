@@ -11,10 +11,12 @@ const DenChat = (() => {
   let messagesEl = null;
   let inputEl = null;
   let sendBtn = null;
-  let sessionSelect = null;
+  let sessionListEl = null;
   let newBtn = null;
-  let resumeBtn = null;
-  let deleteBtn = null;
+  let cwdToggle = null;
+  let cwdInput = null;
+  let cwdBar = null;
+  let mainTitle = null;
   let currentAssistantBubble = null;
   let currentThinkingBlock = null;
   let isStreaming = false;
@@ -22,9 +24,6 @@ const DenChat = (() => {
   let thinkingRenderPending = false;
 
   // ── Tool notification state ──
-  // Tools that modify files or run commands — shown with expanded notification card.
-  // Note: In -p mode, claude CLI auto-executes tools. These cards are notifications,
-  // not blocking approvals. The user can dismiss or auto-dismiss future notifications.
   const MODIFYING_TOOLS = new Set([
     'Edit', 'Write', 'MultiEdit', 'Bash', 'NotebookEdit',
   ]);
@@ -38,15 +37,24 @@ const DenChat = (() => {
   let sessionInputTokens = 0;
   let sessionOutputTokens = 0;
 
+  // ── Sidebar polling ──
+  let pollTimer = null;
+  const POLL_INTERVAL = 5000;
+
+  // ── Frontend-side state for current session ──
+  let currentSessionState = 'idle';
+
   // ── Init ──
   function init() {
     messagesEl = document.getElementById('chat-messages');
     inputEl = document.getElementById('chat-input');
     sendBtn = document.getElementById('chat-send');
-    sessionSelect = document.getElementById('chat-session-select');
+    sessionListEl = document.getElementById('chat-session-list');
     newBtn = document.getElementById('chat-new-btn');
-    resumeBtn = document.getElementById('chat-resume-btn');
-    deleteBtn = document.getElementById('chat-delete-btn');
+    cwdToggle = document.getElementById('chat-cwd-toggle');
+    cwdInput = document.getElementById('chat-cwd-input');
+    cwdBar = document.getElementById('chat-cwd-bar');
+    mainTitle = document.getElementById('chat-main-title');
 
     sendBtn.addEventListener('click', sendMessage);
     inputEl.addEventListener('keydown', (e) => {
@@ -57,11 +65,12 @@ const DenChat = (() => {
     });
     inputEl.addEventListener('input', autoResizeInput);
 
-    // Session bar controls
+    // Sidebar controls
     newBtn.addEventListener('click', () => startNewSession());
-    resumeBtn.addEventListener('click', resumeSelected);
-    deleteBtn.addEventListener('click', deleteSelected);
-    sessionSelect.addEventListener('change', onSessionSelectChange);
+    cwdToggle.addEventListener('click', () => {
+      cwdBar.hidden = !cwdBar.hidden;
+      if (!cwdBar.hidden) cwdInput.focus();
+    });
 
     // Request notification permission early
     requestNotificationPermission();
@@ -69,8 +78,40 @@ const DenChat = (() => {
     // Handle visualViewport for mobile keyboard avoidance
     setupMobileViewport();
 
-    // Load persisted sessions and auto-create a new one
-    refreshSessionList().then(() => createSession());
+    // Load sessions and auto-create a new one
+    refreshSidebar().then(() => createSession());
+
+    // Start polling for active session states
+    startPolling();
+  }
+
+  // ── Remote-aware URL helpers ──
+  // chatRemoteId: if set, routes API calls through /api/remote/{id} or /api/relay/{id}
+  let chatRemoteId = null;
+  let chatRemoteType = null; // 'direct' or 'relay'
+
+  function getApiBase() {
+    if (!chatRemoteId) return '';
+    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}`;
+    return `/api/remote/${chatRemoteId}`;
+  }
+
+  function getChatWsUrl(sid) {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const query = `session=${encodeURIComponent(sid)}`;
+    if (chatRemoteId) {
+      if (chatRemoteType === 'relay') {
+        return `${proto}//${location.host}/api/relay/${chatRemoteId}/chat-ws?${query}`;
+      }
+      return `${proto}//${location.host}/api/remote/${encodeURIComponent(chatRemoteId)}/chat-ws?${query}`;
+    }
+    return `${proto}//${location.host}/api/chat/ws?${query}`;
+  }
+
+  /** Set remote target for chat. Called externally when remote connections change. */
+  function setRemote(remoteId, type) {
+    chatRemoteId = remoteId || null;
+    chatRemoteType = type || 'direct';
   }
 
   // ── Push notifications ──
@@ -78,8 +119,6 @@ const DenChat = (() => {
     if (!('Notification' in window)) return;
     if (Notification.permission === 'granted') {
       notificationsEnabled = true;
-    } else if (Notification.permission !== 'denied') {
-      // Will request on first relevant event
     }
   }
 
@@ -96,7 +135,6 @@ const DenChat = (() => {
   }
 
   function shouldNotify() {
-    // Notify if page is hidden OR chat tab is not active
     if (document.hidden) return true;
     const activeTab = document.querySelector('.tab.active');
     return activeTab && activeTab.dataset.tab !== 'chat';
@@ -116,59 +154,250 @@ const DenChat = (() => {
         if (window.DenApp) window.DenApp.switchTab('chat');
         n.close();
       };
-      // Auto-close after 5 seconds
       setTimeout(() => n.close(), 5000);
     } catch {
       // Notification API may fail in some contexts
     }
   }
 
-  // ── Session management ──
-  async function refreshSessionList() {
+  // ── Sidebar management ──
+  async function refreshSidebar() {
+    const base = getApiBase();
+    let activeSessions = [];
+    let historySessions = [];
+
     try {
-      const resp = await fetch('/api/chat/history', { credentials: 'same-origin' });
+      const [activeResp, historyResp] = await Promise.all([
+        fetch(`${base}/api/chat/sessions`, { credentials: 'same-origin' }),
+        fetch(`${base}/api/chat/history`, { credentials: 'same-origin' }),
+      ]);
+      if (activeResp.ok) activeSessions = await activeResp.json();
+      if (historyResp.ok) historySessions = await historyResp.json();
+    } catch {
+      // Silently ignore
+    }
+
+    renderSessionList(activeSessions, historySessions);
+  }
+
+  function renderSessionList(active, history) {
+    sessionListEl.innerHTML = '';
+
+    // Active sessions section
+    if (active.length > 0) {
+      const header = document.createElement('div');
+      header.className = 'chat-session-section';
+      header.textContent = 'Active';
+      sessionListEl.appendChild(header);
+
+      for (const s of active) {
+        sessionListEl.appendChild(createActiveSessionItem(s));
+      }
+    }
+
+    // History section
+    if (history.length > 0) {
+      const header = document.createElement('div');
+      header.className = 'chat-session-section';
+      header.textContent = 'History';
+      sessionListEl.appendChild(header);
+
+      for (const s of history) {
+        sessionListEl.appendChild(createHistorySessionItem(s));
+      }
+    }
+
+    // Highlight current session
+    updateActiveHighlight();
+  }
+
+  function createActiveSessionItem(s) {
+    const item = document.createElement('div');
+    item.className = 'chat-session-item';
+    item.dataset.sessionId = s.id;
+    item.dataset.type = 'active';
+
+    const stateEl = document.createElement('span');
+    stateEl.className = 'chat-session-state';
+    const stateKey = s.alive ? (s.state || 'idle') : 'dead';
+    stateEl.dataset.state = stateKey;
+    item.appendChild(stateEl);
+
+    const info = document.createElement('div');
+    info.className = 'chat-session-item-info';
+
+    const label = document.createElement('span');
+    label.className = 'chat-session-item-label';
+    label.textContent = s.cwd ? shortenPath(s.cwd) : s.id.substring(0, 8);
+    info.appendChild(label);
+
+    const meta = document.createElement('span');
+    meta.className = 'chat-session-item-meta';
+    meta.textContent = formatTime(s.created_at);
+    info.appendChild(meta);
+
+    item.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-session-actions';
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'chat-session-action-btn danger';
+    delBtn.textContent = '\u00d7';
+    delBtn.title = 'Destroy';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      destroyActiveSession(s.id);
+    });
+    actions.appendChild(delBtn);
+    item.appendChild(actions);
+
+    item.addEventListener('click', () => switchToActiveSession(s.id));
+    return item;
+  }
+
+  function createHistorySessionItem(s) {
+    const item = document.createElement('div');
+    item.className = 'chat-session-item';
+    item.dataset.sessionId = s.id;
+    item.dataset.type = 'history';
+    item.dataset.claudeSessionId = s.claude_session_id || '';
+
+    const stateEl = document.createElement('span');
+    stateEl.className = 'chat-session-state';
+    stateEl.dataset.state = 'dead';
+    item.appendChild(stateEl);
+
+    const info = document.createElement('div');
+    info.className = 'chat-session-item-info';
+
+    const label = document.createElement('span');
+    label.className = 'chat-session-item-label';
+    const date = new Date(s.created_at).toLocaleString();
+    label.textContent = `${date}`;
+    info.appendChild(label);
+
+    const meta = document.createElement('span');
+    meta.className = 'chat-session-item-meta';
+    meta.textContent = `${s.message_count} events`;
+    info.appendChild(meta);
+
+    item.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-session-actions';
+
+    const resumeBtn = document.createElement('button');
+    resumeBtn.className = 'chat-session-action-btn';
+    resumeBtn.textContent = '\u25b6';
+    resumeBtn.title = 'Resume';
+    resumeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resumeSession(s.id, s.claude_session_id);
+    });
+    actions.appendChild(resumeBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'chat-session-action-btn danger';
+    delBtn.textContent = '\u00d7';
+    delBtn.title = 'Delete';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteHistorySession(s.id);
+    });
+    actions.appendChild(delBtn);
+
+    item.appendChild(actions);
+    item.addEventListener('click', () => resumeSession(s.id, s.claude_session_id));
+    return item;
+  }
+
+  function updateActiveHighlight() {
+    for (const el of sessionListEl.querySelectorAll('.chat-session-item')) {
+      el.classList.toggle('active', el.dataset.sessionId === sessionId);
+    }
+  }
+
+  function shortenPath(p) {
+    const parts = p.replace(/\\/g, '/').split('/');
+    return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : p;
+  }
+
+  function formatTime(iso) {
+    const d = new Date(iso);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  // ── Polling for active session states ──
+  function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(pollActiveSessions, POLL_INTERVAL);
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function pollActiveSessions() {
+    const base = getApiBase();
+    try {
+      const resp = await fetch(`${base}/api/chat/sessions`, { credentials: 'same-origin' });
       if (!resp.ok) return;
       const sessions = await resp.json();
-      // Clear existing options except the first "New Session"
-      while (sessionSelect.options.length > 1) {
-        sessionSelect.remove(1);
-      }
-      for (const s of sessions) {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.dataset.claudeSessionId = s.claude_session_id || '';
-        const date = new Date(s.created_at).toLocaleString();
-        const msgs = s.message_count;
-        opt.textContent = `${date} (${msgs} events)`;
-        sessionSelect.appendChild(opt);
-      }
+      updateActiveStates(sessions);
     } catch {
       // Silently ignore
     }
   }
 
-  function onSessionSelectChange() {
-    const val = sessionSelect.value;
-    resumeBtn.hidden = !val;
-    deleteBtn.hidden = !val;
+  function updateActiveStates(sessions) {
+    const map = new Map(sessions.map((s) => [s.id, s]));
+
+    for (const el of sessionListEl.querySelectorAll('.chat-session-item[data-type="active"]')) {
+      const sid = el.dataset.sessionId;
+      const s = map.get(sid);
+      const stateEl = el.querySelector('.chat-session-state');
+      if (!stateEl) continue;
+
+      if (s) {
+        // Use frontend-tracked state for current session (more responsive)
+        if (sid === sessionId) {
+          stateEl.dataset.state = currentSessionState;
+        } else {
+          stateEl.dataset.state = s.alive ? (s.state || 'idle') : 'dead';
+        }
+      } else {
+        // Session no longer active — mark dead
+        stateEl.dataset.state = 'dead';
+      }
+    }
   }
 
+  // ── Session actions ──
   async function startNewSession() {
-    sessionSelect.value = '';
-    resumeBtn.hidden = true;
-    deleteBtn.hidden = true;
     disconnectWs();
     clearMessages();
     await createSession();
   }
 
-  async function resumeSelected() {
-    const selectedOpt = sessionSelect.selectedOptions[0];
-    if (!selectedOpt || !selectedOpt.value) return;
+  async function switchToActiveSession(id) {
+    if (id === sessionId) return;
+    disconnectWs();
+    clearMessages();
+    sessionId = id;
+    connectWs();
+    updateActiveHighlight();
+    updateMainTitle();
+  }
 
-    const persistedId = selectedOpt.value;
-    const claudeSessionId = selectedOpt.dataset.claudeSessionId;
-
+  async function resumeSession(persistedId, claudeSessionId) {
     if (!claudeSessionId) {
       appendSystem('Cannot resume: no claude session ID found.');
       return;
@@ -178,9 +407,11 @@ const DenChat = (() => {
     clearMessages();
     appendSystem('Resuming session...');
 
+    const base = getApiBase();
+
     // Load persisted history for display
     try {
-      const histResp = await fetch(`/api/chat/history/${encodeURIComponent(persistedId)}`, {
+      const histResp = await fetch(`${base}/api/chat/history/${encodeURIComponent(persistedId)}`, {
         credentials: 'same-origin',
       });
       if (histResp.ok) {
@@ -197,7 +428,7 @@ const DenChat = (() => {
 
     // Create a new active session with --resume
     try {
-      const resp = await fetch('/api/chat/sessions', {
+      const resp = await fetch(`${base}/api/chat/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -211,10 +442,10 @@ const DenChat = (() => {
       const data = await resp.json();
       sessionId = data.id;
       connectWs();
+      refreshSidebar();
     } catch (e) {
       appendSystem('Failed to resume: ' + e.message);
     } finally {
-      // F009: Always reset streaming state after history replay, even on error
       isStreaming = false;
       currentAssistantBubble = null;
       currentThinkingBlock = null;
@@ -222,22 +453,34 @@ const DenChat = (() => {
     }
   }
 
-  async function deleteSelected() {
-    const selectedOpt = sessionSelect.selectedOptions[0];
-    if (!selectedOpt || !selectedOpt.value) return;
-
-    const persistedId = selectedOpt.value;
+  async function destroyActiveSession(id) {
+    const base = getApiBase();
     try {
-      // F008: Only remove DOM option after confirming server-side delete succeeded
-      const resp = await fetch(`/api/chat/history/${encodeURIComponent(persistedId)}`, {
+      const resp = await fetch(`${base}/api/chat/sessions/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
       if (resp.ok || resp.status === 204) {
-        selectedOpt.remove();
-        sessionSelect.value = '';
-        resumeBtn.hidden = true;
-        deleteBtn.hidden = true;
+        if (id === sessionId) {
+          disconnectWs();
+          clearMessages();
+        }
+        refreshSidebar();
+      }
+    } catch {
+      appendSystem('Failed to destroy session.');
+    }
+  }
+
+  async function deleteHistorySession(id) {
+    const base = getApiBase();
+    try {
+      const resp = await fetch(`${base}/api/chat/history/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (resp.ok || resp.status === 204) {
+        refreshSidebar();
       } else {
         appendSystem('Failed to delete session.');
       }
@@ -247,15 +490,19 @@ const DenChat = (() => {
   }
 
   async function createSession() {
-    // F006: Reset auto-dismissed tools on new session
     autoDismissedTools.clear();
+    const base = getApiBase();
+    const cwd = cwdInput ? cwdInput.value.trim() : '';
 
     try {
-      const resp = await fetch('/api/chat/sessions', {
+      const body = {};
+      if (cwd) body.cwd = cwd;
+
+      const resp = await fetch(`${base}/api/chat/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: '{}',
+        body: JSON.stringify(body),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
@@ -265,20 +512,32 @@ const DenChat = (() => {
       const data = await resp.json();
       sessionId = data.id;
       connectWs();
+      refreshSidebar();
+      updateMainTitle();
     } catch (e) {
       appendSystem('Failed to create chat session: ' + e.message);
+    }
+  }
+
+  function updateMainTitle() {
+    if (!mainTitle) return;
+    if (sessionId) {
+      const cwd = cwdInput ? cwdInput.value.trim() : '';
+      mainTitle.textContent = cwd ? shortenPath(cwd) : sessionId.substring(0, 8);
+    } else {
+      mainTitle.textContent = '';
     }
   }
 
   // ── WebSocket ──
   function connectWs() {
     if (!sessionId) return;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/api/chat/ws?session=${encodeURIComponent(sessionId)}`;
+    const url = getChatWsUrl(sessionId);
     ws = new WebSocket(url);
 
     ws.onopen = () => {
       appendSystem('Session started.');
+      currentSessionState = 'idle';
     };
 
     ws.onmessage = (e) => {
@@ -289,26 +548,28 @@ const DenChat = (() => {
       appendSystem('Session ended.');
       ws = null;
       isStreaming = false;
-      // F006: Clear auto-dismissed tools on disconnect
+      currentSessionState = 'idle';
       autoDismissedTools.clear();
       updateInputState();
-      // Refresh session list to show the newly persisted session
-      refreshSessionList();
+      refreshSidebar();
     };
 
     ws.onerror = () => {
       // onclose will fire after this
     };
+
+    updateActiveHighlight();
   }
 
   function disconnectWs() {
     if (ws) {
-      ws.onclose = null; // Prevent appendSystem('Session ended.')
+      ws.onclose = null;
       ws.close();
       ws = null;
     }
     sessionId = null;
     isStreaming = false;
+    currentSessionState = 'idle';
     autoDismissedTools.clear();
     updateInputState();
   }
@@ -331,6 +592,9 @@ const DenChat = (() => {
       return;
     }
 
+    // Track state for sidebar indicator
+    trackState(event);
+
     switch (event.type) {
       case 'system':
         handleSystemEvent(event);
@@ -346,10 +610,33 @@ const DenChat = (() => {
         break;
       case 'session_ended':
         appendSystem('Claude process ended.');
+        currentSessionState = 'idle';
         break;
       default:
         break;
     }
+  }
+
+  function trackState(event) {
+    if (event.type === 'assistant') {
+      const content = event.message && event.message.content;
+      if (Array.isArray(content)) {
+        if (content.some((b) => b.type === 'thinking')) {
+          currentSessionState = 'thinking';
+        } else if (content.some((b) => b.type === 'tool_use')) {
+          currentSessionState = 'tooluse';
+        } else {
+          currentSessionState = 'streaming';
+        }
+      } else {
+        currentSessionState = 'streaming';
+      }
+    } else if (event.type === 'result') {
+      currentSessionState = 'idle';
+    }
+    // Update sidebar indicator for current session immediately
+    const el = sessionListEl && sessionListEl.querySelector(`.chat-session-item[data-session-id="${sessionId}"] .chat-session-state`);
+    if (el) el.dataset.state = currentSessionState;
   }
 
   function handleSystemEvent(event) {
@@ -374,13 +661,11 @@ const DenChat = (() => {
         case 'tool_use':
           if (block.name === 'AskUserQuestion') {
             appendAskDialog(block);
-            // Push notification for AskUserQuestion
             ensureNotificationPermission().then(() => {
               showNotification('Claude has a question', block.input?.question || 'Action required');
             });
           } else {
             appendToolUse(block);
-            // Push notification for modifying tools
             if (MODIFYING_TOOLS.has(block.name)) {
               ensureNotificationPermission().then(() => {
                 showNotification(`Tool: ${block.name}`, JSON.stringify(block.input || {}).substring(0, 100));
@@ -393,7 +678,6 @@ const DenChat = (() => {
   }
 
   function handleUserEvent(event) {
-    // Tool results from Claude's tool execution
     const msg = event.message;
     if (!msg || !msg.content) return;
 
@@ -416,14 +700,12 @@ const DenChat = (() => {
       const inp = tokens.input_tokens || 0;
       const out = tokens.output_tokens || 0;
       const cached = tokens.cache_read_input_tokens || 0;
-      // Cumulative tracking (#58)
       sessionCostUsd += event.total_cost_usd;
       sessionInputTokens += inp;
       sessionOutputTokens += out;
       appendCost(`$${cost} (total: $${sessionCostUsd.toFixed(4)}) | in:${inp} out:${out} cached:${cached}`);
     }
 
-    // Push notification for completion
     ensureNotificationPermission().then(() => {
       showNotification('Claude finished', 'Response complete.');
     });
@@ -481,7 +763,6 @@ const DenChat = (() => {
     }
   }
 
-  // F005: rAF batch rendering for thinking blocks (same pattern as appendAssistantText)
   function appendThinking(text) {
     if (!currentThinkingBlock) {
       const details = document.createElement('details');
@@ -506,14 +787,12 @@ const DenChat = (() => {
   }
 
   function appendToolUse(block) {
-    // Finalize any current assistant bubble
     currentAssistantBubble = null;
     currentThinkingBlock = null;
 
     const isModifying = MODIFYING_TOOLS.has(block.name);
     const isDismissed = autoDismissedTools.has(block.name);
 
-    // F001: Notification card (not approval — tools already executed in -p mode)
     if (isModifying && !isDismissed) {
       appendToolNotification(block);
     } else {
@@ -521,7 +800,6 @@ const DenChat = (() => {
     }
   }
 
-  /** Standard collapsible tool block (safe or auto-dismissed tools). */
   function appendToolBlock(block) {
     const details = document.createElement('details');
     details.className = 'chat-msg chat-tool';
@@ -540,29 +818,21 @@ const DenChat = (() => {
     scrollToBottom();
   }
 
-  /**
-   * F001: Notification card for modifying tools — shown expanded with dismiss buttons.
-   * This is NOT a blocking approval. In -p mode, claude CLI auto-executes tools.
-   * The card informs the user what was executed and lets them control future notifications.
-   */
   function appendToolNotification(block) {
     const card = document.createElement('div');
     card.className = 'chat-msg chat-tool chat-tool-notification';
     card.id = 'tool-' + block.id;
 
-    // Header
     const header = document.createElement('div');
     header.className = 'chat-tool-notification-header';
     header.textContent = block.name;
     card.appendChild(header);
 
-    // Input preview
     const inputPre = document.createElement('pre');
     inputPre.className = 'chat-tool-input';
     inputPre.textContent = JSON.stringify(block.input, null, 2);
     card.appendChild(inputPre);
 
-    // Action buttons
     const actions = document.createElement('div');
     actions.className = 'chat-tool-notification-actions';
 
@@ -593,7 +863,6 @@ const DenChat = (() => {
     scrollToBottom();
   }
 
-  /** Inline dialog for AskUserQuestion tool_use events. */
   function appendAskDialog(block) {
     currentAssistantBubble = null;
     currentThinkingBlock = null;
@@ -601,17 +870,14 @@ const DenChat = (() => {
     const card = document.createElement('div');
     card.className = 'chat-msg chat-tool chat-ask-dialog';
     card.id = 'tool-' + block.id;
-    // F003: Store tool_use_id on the card element for submitAskResponse
     card.dataset.toolUseId = block.id;
 
-    // Question text
     const question = (block.input && block.input.question) || 'Claude has a question:';
     const questionEl = document.createElement('div');
     questionEl.className = 'chat-ask-question';
     questionEl.textContent = question;
     card.appendChild(questionEl);
 
-    // Options (if provided)
     const options = block.input && block.input.options;
     if (Array.isArray(options) && options.length > 0) {
       const optionsEl = document.createElement('div');
@@ -628,7 +894,6 @@ const DenChat = (() => {
       card.appendChild(optionsEl);
     }
 
-    // Free-text input
     const inputRow = document.createElement('div');
     inputRow.className = 'chat-ask-input-row';
 
@@ -661,23 +926,18 @@ const DenChat = (() => {
     input.focus();
   }
 
-  /** Submit an AskUserQuestion response via WebSocket. */
   function submitAskResponse(card, answer) {
-    // F002: Only resolve UI if WS send succeeds
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       appendSystem('Cannot send answer: connection lost.');
       return;
     }
-    // F003: Include tool_use_id in the response
     const toolUseId = card.dataset.toolUseId || null;
     ws.send(JSON.stringify({ type: 'ask_response', text: answer, tool_use_id: toolUseId }));
 
-    // Replace card content with resolved state
     card.classList.add('chat-ask-resolved');
     const resolved = document.createElement('div');
     resolved.className = 'chat-ask-answered';
     resolved.textContent = 'Answered: ' + answer;
-    // Remove interactive elements
     const interactive = card.querySelectorAll('.chat-ask-options, .chat-ask-input-row');
     interactive.forEach((el) => el.remove());
     card.appendChild(resolved);
@@ -689,7 +949,6 @@ const DenChat = (() => {
     if (toolEl) {
       const resultDiv = document.createElement('div');
       resultDiv.className = 'chat-tool-result' + (item.is_error ? ' chat-tool-error' : '');
-      // Extract text content from various formats
       let text = '';
       if (typeof item.content === 'string') {
         text = item.content;
@@ -699,7 +958,6 @@ const DenChat = (() => {
           .map((c) => c.text)
           .join('\n');
       }
-      // Truncate very long results
       if (text.length > 2000) {
         text = text.substring(0, 2000) + '\n... (truncated)';
       }
@@ -828,12 +1086,10 @@ const DenChat = (() => {
   function setupMobileViewport() {
     if (!window.visualViewport) return;
     window.visualViewport.addEventListener('resize', () => {
-      // Adjust chat layout when virtual keyboard appears/disappears
       const chatPane = document.getElementById('chat-pane');
       if (!chatPane || chatPane.hidden) return;
       const vvHeight = window.visualViewport.height;
       const windowHeight = window.innerHeight;
-      // If viewport is significantly smaller than window, keyboard is likely showing
       if (vvHeight < windowHeight * 0.8) {
         chatPane.style.height = vvHeight + 'px';
       } else {
@@ -847,5 +1103,6 @@ const DenChat = (() => {
     init,
     toggleAllDetails,
     exportConversation,
+    setRemote,
   };
 })();

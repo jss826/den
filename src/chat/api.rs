@@ -22,6 +22,9 @@ pub struct CreateSessionRequest {
     /// Claude CLI session ID to resume (from persisted session).
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    /// Working directory for the new session.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// POST /api/chat/sessions — create a new chat session (optionally resuming).
@@ -31,7 +34,7 @@ pub async fn create_session(
 ) -> impl IntoResponse {
     match state
         .chat_manager
-        .create(body.resume_session_id.as_deref())
+        .create(body.resume_session_id.as_deref(), body.cwd.as_deref())
         .await
     {
         Ok(session) => {

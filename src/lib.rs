@@ -116,6 +116,10 @@ pub fn create_app_with_secret(
         .route("/api/remote/{id}/disconnect", post(remote::disconnect))
         .route("/api/remote/{id}/ws", get(remote::remote_ws_handler))
         .route(
+            "/api/remote/{id}/chat-ws",
+            get(remote::remote_chat_ws_handler),
+        )
+        .route(
             "/api/remote/{id}/fwd-ws/{port}",
             get(remote::remote_fwd_ws_root_handler),
         )
@@ -134,6 +138,10 @@ pub fn create_app_with_secret(
             get(remote::relay_list_connections),
         )
         .route("/api/relay/{id}/disconnect", post(remote::relay_disconnect))
+        .route(
+            "/api/relay/{id}/chat-ws",
+            get(remote::relay_chat_ws_handler),
+        )
         .route("/api/relay/{id}/ws", get(remote::relay_ws_handler))
         .route(
             "/api/relay/{id}/{*rest}",

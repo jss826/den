@@ -472,6 +472,24 @@ pub async fn remote_fwd_ws_handler(
         .into_response())
 }
 
+/// GET /api/remote/{id}/chat-ws — WebSocket proxy to remote Den's /api/chat/ws
+pub async fn remote_chat_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
+    RawQuery(query): RawQuery,
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, StatusCode> {
+    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let path = if let Some(q) = &query {
+        format!("/api/chat/ws?{q}")
+    } else {
+        "/api/chat/ws".to_string()
+    };
+    Ok(ws
+        .on_upgrade(move |socket| handle_remote_ws_path(socket, remote, path))
+        .into_response())
+}
+
 /// Catch-all proxy for /api/remote/{id}/{*rest}
 ///
 /// Routes `rest` to the appropriate path on the remote Den:
@@ -494,6 +512,7 @@ pub async fn remote_proxy_catch_all(
         format!("/{rest}")
     } else if rest.starts_with("terminal/")
         || rest.starts_with("filer/")
+        || rest.starts_with("chat/")
         || rest == "settings"
         || rest == "ports"
     {
@@ -1564,6 +1583,45 @@ pub async fn relay_proxy_catch_all(
                 body.to_vec(),
             )
             .await
+        }
+    }
+}
+
+/// GET /api/relay/{id}/chat-ws — WebSocket relay to target Den's /api/chat/ws
+pub async fn relay_chat_ws_handler(
+    ws: WebSocketUpgrade,
+    Path(session_id): Path<String>,
+    RawQuery(query): RawQuery,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let resolved = match resolve_relay_session(&state, &session_id) {
+        Some(r) => r,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let chat_path = if let Some(q) = &query {
+        format!("/api/chat/ws?{q}")
+    } else {
+        "/api/chat/ws".to_string()
+    };
+
+    match resolved {
+        RelayResolve::Server(target) => ws
+            .on_upgrade(move |socket| handle_remote_ws_path(socket, target, chat_path))
+            .into_response(),
+        RelayResolve::Client(rc) => {
+            let ws_base = rc.relay.base_url.replacen("https://", "wss://", 1);
+            let relay_ws_url = if let Some(q) = &query {
+                format!("{ws_base}/api/relay/{}/chat-ws?{q}", rc.relay_session_id)
+            } else {
+                format!("{ws_base}/api/relay/{}/chat-ws", rc.relay_session_id)
+            };
+            let cookie = rc.relay.cookie_header.clone();
+            let ws_config = rc.relay.ws_client_config.clone();
+            ws.on_upgrade(move |socket| {
+                handle_relay_client_ws(socket, relay_ws_url, cookie, ws_config)
+            })
+            .into_response()
         }
     }
 }
