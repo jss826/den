@@ -102,10 +102,14 @@ const DenChat = (() => {
       if (!toolsCustom.hidden) toolsCustom.focus();
     });
 
-    // Search filtering
+    // Search filtering (debounced)
+    let searchDebounce = null;
     searchInput.addEventListener('input', () => {
-      searchFilter = searchInput.value.trim().toLowerCase();
-      renderSessionList(cachedActiveSessions, cachedHistorySessions);
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        searchFilter = searchInput.value.trim().toLowerCase();
+        renderSessionList(cachedActiveSessions, cachedHistorySessions);
+      }, 200);
     });
 
     // Desktop sidebar toggle (F011)
@@ -258,6 +262,8 @@ const DenChat = (() => {
   }
 
   function renderSessionList(active, history) {
+    // Don't destroy DOM if an inline rename is in progress
+    if (renameInProgress) return;
     sessionListEl.innerHTML = '';
 
     const filteredActive = active.filter(matchesSearch);
@@ -404,7 +410,12 @@ const DenChat = (() => {
     return item;
   }
 
+  let renameInProgress = false;
+
   function startInlineRename(labelEl, id, type) {
+    if (renameInProgress) return;
+    renameInProgress = true;
+
     const oldText = labelEl.textContent;
     const input = document.createElement('input');
     input.type = 'text';
@@ -415,7 +426,12 @@ const DenChat = (() => {
     input.focus();
     input.select();
 
+    let committed = false;
     function commit() {
+      if (committed) return;
+      committed = true;
+      renameInProgress = false;
+
       const newName = input.value.trim();
       labelEl.textContent = newName || oldText;
       if (newName && newName !== oldText) {
@@ -428,7 +444,9 @@ const DenChat = (() => {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
           body: JSON.stringify({ name: newName }),
-        }).catch(() => {});
+        }).catch(() => {
+          appendSystem('Failed to rename session.');
+        });
       }
     }
 
@@ -538,20 +556,11 @@ const DenChat = (() => {
   async function restoreOrCreateSession() {
     const savedId = localStorage.getItem('chat-active-session');
     if (savedId) {
-      // Check if saved session is still alive
-      const base = getApiBase();
-      try {
-        const resp = await fetch(`${base}/chat/sessions`, { credentials: 'same-origin' });
-        if (resp.ok) {
-          const sessions = await resp.json();
-          const alive = sessions.find((s) => s.id === savedId && s.alive);
-          if (alive) {
-            switchToActiveSession(savedId);
-            return;
-          }
-        }
-      } catch {
-        // Fall through to create new
+      // Use cached sessions from refreshSidebar (already fetched)
+      const alive = cachedActiveSessions.find((s) => s.id === savedId && s.alive);
+      if (alive) {
+        switchToActiveSession(savedId);
+        return;
       }
       localStorage.removeItem('chat-active-session');
     }
@@ -568,8 +577,6 @@ const DenChat = (() => {
 
   // ── Continue last session ──
   async function continueLastSession() {
-    disconnectWs();
-    clearMessages();
     appendSystem('Continuing last session...');
 
     const base = getApiBase();
@@ -585,6 +592,9 @@ const DenChat = (() => {
         appendSystem('Failed to continue: ' + (err.error || resp.statusText));
         return;
       }
+      // Only disconnect after successful creation
+      disconnectWs();
+      clearMessages();
       const data = await resp.json();
       sessionId = data.id;
       connectWs();

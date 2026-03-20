@@ -169,9 +169,10 @@ impl ChatManager {
     }
 
     /// Return the claude_session_id of the most recently persisted session, if any.
+    /// list_persisted() is already sorted by last_active descending, so first() is the latest.
     pub fn latest_persisted_claude_session_id(&self) -> Option<String> {
         let sessions = self.list_persisted();
-        sessions.into_iter().find_map(|s| s.claude_session_id)
+        sessions.first().and_then(|s| s.claude_session_id.clone())
     }
 
     /// Create a new chat session by spawning a `claude` CLI process.
@@ -234,11 +235,20 @@ impl ChatManager {
             args.push(claude_sid.to_string());
         }
 
-        // Pass allowed tools if specified
+        // Pass allowed tools if specified (validate: alphanumeric + common chars only)
         if let Some(tools) = allowed_tools {
             for tool in tools {
-                args.push("--allowedTools".to_string());
-                args.push(tool.clone());
+                if !tool.is_empty()
+                    && tool.len() <= 64
+                    && tool
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    args.push("--allowedTools".to_string());
+                    args.push(tool.clone());
+                } else {
+                    tracing::warn!("Skipping invalid tool name: {tool:?}");
+                }
             }
         }
 
@@ -445,24 +455,45 @@ impl ChatManager {
         serde_json::from_str(&data).ok()
     }
 
-    /// Rename a persisted session on disk.
+    /// Rename a persisted session on disk (atomic write via tmp+rename).
     pub fn rename_persisted(&self, id: &str, name: Option<String>) -> bool {
         if !is_valid_session_id(id) {
             return false;
         }
         let path = self.chat_dir.join(format!("{id}.json"));
+        let tmp_path = self.chat_dir.join(format!("{id}.json.tmp"));
         let data = match std::fs::read_to_string(&path) {
             Ok(d) => d,
-            Err(_) => return false,
+            Err(e) => {
+                tracing::warn!("rename_persisted: read failed for {id}: {e}");
+                return false;
+            }
         };
         let mut session: PersistedSession = match serde_json::from_str(&data) {
             Ok(s) => s,
-            Err(_) => return false,
+            Err(e) => {
+                tracing::warn!("rename_persisted: parse failed for {id}: {e}");
+                return false;
+            }
         };
         session.name = name;
         match serde_json::to_string(&session) {
-            Ok(json) => std::fs::write(&path, json).is_ok(),
-            Err(_) => false,
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&tmp_path, &json) {
+                    tracing::warn!("rename_persisted: write tmp failed for {id}: {e}");
+                    return false;
+                }
+                if let Err(e) = std::fs::rename(&tmp_path, &path) {
+                    tracing::warn!("rename_persisted: rename failed for {id}: {e}");
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return false;
+                }
+                true
+            }
+            Err(e) => {
+                tracing::warn!("rename_persisted: serialize failed for {id}: {e}");
+                false
+            }
         }
     }
 
@@ -668,11 +699,6 @@ impl ChatSession {
     pub async fn set_name(&self, name: Option<String>) {
         *self.name.lock().await = name;
         self.dirty.store(true, Ordering::Release);
-    }
-
-    /// Get the display name.
-    pub async fn name(&self) -> Option<String> {
-        self.name.lock().await.clone()
     }
 
     /// Kill the child process.

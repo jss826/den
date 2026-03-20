@@ -42,7 +42,10 @@ pub async fn create_session(
     let resume_id = if body.resume_session_id.is_some() {
         body.resume_session_id.clone()
     } else if body.continue_last {
-        state.chat_manager.latest_persisted_claude_session_id()
+        let mgr = Arc::clone(&state.chat_manager);
+        tokio::task::spawn_blocking(move || mgr.latest_persisted_claude_session_id())
+            .await
+            .unwrap_or(None)
     } else {
         None
     };
@@ -96,15 +99,21 @@ pub struct RenameSessionRequest {
     pub name: Option<String>,
 }
 
+/// Maximum length for a session name.
+const MAX_SESSION_NAME_LEN: usize = 200;
+
 /// PATCH /api/chat/sessions/{id} — update session metadata (e.g. name).
 pub async fn rename_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(body): Json<RenameSessionRequest>,
 ) -> impl IntoResponse {
+    let name = body
+        .name
+        .map(|n| n.chars().take(MAX_SESSION_NAME_LEN).collect::<String>());
     match state.chat_manager.get(&id).await {
         Ok(session) => {
-            session.set_name(body.name).await;
+            session.set_name(name).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => chat_error_response(e),
@@ -171,7 +180,9 @@ pub async fn rename_history(
 ) -> impl IntoResponse {
     let renamed = tokio::task::spawn_blocking({
         let mgr = Arc::clone(&state.chat_manager);
-        let name = body.name;
+        let name = body
+            .name
+            .map(|n| n.chars().take(MAX_SESSION_NAME_LEN).collect::<String>());
         move || mgr.rename_persisted(&id, name)
     })
     .await
