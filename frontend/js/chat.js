@@ -26,6 +26,7 @@ const DenChat = (() => {
   let currentAssistantBubble = null;
   let currentThinkingBlock = null;
   let isStreaming = false;
+  let composing = false;
   let renderPending = false;
   let thinkingRenderPending = false;
 
@@ -78,12 +79,16 @@ const DenChat = (() => {
 
     sendBtn.addEventListener('click', handleSendOrStop);
     inputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         handleSendOrStop();
       }
     });
-    inputEl.addEventListener('input', autoResizeInput);
+    inputEl.addEventListener('input', () => { if (!composing) autoResizeInput(); });
+    inputEl.addEventListener('compositionstart', () => { composing = true; });
+    inputEl.addEventListener('compositionend', () => {
+      setTimeout(() => { composing = false; autoResizeInput(); }, 0);
+    });
 
     // Sidebar controls
     newBtn.addEventListener('click', () => startNewSession());
@@ -1153,7 +1158,7 @@ const DenChat = (() => {
     input.className = 'chat-ask-input';
     input.placeholder = 'Type your answer...';
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
         const text = input.value.trim();
         if (text) submitAskResponse(card, text);

@@ -27,7 +27,7 @@ const TextInput = (() => {
 
     textarea.addEventListener('keydown', (e) => {
       // Ctrl+Enter / Cmd+Enter: send
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
         send();
         return;
