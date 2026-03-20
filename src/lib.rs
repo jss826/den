@@ -76,6 +76,8 @@ pub fn create_app_with_secret(
     let port_monitor = Arc::new(port_monitor::PortMonitor::new());
     let remote_manager = Arc::new(remote::RemoteManager::default());
 
+    let chat_manager = Arc::new(chat::manager::ChatManager::new(&config.data_dir));
+
     let state = Arc::new(AppState {
         config,
         store,
@@ -89,7 +91,7 @@ pub fn create_app_with_secret(
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
-        chat_manager: Arc::new(chat::manager::ChatManager::new()),
+        chat_manager,
     });
 
     // 認証不要のルート
@@ -230,6 +232,11 @@ pub fn create_app_with_secret(
             delete(chat::api::destroy_session),
         )
         .route("/api/chat/ws", get(chat::api::chat_ws_handler))
+        .route("/api/chat/history", get(chat::api::list_history))
+        .route(
+            "/api/chat/history/{id}",
+            get(chat::api::get_history).delete(chat::api::delete_history),
+        )
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

@@ -11,6 +11,10 @@ const DenChat = (() => {
   let messagesEl = null;
   let inputEl = null;
   let sendBtn = null;
+  let sessionSelect = null;
+  let newBtn = null;
+  let resumeBtn = null;
+  let deleteBtn = null;
   let currentAssistantBubble = null;
   let currentThinkingBlock = null;
   let isStreaming = false;
@@ -26,11 +30,18 @@ const DenChat = (() => {
   ]);
   const autoDismissedTools = new Set();
 
+  // ── Push notification state ──
+  let notificationsEnabled = false;
+
   // ── Init ──
   function init() {
     messagesEl = document.getElementById('chat-messages');
     inputEl = document.getElementById('chat-input');
     sendBtn = document.getElementById('chat-send');
+    sessionSelect = document.getElementById('chat-session-select');
+    newBtn = document.getElementById('chat-new-btn');
+    resumeBtn = document.getElementById('chat-resume-btn');
+    deleteBtn = document.getElementById('chat-delete-btn');
 
     sendBtn.addEventListener('click', sendMessage);
     inputEl.addEventListener('keydown', (e) => {
@@ -40,11 +51,188 @@ const DenChat = (() => {
       }
     });
 
-    // Auto-create a session on first init
-    createSession();
+    // Session bar controls
+    newBtn.addEventListener('click', () => startNewSession());
+    resumeBtn.addEventListener('click', resumeSelected);
+    deleteBtn.addEventListener('click', deleteSelected);
+    sessionSelect.addEventListener('change', onSessionSelectChange);
+
+    // Request notification permission early
+    requestNotificationPermission();
+
+    // Handle visualViewport for mobile keyboard avoidance
+    setupMobileViewport();
+
+    // Load persisted sessions and auto-create a new one
+    refreshSessionList().then(() => createSession());
+  }
+
+  // ── Push notifications ──
+  function requestNotificationPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      notificationsEnabled = true;
+    } else if (Notification.permission !== 'denied') {
+      // Will request on first relevant event
+    }
+  }
+
+  async function ensureNotificationPermission() {
+    if (!('Notification' in window)) return false;
+    if (Notification.permission === 'granted') {
+      notificationsEnabled = true;
+      return true;
+    }
+    if (Notification.permission === 'denied') return false;
+    const result = await Notification.requestPermission();
+    notificationsEnabled = result === 'granted';
+    return notificationsEnabled;
+  }
+
+  function shouldNotify() {
+    // Notify if page is hidden OR chat tab is not active
+    if (document.hidden) return true;
+    const activeTab = document.querySelector('.tab.active');
+    return activeTab && activeTab.dataset.tab !== 'chat';
+  }
+
+  function showNotification(title, body) {
+    if (!notificationsEnabled || !shouldNotify()) return;
+    try {
+      const n = new Notification(title, {
+        body: body,
+        icon: '/favicon.ico',
+        tag: 'den-chat',
+        renotify: true,
+      });
+      n.onclick = () => {
+        window.focus();
+        if (window.DenApp) window.DenApp.switchTab('chat');
+        n.close();
+      };
+      // Auto-close after 5 seconds
+      setTimeout(() => n.close(), 5000);
+    } catch {
+      // Notification API may fail in some contexts
+    }
   }
 
   // ── Session management ──
+  async function refreshSessionList() {
+    try {
+      const resp = await fetch('/api/chat/history', { credentials: 'same-origin' });
+      if (!resp.ok) return;
+      const sessions = await resp.json();
+      // Clear existing options except the first "New Session"
+      while (sessionSelect.options.length > 1) {
+        sessionSelect.remove(1);
+      }
+      for (const s of sessions) {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.dataset.claudeSessionId = s.claude_session_id || '';
+        const date = new Date(s.created_at).toLocaleString();
+        const msgs = s.message_count;
+        opt.textContent = `${date} (${msgs} events)`;
+        sessionSelect.appendChild(opt);
+      }
+    } catch {
+      // Silently ignore
+    }
+  }
+
+  function onSessionSelectChange() {
+    const val = sessionSelect.value;
+    resumeBtn.hidden = !val;
+    deleteBtn.hidden = !val;
+  }
+
+  async function startNewSession() {
+    sessionSelect.value = '';
+    resumeBtn.hidden = true;
+    deleteBtn.hidden = true;
+    disconnectWs();
+    clearMessages();
+    await createSession();
+  }
+
+  async function resumeSelected() {
+    const selectedOpt = sessionSelect.selectedOptions[0];
+    if (!selectedOpt || !selectedOpt.value) return;
+
+    const persistedId = selectedOpt.value;
+    const claudeSessionId = selectedOpt.dataset.claudeSessionId;
+
+    if (!claudeSessionId) {
+      appendSystem('Cannot resume: no claude session ID found.');
+      return;
+    }
+
+    disconnectWs();
+    clearMessages();
+    appendSystem('Resuming session...');
+
+    // Load persisted history for display
+    try {
+      const histResp = await fetch(`/api/chat/history/${encodeURIComponent(persistedId)}`, {
+        credentials: 'same-origin',
+      });
+      if (histResp.ok) {
+        const data = await histResp.json();
+        if (data.history) {
+          for (const line of data.history) {
+            handleEvent(line);
+          }
+        }
+      }
+    } catch {
+      // Continue even if history load fails
+    }
+
+    // Create a new active session with --resume
+    try {
+      const resp = await fetch('/api/chat/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ resume_session_id: claudeSessionId }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        appendSystem('Failed to resume: ' + (err.error || resp.statusText));
+        return;
+      }
+      const data = await resp.json();
+      sessionId = data.id;
+      // Reset streaming state after history replay
+      isStreaming = false;
+      currentAssistantBubble = null;
+      currentThinkingBlock = null;
+      connectWs();
+    } catch (e) {
+      appendSystem('Failed to resume: ' + e.message);
+    }
+  }
+
+  async function deleteSelected() {
+    const selectedOpt = sessionSelect.selectedOptions[0];
+    if (!selectedOpt || !selectedOpt.value) return;
+
+    const persistedId = selectedOpt.value;
+    try {
+      await fetch(`/api/chat/history/${encodeURIComponent(persistedId)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      selectedOpt.remove();
+      sessionSelect.value = '';
+      resumeBtn.hidden = true;
+      deleteBtn.hidden = true;
+    } catch {
+      // Silently ignore
+    }
+  }
+
   async function createSession() {
     // F006: Reset auto-dismissed tools on new session
     autoDismissedTools.clear();
@@ -91,11 +279,31 @@ const DenChat = (() => {
       // F006: Clear auto-dismissed tools on disconnect
       autoDismissedTools.clear();
       updateInputState();
+      // Refresh session list to show the newly persisted session
+      refreshSessionList();
     };
 
     ws.onerror = () => {
       // onclose will fire after this
     };
+  }
+
+  function disconnectWs() {
+    if (ws) {
+      ws.onclose = null; // Prevent appendSystem('Session ended.')
+      ws.close();
+      ws = null;
+    }
+    sessionId = null;
+    isStreaming = false;
+    autoDismissedTools.clear();
+    updateInputState();
+  }
+
+  function clearMessages() {
+    if (messagesEl) messagesEl.innerHTML = '';
+    currentAssistantBubble = null;
+    currentThinkingBlock = null;
   }
 
   // ── Event handling ──
@@ -150,8 +358,18 @@ const DenChat = (() => {
         case 'tool_use':
           if (block.name === 'AskUserQuestion') {
             appendAskDialog(block);
+            // Push notification for AskUserQuestion
+            ensureNotificationPermission().then(() => {
+              showNotification('Claude has a question', block.input?.question || 'Action required');
+            });
           } else {
             appendToolUse(block);
+            // Push notification for modifying tools
+            if (MODIFYING_TOOLS.has(block.name)) {
+              ensureNotificationPermission().then(() => {
+                showNotification(`Tool: ${block.name}`, JSON.stringify(block.input || {}).substring(0, 100));
+              });
+            }
           }
           break;
       }
@@ -184,6 +402,11 @@ const DenChat = (() => {
       const cached = tokens.cache_read_input_tokens || 0;
       appendCost(`$${cost} | in:${inp} out:${out} cached:${cached}`);
     }
+
+    // Push notification for completion
+    ensureNotificationPermission().then(() => {
+      showNotification('Claude finished', 'Response complete.');
+    });
   }
 
   // ── DOM rendering ──
@@ -488,6 +711,24 @@ const DenChat = (() => {
 
   function scrollToBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ── Mobile viewport handling ──
+  function setupMobileViewport() {
+    if (!window.visualViewport) return;
+    window.visualViewport.addEventListener('resize', () => {
+      // Adjust chat layout when virtual keyboard appears/disappears
+      const chatPane = document.getElementById('chat-pane');
+      if (!chatPane || chatPane.hidden) return;
+      const vvHeight = window.visualViewport.height;
+      const windowHeight = window.innerHeight;
+      // If viewport is significantly smaller than window, keyboard is likely showing
+      if (vvHeight < windowHeight * 0.8) {
+        chatPane.style.height = vvHeight + 'px';
+      } else {
+        chatPane.style.height = '';
+      }
+    });
   }
 
   // ── Public API ──

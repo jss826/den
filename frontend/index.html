@@ -111,6 +111,14 @@
     <!-- チャット -->
     <div id="chat-pane" class="pane" hidden role="tabpanel" aria-label="Chat">
       <div class="chat-layout">
+        <div class="chat-session-bar">
+          <select id="chat-session-select" class="chat-session-select" aria-label="Chat sessions">
+            <option value="">New Session</option>
+          </select>
+          <button id="chat-new-btn" class="chat-bar-btn" type="button" aria-label="New session" data-tooltip="New Session">+</button>
+          <button id="chat-resume-btn" class="chat-bar-btn" type="button" aria-label="Resume session" data-tooltip="Resume" hidden>Resume</button>
+          <button id="chat-delete-btn" class="chat-bar-btn chat-bar-btn-danger" type="button" aria-label="Delete session" data-tooltip="Delete" hidden>Del</button>
+        </div>
         <div id="chat-messages" class="chat-messages"></div>
         <div class="chat-input-area">
           <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..."></textarea>

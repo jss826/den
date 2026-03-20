@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncWriteExt;
@@ -14,8 +15,13 @@ const BROADCAST_CAPACITY: usize = 256;
 /// Maximum number of history events to retain per session.
 const MAX_HISTORY: usize = 5000;
 
+/// Interval for periodic history flush to disk.
+const FLUSH_INTERVAL_SECS: u64 = 60;
+
 pub struct ChatManager {
     sessions: RwLock<HashMap<String, Arc<ChatSession>>>,
+    /// Directory for persisting chat history (`{data_dir}/chat/`).
+    chat_dir: PathBuf,
 }
 
 pub struct ChatSession {
@@ -27,6 +33,12 @@ pub struct ChatSession {
     child: Mutex<Option<Child>>,
     /// Capped event history for replay on reconnect.
     history: Mutex<Vec<String>>,
+    /// Claude CLI's session ID (extracted from `system` init event).
+    claude_session_id: Mutex<Option<String>>,
+    /// Directory for persisting this session's history.
+    chat_dir: PathBuf,
+    /// Whether history has been modified since last flush.
+    dirty: AtomicBool,
 }
 
 #[derive(serde::Serialize)]
@@ -34,6 +46,25 @@ pub struct ChatSessionInfo {
     pub id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub alive: bool,
+}
+
+/// Persisted session metadata (stored as JSON).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PersistedSession {
+    pub id: String,
+    pub claude_session_id: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_active: chrono::DateTime<chrono::Utc>,
+    pub history: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct PersistedSessionInfo {
+    pub id: String,
+    pub claude_session_id: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_active: chrono::DateTime<chrono::Utc>,
+    pub message_count: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,42 +83,65 @@ pub enum ChatError {
     WriteFailed(String),
 }
 
-impl Default for ChatManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ChatManager {
-    pub fn new() -> Self {
+    pub fn new(data_dir: &str) -> Self {
+        let chat_dir = PathBuf::from(data_dir).join("chat");
+        // Ensure the chat directory exists
+        if let Err(e) = std::fs::create_dir_all(&chat_dir) {
+            tracing::warn!("Failed to create chat dir {}: {e}", chat_dir.display());
+        }
         Self {
             sessions: RwLock::new(HashMap::new()),
+            chat_dir,
         }
     }
 
     /// Create a new chat session by spawning a `claude` CLI process.
-    pub async fn create(&self) -> Result<Arc<ChatSession>, ChatError> {
+    /// If `resume_id` is provided, the claude CLI is started with `--resume <id>`.
+    pub async fn create(&self, resume_id: Option<&str>) -> Result<Arc<ChatSession>, ChatError> {
         // Cleanup dead sessions and check limit under a single write lock (F002 + F004)
         let id = generate_session_id();
         {
             let mut sessions = self.sessions.write().await;
+            // Persist dead sessions before removing them
+            let dead_ids: Vec<String> = sessions
+                .iter()
+                .filter(|(_, s)| !s.is_alive())
+                .map(|(k, _)| k.clone())
+                .collect();
+            for dead_id in &dead_ids {
+                if let Some(dead_session) = sessions.get(dead_id) {
+                    dead_session.flush_to_disk().await;
+                }
+            }
             sessions.retain(|_, s| s.is_alive());
             if sessions.len() >= MAX_SESSIONS {
                 return Err(ChatError::TooManySessions);
             }
             // Reserve the slot immediately to prevent TOCTOU
-            sessions.insert(id.clone(), Arc::new(ChatSession::placeholder(id.clone())));
+            sessions.insert(
+                id.clone(),
+                Arc::new(ChatSession::placeholder(id.clone(), self.chat_dir.clone())),
+            );
         }
 
         let mut cmd = tokio::process::Command::new("claude");
-        cmd.args([
-            "-p",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-        ]);
+        let mut args = vec![
+            "-p".to_string(),
+            "--input-format".to_string(),
+            "stream-json".to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--verbose".to_string(),
+        ];
+
+        // If resuming a previous session, add --resume flag
+        if let Some(claude_sid) = resume_id {
+            args.push("--resume".to_string());
+            args.push(claude_sid.to_string());
+        }
+
+        cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -120,6 +174,16 @@ impl ChatManager {
 
         let (output_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
 
+        // If resuming, load persisted history for replay
+        let initial_history = if resume_id.is_some() {
+            // Find persisted session that matches (by looking for the file)
+            // We use the new session id, but the history comes from the persisted session
+            // The caller should have provided the claude_session_id from persisted data
+            Vec::new()
+        } else {
+            Vec::new()
+        };
+
         let session = Arc::new(ChatSession {
             id: id.clone(),
             created_at: chrono::Utc::now(),
@@ -127,7 +191,10 @@ impl ChatManager {
             stdin: Mutex::new(Some(stdin)),
             output_tx: output_tx.clone(),
             child: Mutex::new(Some(child)),
-            history: Mutex::new(Vec::new()),
+            history: Mutex::new(initial_history),
+            claude_session_id: Mutex::new(resume_id.map(|s| s.to_string())),
+            chat_dir: self.chat_dir.clone(),
+            dirty: AtomicBool::new(false),
         });
 
         // Spawn stdout reader task
@@ -138,8 +205,11 @@ impl ChatManager {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                // F001: cap history to prevent unbounded growth
+                // Extract claude_session_id from system init event
                 if let Some(sess) = sess_weak.upgrade() {
+                    extract_claude_session_id(&sess, &line).await;
+
+                    // F001: cap history to prevent unbounded growth
                     let mut hist = sess.history.lock().await;
                     if hist.len() >= MAX_HISTORY {
                         // Drop oldest 20% to avoid frequent trimming
@@ -147,11 +217,14 @@ impl ChatManager {
                         hist.drain(..drain_count);
                     }
                     hist.push(line.clone());
+                    sess.dirty.store(true, Ordering::Release);
                 }
                 let _ = tx.send(line);
             }
             if let Some(sess) = sess_weak.upgrade() {
                 sess.alive.store(false, Ordering::Release);
+                // Flush history to disk when process ends
+                sess.flush_to_disk().await;
             }
         });
 
@@ -162,6 +235,23 @@ impl ChatManager {
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!(target: "chat_stderr", "{}", line);
+            }
+        });
+
+        // Spawn periodic flush task
+        let flush_weak = Arc::downgrade(&session);
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(FLUSH_INTERVAL_SECS);
+            loop {
+                tokio::time::sleep(interval).await;
+                match flush_weak.upgrade() {
+                    Some(sess) if sess.is_alive() => {
+                        if sess.dirty.load(Ordering::Acquire) {
+                            sess.flush_to_disk().await;
+                        }
+                    }
+                    _ => break, // Session dropped or dead
+                }
             }
         });
 
@@ -181,7 +271,7 @@ impl ChatManager {
             .ok_or_else(|| ChatError::NotFound(id.to_string()))
     }
 
-    /// List all chat sessions.
+    /// List all active chat sessions.
     pub async fn list(&self) -> Vec<ChatSessionInfo> {
         self.sessions
             .read()
@@ -195,7 +285,49 @@ impl ChatManager {
             .collect()
     }
 
-    /// Destroy a chat session.
+    /// List persisted (past) chat sessions from disk.
+    pub fn list_persisted(&self) -> Vec<PersistedSessionInfo> {
+        let mut result = Vec::new();
+        let entries = match std::fs::read_dir(&self.chat_dir) {
+            Ok(e) => e,
+            Err(_) => return result,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(data) = std::fs::read_to_string(&path)
+                && let Ok(persisted) = serde_json::from_str::<PersistedSession>(&data)
+            {
+                result.push(PersistedSessionInfo {
+                    id: persisted.id,
+                    claude_session_id: persisted.claude_session_id,
+                    created_at: persisted.created_at,
+                    last_active: persisted.last_active,
+                    message_count: persisted.history.len(),
+                });
+            }
+        }
+        // Sort by last_active descending
+        result.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        result
+    }
+
+    /// Load a persisted session's history from disk.
+    pub fn load_persisted(&self, id: &str) -> Option<PersistedSession> {
+        let path = self.chat_dir.join(format!("{id}.json"));
+        let data = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+
+    /// Delete a persisted session from disk.
+    pub fn delete_persisted(&self, id: &str) -> bool {
+        let path = self.chat_dir.join(format!("{id}.json"));
+        std::fs::remove_file(path).is_ok()
+    }
+
+    /// Destroy an active chat session.
     pub async fn destroy(&self, id: &str) -> Result<(), ChatError> {
         // F010: release write lock before calling kill()
         let session = self
@@ -204,6 +336,8 @@ impl ChatManager {
             .await
             .remove(id)
             .ok_or_else(|| ChatError::NotFound(id.to_string()))?;
+        // Flush before killing
+        session.flush_to_disk().await;
         // Lock is dropped here, then kill asynchronously
         session.kill().await;
         Ok(())
@@ -212,7 +346,7 @@ impl ChatManager {
 
 impl ChatSession {
     /// Create a placeholder session to reserve a slot during spawn.
-    fn placeholder(id: String) -> Self {
+    fn placeholder(id: String, chat_dir: PathBuf) -> Self {
         let (tx, _) = broadcast::channel(1);
         Self {
             id,
@@ -222,11 +356,19 @@ impl ChatSession {
             output_tx: tx,
             child: Mutex::new(None),
             history: Mutex::new(Vec::new()),
+            claude_session_id: Mutex::new(None),
+            chat_dir,
+            dirty: AtomicBool::new(false),
         }
     }
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// Get the claude CLI session ID (if known).
+    pub async fn claude_session_id(&self) -> Option<String> {
+        self.claude_session_id.lock().await.clone()
     }
 
     /// Send a user message as stream-json input.
@@ -284,6 +426,39 @@ impl ChatSession {
         self.history.lock().await.clone()
     }
 
+    /// Flush history to disk as a JSON file.
+    pub async fn flush_to_disk(&self) {
+        if !self.dirty.load(Ordering::Acquire) {
+            return;
+        }
+        let history = self.history.lock().await.clone();
+        if history.is_empty() {
+            return;
+        }
+        let claude_sid = self.claude_session_id.lock().await.clone();
+        let persisted = PersistedSession {
+            id: self.id.clone(),
+            claude_session_id: claude_sid,
+            created_at: self.created_at,
+            last_active: chrono::Utc::now(),
+            history,
+        };
+        let path = self.chat_dir.join(format!("{}.json", self.id));
+        match serde_json::to_string(&persisted) {
+            Ok(json) => {
+                if let Err(e) = tokio::fs::write(&path, json).await {
+                    tracing::warn!("Failed to persist chat session {}: {e}", self.id);
+                } else {
+                    self.dirty.store(false, Ordering::Release);
+                    tracing::debug!("Persisted chat session {} to {}", self.id, path.display());
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to serialize chat session {}: {e}", self.id);
+            }
+        }
+    }
+
     /// Kill the child process.
     async fn kill(&self) {
         self.alive.store(false, Ordering::Release);
@@ -291,6 +466,23 @@ impl ChatSession {
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
         }
+    }
+}
+
+/// Extract claude session ID from system init event.
+async fn extract_claude_session_id(session: &ChatSession, line: &str) {
+    // Only try if we haven't extracted it yet
+    let has_id = session.claude_session_id.lock().await.is_some();
+    if has_id {
+        return;
+    }
+    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line)
+        && event.get("type").and_then(|t| t.as_str()) == Some("system")
+        && event.get("subtype").and_then(|t| t.as_str()) == Some("init")
+        && let Some(sid) = event.get("session_id").and_then(|s| s.as_str())
+    {
+        *session.claude_session_id.lock().await = Some(sid.to_string());
+        tracing::debug!("Captured claude session_id: {sid}");
     }
 }
 

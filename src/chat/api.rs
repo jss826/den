@@ -17,25 +17,45 @@ use crate::AppState;
 
 // ── REST endpoints ──────────────────────────────────────────────
 
-/// POST /api/chat/sessions — create a new chat session.
-pub async fn create_session(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.chat_manager.create().await {
-        Ok(session) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "id": session.id })),
-        )
-            .into_response(),
+#[derive(Deserialize, Default)]
+pub struct CreateSessionRequest {
+    /// Claude CLI session ID to resume (from persisted session).
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
+}
+
+/// POST /api/chat/sessions — create a new chat session (optionally resuming).
+pub async fn create_session(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateSessionRequest>,
+) -> impl IntoResponse {
+    match state
+        .chat_manager
+        .create(body.resume_session_id.as_deref())
+        .await
+    {
+        Ok(session) => {
+            let claude_sid = session.claude_session_id().await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({
+                    "id": session.id,
+                    "claude_session_id": claude_sid,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => chat_error_response(e),
     }
 }
 
-/// GET /api/chat/sessions — list all chat sessions.
+/// GET /api/chat/sessions — list all active chat sessions.
 pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let sessions = state.chat_manager.list().await;
     Json(sessions).into_response()
 }
 
-/// DELETE /api/chat/sessions/{id} — destroy a chat session.
+/// DELETE /api/chat/sessions/{id} — destroy an active chat session.
 pub async fn destroy_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -43,6 +63,60 @@ pub async fn destroy_session(
     match state.chat_manager.destroy(&id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => chat_error_response(e),
+    }
+}
+
+/// GET /api/chat/history — list persisted (past) chat sessions.
+pub async fn list_history(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let sessions = tokio::task::spawn_blocking({
+        let mgr = Arc::clone(&state.chat_manager);
+        move || mgr.list_persisted()
+    })
+    .await
+    .unwrap_or_default();
+    Json(sessions).into_response()
+}
+
+/// GET /api/chat/history/{id} — get a persisted session's full history.
+pub async fn get_history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking({
+        let mgr = Arc::clone(&state.chat_manager);
+        move || mgr.load_persisted(&id)
+    })
+    .await
+    .unwrap_or(None);
+    match result {
+        Some(session) => Json(serde_json::json!(session)).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "persisted session not found"})),
+        )
+            .into_response(),
+    }
+}
+
+/// DELETE /api/chat/history/{id} — delete a persisted session.
+pub async fn delete_history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let deleted = tokio::task::spawn_blocking({
+        let mgr = Arc::clone(&state.chat_manager);
+        move || mgr.delete_persisted(&id)
+    })
+    .await
+    .unwrap_or(false);
+    if deleted {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "persisted session not found"})),
+        )
+            .into_response()
     }
 }
 

@@ -758,6 +758,106 @@ html, body {
   cursor: not-allowed;
 }
 
+/* Chat session bar */
+.chat-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #333);
+  background: var(--bg, #181818);
+  flex-shrink: 0;
+}
+.chat-session-select {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 13px;
+  outline: none;
+  min-width: 0;
+}
+.chat-session-select:focus {
+  border-color: var(--accent, #4a9eff);
+}
+.chat-bar-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.chat-bar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.chat-bar-btn-danger:hover {
+  background: rgba(244, 68, 68, 0.2);
+  color: #f44;
+}
+
+/* Mobile optimization for Chat */
+@media (max-width: 768px) {
+  .chat-msg {
+    max-width: 95%;
+    font-size: 15px;
+  }
+  .chat-user {
+    max-width: 90%;
+  }
+  .chat-assistant {
+    max-width: 100%;
+  }
+  .chat-messages {
+    padding: 8px;
+  }
+  .chat-input-area {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .chat-input {
+    font-size: 16px; /* Prevent iOS auto-zoom */
+    padding: 10px;
+  }
+  .chat-send-btn {
+    padding: 10px 16px;
+    font-size: 15px;
+    min-height: 44px; /* Touch target */
+    min-width: 44px;
+  }
+  .chat-session-bar {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+  .chat-session-select {
+    font-size: 14px;
+  }
+  .chat-bar-btn {
+    min-height: 44px;
+    min-width: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .chat-notification-btn {
+    min-height: 44px;
+    padding: 8px 16px;
+  }
+  .chat-ask-input {
+    font-size: 16px; /* Prevent iOS auto-zoom */
+    padding: 8px;
+  }
+  .chat-tool-input {
+    font-size: 11px;
+    max-height: 150px;
+  }
+}
+
 /* Terminal session bar */
 #terminal-pane {
   --terminal-session-bar-height: 40px;
