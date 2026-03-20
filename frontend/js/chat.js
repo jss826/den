@@ -204,13 +204,15 @@ const DenChat = (() => {
       }
       const data = await resp.json();
       sessionId = data.id;
-      // Reset streaming state after history replay
-      isStreaming = false;
-      currentAssistantBubble = null;
-      currentThinkingBlock = null;
       connectWs();
     } catch (e) {
       appendSystem('Failed to resume: ' + e.message);
+    } finally {
+      // F009: Always reset streaming state after history replay, even on error
+      isStreaming = false;
+      currentAssistantBubble = null;
+      currentThinkingBlock = null;
+      updateInputState();
     }
   }
 
@@ -220,16 +222,21 @@ const DenChat = (() => {
 
     const persistedId = selectedOpt.value;
     try {
-      await fetch(`/api/chat/history/${encodeURIComponent(persistedId)}`, {
+      // F008: Only remove DOM option after confirming server-side delete succeeded
+      const resp = await fetch(`/api/chat/history/${encodeURIComponent(persistedId)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
-      selectedOpt.remove();
-      sessionSelect.value = '';
-      resumeBtn.hidden = true;
-      deleteBtn.hidden = true;
+      if (resp.ok || resp.status === 204) {
+        selectedOpt.remove();
+        sessionSelect.value = '';
+        resumeBtn.hidden = true;
+        deleteBtn.hidden = true;
+      } else {
+        appendSystem('Failed to delete session.');
+      }
     } catch {
-      // Silently ignore
+      appendSystem('Failed to delete session.');
     }
   }
 

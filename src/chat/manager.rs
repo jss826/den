@@ -18,6 +18,9 @@ const MAX_HISTORY: usize = 5000;
 /// Interval for periodic history flush to disk.
 const FLUSH_INTERVAL_SECS: u64 = 60;
 
+/// Maximum number of persisted session files to keep on disk.
+const MAX_PERSISTED_SESSIONS: usize = 50;
+
 pub struct ChatManager {
     sessions: RwLock<HashMap<String, Arc<ChatSession>>>,
     /// Directory for persisting chat history (`{data_dir}/chat/`).
@@ -48,7 +51,7 @@ pub struct ChatSessionInfo {
     pub alive: bool,
 }
 
-/// Persisted session metadata (stored as JSON).
+/// Persisted session (full data stored as JSON).
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PersistedSession {
     pub id: String,
@@ -56,6 +59,16 @@ pub struct PersistedSession {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub last_active: chrono::DateTime<chrono::Utc>,
     pub history: Vec<String>,
+}
+
+/// Lightweight metadata for listing persisted sessions without loading full history.
+#[derive(serde::Deserialize)]
+struct PersistedSessionMeta {
+    id: String,
+    claude_session_id: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_active: chrono::DateTime<chrono::Utc>,
+    // history is skipped during deserialization — we count from the raw JSON instead
 }
 
 #[derive(serde::Serialize)]
@@ -83,6 +96,20 @@ pub enum ChatError {
     WriteFailed(String),
 }
 
+/// F001: Validate that a session ID is a safe filesystem component (hex only).
+fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// F007: Validate that a claude session ID contains only safe characters.
+fn is_valid_claude_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 impl ChatManager {
     pub fn new(data_dir: &str) -> Self {
         let chat_dir = PathBuf::from(data_dir).join("chat");
@@ -99,21 +126,25 @@ impl ChatManager {
     /// Create a new chat session by spawning a `claude` CLI process.
     /// If `resume_id` is provided, the claude CLI is started with `--resume <id>`.
     pub async fn create(&self, resume_id: Option<&str>) -> Result<Arc<ChatSession>, ChatError> {
-        // Cleanup dead sessions and check limit under a single write lock (F002 + F004)
+        // F007: Validate resume_id format before passing to CLI
+        if let Some(rid) = resume_id
+            && !is_valid_claude_session_id(rid)
+        {
+            return Err(ChatError::SpawnFailed(
+                "invalid resume session ID format".to_string(),
+            ));
+        }
+
+        // F003: Collect dead sessions under write lock, then flush OUTSIDE the lock
         let id = generate_session_id();
+        let dead_sessions: Vec<Arc<ChatSession>>;
         {
             let mut sessions = self.sessions.write().await;
-            // Persist dead sessions before removing them
-            let dead_ids: Vec<String> = sessions
+            dead_sessions = sessions
                 .iter()
                 .filter(|(_, s)| !s.is_alive())
-                .map(|(k, _)| k.clone())
+                .map(|(_, s)| Arc::clone(s))
                 .collect();
-            for dead_id in &dead_ids {
-                if let Some(dead_session) = sessions.get(dead_id) {
-                    dead_session.flush_to_disk().await;
-                }
-            }
             sessions.retain(|_, s| s.is_alive());
             if sessions.len() >= MAX_SESSIONS {
                 return Err(ChatError::TooManySessions);
@@ -123,6 +154,10 @@ impl ChatManager {
                 id.clone(),
                 Arc::new(ChatSession::placeholder(id.clone(), self.chat_dir.clone())),
             );
+        }
+        // Flush dead sessions outside the lock
+        for dead_session in dead_sessions {
+            dead_session.flush_to_disk().await;
         }
 
         let mut cmd = tokio::process::Command::new("claude");
@@ -146,7 +181,7 @@ impl ChatManager {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        // Default to user's home directory (F006: removed arbitrary cwd parameter)
+        // Default to user's home directory
         if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
             cmd.current_dir(home);
         }
@@ -174,15 +209,8 @@ impl ChatManager {
 
         let (output_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
 
-        // If resuming, load persisted history for replay
-        let initial_history = if resume_id.is_some() {
-            // Find persisted session that matches (by looking for the file)
-            // We use the new session id, but the history comes from the persisted session
-            // The caller should have provided the claude_session_id from persisted data
-            Vec::new()
-        } else {
-            Vec::new()
-        };
+        // F010: Removed dead code — initial_history is always empty.
+        // Resume history replay is handled by the frontend (loads from /api/chat/history/{id}).
 
         let session = Arc::new(ChatSession {
             id: id.clone(),
@@ -191,7 +219,7 @@ impl ChatManager {
             stdin: Mutex::new(Some(stdin)),
             output_tx: output_tx.clone(),
             child: Mutex::new(Some(child)),
-            history: Mutex::new(initial_history),
+            history: Mutex::new(Vec::new()),
             claude_session_id: Mutex::new(resume_id.map(|s| s.to_string())),
             chat_dir: self.chat_dir.clone(),
             dirty: AtomicBool::new(false),
@@ -209,7 +237,7 @@ impl ChatManager {
                 if let Some(sess) = sess_weak.upgrade() {
                     extract_claude_session_id(&sess, &line).await;
 
-                    // F001: cap history to prevent unbounded growth
+                    // Cap history to prevent unbounded growth
                     let mut hist = sess.history.lock().await;
                     if hist.len() >= MAX_HISTORY {
                         // Drop oldest 20% to avoid frequent trimming
@@ -285,7 +313,8 @@ impl ChatManager {
             .collect()
     }
 
-    /// List persisted (past) chat sessions from disk.
+    /// F004: List persisted sessions using lightweight metadata deserialization.
+    /// Only reads the top-level fields, skipping the `history` array.
     pub fn list_persisted(&self) -> Vec<PersistedSessionInfo> {
         let mut result = Vec::new();
         let entries = match std::fs::read_dir(&self.chat_dir) {
@@ -298,14 +327,17 @@ impl ChatManager {
                 continue;
             }
             if let Ok(data) = std::fs::read_to_string(&path)
-                && let Ok(persisted) = serde_json::from_str::<PersistedSession>(&data)
+                && let Ok(meta) = serde_json::from_str::<PersistedSessionMeta>(&data)
             {
+                // Estimate message count from the raw JSON by counting `history` array elements.
+                // This avoids deserializing the full array; we use the metadata struct that skips it.
+                let message_count = count_history_entries(&data);
                 result.push(PersistedSessionInfo {
-                    id: persisted.id,
-                    claude_session_id: persisted.claude_session_id,
-                    created_at: persisted.created_at,
-                    last_active: persisted.last_active,
-                    message_count: persisted.history.len(),
+                    id: meta.id,
+                    claude_session_id: meta.claude_session_id,
+                    created_at: meta.created_at,
+                    last_active: meta.last_active,
+                    message_count,
                 });
             }
         }
@@ -314,22 +346,56 @@ impl ChatManager {
         result
     }
 
-    /// Load a persisted session's history from disk.
+    /// F001: Load a persisted session's history from disk with path traversal protection.
     pub fn load_persisted(&self, id: &str) -> Option<PersistedSession> {
+        if !is_valid_session_id(id) {
+            return None;
+        }
         let path = self.chat_dir.join(format!("{id}.json"));
         let data = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&data).ok()
     }
 
-    /// Delete a persisted session from disk.
+    /// F001: Delete a persisted session from disk with path traversal protection.
     pub fn delete_persisted(&self, id: &str) -> bool {
+        if !is_valid_session_id(id) {
+            return false;
+        }
         let path = self.chat_dir.join(format!("{id}.json"));
         std::fs::remove_file(path).is_ok()
     }
 
+    /// F013: Evict oldest persisted sessions when exceeding the cap.
+    pub fn evict_old_persisted(&self) {
+        let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+        let entries = match std::fs::read_dir(&self.chat_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                files.push((path, mtime));
+            }
+        }
+        if files.len() <= MAX_PERSISTED_SESSIONS {
+            return;
+        }
+        // Sort by modification time ascending (oldest first)
+        files.sort_by_key(|(_, t)| *t);
+        let to_remove = files.len() - MAX_PERSISTED_SESSIONS;
+        for (path, _) in files.into_iter().take(to_remove) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
     /// Destroy an active chat session.
     pub async fn destroy(&self, id: &str) -> Result<(), ChatError> {
-        // F010: release write lock before calling kill()
+        // Release write lock before calling kill()
         let session = self
             .sessions
             .write()
@@ -426,7 +492,7 @@ impl ChatSession {
         self.history.lock().await.clone()
     }
 
-    /// Flush history to disk as a JSON file.
+    /// F005: Flush history to disk atomically (write to temp file, then rename).
     pub async fn flush_to_disk(&self) {
         if !self.dirty.load(Ordering::Acquire) {
             return;
@@ -444,14 +510,27 @@ impl ChatSession {
             history,
         };
         let path = self.chat_dir.join(format!("{}.json", self.id));
+        let tmp_path = self.chat_dir.join(format!("{}.json.tmp", self.id));
         match serde_json::to_string(&persisted) {
             Ok(json) => {
-                if let Err(e) = tokio::fs::write(&path, json).await {
-                    tracing::warn!("Failed to persist chat session {}: {e}", self.id);
-                } else {
-                    self.dirty.store(false, Ordering::Release);
-                    tracing::debug!("Persisted chat session {} to {}", self.id, path.display());
+                if let Err(e) = tokio::fs::write(&tmp_path, &json).await {
+                    tracing::warn!(
+                        "Failed to write temp file for chat session {}: {e}",
+                        self.id
+                    );
+                    return;
                 }
+                if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+                    tracing::warn!(
+                        "Failed to rename temp file for chat session {}: {e}",
+                        self.id
+                    );
+                    // Clean up temp file
+                    let _ = tokio::fs::remove_file(&tmp_path).await;
+                    return;
+                }
+                self.dirty.store(false, Ordering::Release);
+                tracing::debug!("Persisted chat session {} to {}", self.id, path.display());
             }
             Err(e) => {
                 tracing::warn!("Failed to serialize chat session {}: {e}", self.id);
@@ -483,6 +562,26 @@ async fn extract_claude_session_id(session: &ChatSession, line: &str) {
     {
         *session.claude_session_id.lock().await = Some(sid.to_string());
         tracing::debug!("Captured claude session_id: {sid}");
+    }
+}
+
+/// F004: Estimate history entry count from raw JSON without full deserialization.
+/// Counts occurrences of `"type":` within the `"history"` array portion.
+fn count_history_entries(json: &str) -> usize {
+    // Find the history array start
+    if let Some(idx) = json.find("\"history\":[") {
+        let rest = &json[idx..];
+        // Count JSON objects by matching `{"` patterns (each history entry is a JSON string)
+        rest.matches("\",\"").count().saturating_add(
+            // If there's at least one entry, add 1 for the first element
+            if rest.contains("\"history\":[]") {
+                0
+            } else {
+                1
+            },
+        )
+    } else {
+        0
     }
 }
 

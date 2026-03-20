@@ -61,7 +61,16 @@ pub async fn destroy_session(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.chat_manager.destroy(&id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // F013: Evict old persisted sessions after a new one is saved
+            let mgr = Arc::clone(&state.chat_manager);
+            let _: Option<()> = tokio::task::spawn_blocking(move || {
+                mgr.evict_old_persisted();
+            })
+            .await
+            .ok();
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => chat_error_response(e),
     }
 }
