@@ -213,16 +213,18 @@ const Toast = (() => {
    */
   function choose(message, { primary = 'Save', secondary = 'Discard', cancel = 'Cancel' } = {}) {
     ensureInit();
+    // Guard against concurrent calls — resolve previous as Cancel
+    if (!chooseModal.hidden) return Promise.resolve(null);
     return new Promise((resolve) => {
-      chooseModal.querySelector('#choose-message').textContent = message;
-      chooseModal.querySelector('#choose-primary').textContent = primary;
-      chooseModal.querySelector('#choose-secondary').textContent = secondary;
-      chooseModal.querySelector('#choose-cancel').textContent = cancel;
-      chooseModal.hidden = false;
-
       const primaryBtn = chooseModal.querySelector('#choose-primary');
       const secondaryBtn = chooseModal.querySelector('#choose-secondary');
       const cancelBtn = chooseModal.querySelector('#choose-cancel');
+
+      chooseModal.querySelector('#choose-message').textContent = message;
+      primaryBtn.textContent = primary;
+      secondaryBtn.textContent = secondary;
+      cancelBtn.textContent = cancel;
+      chooseModal.hidden = false;
 
       function cleanup(result) {
         chooseModal.hidden = true;
@@ -240,6 +242,7 @@ const Toast = (() => {
       function onBackdrop(e) { if (e.target === chooseModal) cleanup(null); }
       function onKeyBase(e) {
         if (e.key === 'Escape') cleanup(null);
+        if (e.key === 'Enter') cleanup('primary');
       }
       const onKey = trapFocus(chooseModal, onKeyBase);
 

@@ -315,26 +315,29 @@ const FilerEditor = (() => {
     setActive(activePath);
   }
 
+  const closingFiles = new Set();
+
   async function closeFile(filePath) {
+    if (closingFiles.has(filePath)) return;
     const file = openFiles.get(filePath);
     if (!file) return;
 
     if (file.dirty) {
-      const choice = await Toast.choose(
-        `"${fileName(filePath)}" has unsaved changes.`,
-        { primary: 'Save', secondary: 'Discard', cancel: 'Cancel' }
-      );
-      if (choice === null) return; // Cancel
-      if (choice === 'primary') {
-        // Save before closing
-        const prev = activePath;
-        activePath = filePath;
-        await saveActive();
-        activePath = prev;
-        // If save failed (still dirty), abort close
-        if (file.dirty) return;
+      closingFiles.add(filePath);
+      try {
+        const choice = await Toast.choose(
+          `"${fileName(filePath)}" has unsaved changes.`,
+          { primary: 'Save', secondary: 'Discard', cancel: 'Cancel' }
+        );
+        if (choice === null) return; // Cancel
+        if (choice === 'primary') {
+          await saveFile(filePath);
+          if (file.dirty) return; // Save failed — abort close
+        }
+        // 'secondary' = Discard — continue to close
+      } finally {
+        closingFiles.delete(filePath);
       }
-      // 'secondary' = Discard — continue to close
     }
 
     // エディタ/プレビュー破棄
@@ -368,31 +371,40 @@ const FilerEditor = (() => {
     }
   }
 
-  async function saveActive() {
-    if (!activePath) return;
-    const file = openFiles.get(activePath);
+  async function saveFile(targetPath) {
+    const path = targetPath || activePath;
+    if (!path) return;
+    const file = openFiles.get(path);
     if (!file) return;
 
     const content = file.view.state.doc.toString();
 
-    await Spinner.wrap(editorContainer, async () => {
-      const resp = await fetch(`${FilerRemote.getApiBase()}/write`, {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: activePath, content }),
-      });
+    try {
+      await Spinner.wrap(editorContainer, async () => {
+        const resp = await fetch(`${FilerRemote.getApiBase()}/write`, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, content }),
+        });
 
-      if (resp.ok) {
-        file.content = content;
-        file.dirty = false;
-        renderTabs();
-        Toast.success('Saved');
-      } else {
-        const err = await resp.json().catch(() => ({ error: 'Save failed' }));
-        Toast.error(err.error || 'Save failed');
-      }
-    });
+        if (resp.ok) {
+          file.content = content;
+          file.dirty = false;
+          renderTabs();
+          Toast.success('Saved');
+        } else {
+          const err = await resp.json().catch(() => ({ error: 'Save failed' }));
+          Toast.error(err.error || 'Save failed');
+        }
+      });
+    } catch (e) {
+      Toast.error(e.message || 'Save failed');
+    }
+  }
+
+  async function saveActive() {
+    await saveFile(activePath);
   }
 
   function fileTypeIcon(path) {
