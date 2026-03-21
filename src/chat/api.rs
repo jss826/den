@@ -309,7 +309,10 @@ pub async fn chat_ws_handler(
     let chat_manager = Arc::clone(&state.chat_manager);
     let session_id = query.session;
 
-    ws.on_upgrade(move |socket| handle_chat_socket(socket, chat_manager, session_id))
+    // F001: Limit WS message size to prevent memory exhaustion from large image payloads.
+    // 10 images × ~6.7 MB base64 each + overhead ≈ 80 MB max.
+    ws.max_message_size(80 * 1024 * 1024)
+        .on_upgrade(move |socket| handle_chat_socket(socket, chat_manager, session_id))
 }
 
 async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, session_id: String) {
@@ -384,7 +387,11 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                 Message::Text(text) => {
                     match serde_json::from_str::<ChatWsCommand>(&text) {
                         Ok(cmd) => match cmd {
-                            ChatWsCommand::Message { text, files } => {
+                            ChatWsCommand::Message {
+                                text,
+                                files,
+                                images,
+                            } => {
                                 let msg = if files.is_empty() {
                                     text
                                 } else {
@@ -404,7 +411,17 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                                         }
                                     }
                                 };
-                                if let Err(e) = session_for_write.send_message(&msg).await {
+                                // If images are attached, send as multimodal content blocks
+                                if !images.is_empty() {
+                                    let content =
+                                        build_multimodal_content(&msg, &images, &session_for_write);
+                                    if let Err(e) =
+                                        session_for_write.send_multimodal_message(content).await
+                                    {
+                                        tracing::warn!("Chat send_multimodal failed: {e}");
+                                        break;
+                                    }
+                                } else if let Err(e) = session_for_write.send_message(&msg).await {
                                     tracing::warn!("Chat send_message failed: {e}");
                                     break;
                                 }
@@ -465,11 +482,14 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
 enum ChatWsCommand {
     /// Send a user message (will be wrapped in stream-json format).
     /// Optional `files` are read server-side and prepended as context.
+    /// Optional `images` are base64-encoded image data sent as multimodal content.
     #[serde(rename = "message")]
     Message {
         text: String,
         #[serde(default)]
         files: Vec<String>,
+        #[serde(default)]
+        images: Vec<ImageAttachment>,
     },
     /// Respond to an AskUserQuestion (sent as a follow-up user message).
     #[serde(rename = "ask_response")]
@@ -482,6 +502,22 @@ enum ChatWsCommand {
     #[serde(rename = "permission_response")]
     PermissionResponse { request_id: String, allowed: bool },
 }
+
+/// Base64-encoded image attachment from the frontend.
+#[derive(Deserialize)]
+struct ImageAttachment {
+    /// Base64-encoded image data (no data URI prefix).
+    data: String,
+    /// MIME type (e.g. "image/png", "image/jpeg").
+    media_type: String,
+}
+
+/// Allowed image MIME types.
+const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+/// Maximum size per image after base64 decode (5 MB).
+const MAX_IMAGE_SIZE: usize = 5 * 1024 * 1024;
+/// Maximum number of images per message.
+const MAX_IMAGES: usize = 10;
 
 /// Maximum size per attached file (100 KB).
 const MAX_ATTACH_FILE_SIZE: u64 = 100 * 1024;
@@ -627,6 +663,87 @@ fn build_message_with_files(
     }
 
     format!("{}\n\n{text}", context_parts.join("\n\n"))
+}
+
+/// Build multimodal content blocks (images + text) for claude CLI stream-json input.
+/// Validates image types and sizes; skipped images are broadcast as warnings.
+fn build_multimodal_content(
+    text: &str,
+    images: &[ImageAttachment],
+    session: &super::manager::ChatSession,
+) -> serde_json::Value {
+    let mut blocks: Vec<serde_json::Value> = Vec::new();
+    let mut accepted = 0;
+
+    for (i, img) in images.iter().enumerate() {
+        if accepted >= MAX_IMAGES {
+            tracing::debug!(target: "chat", image_index = i, "image: max count exceeded, skipped");
+            broadcast_attach_warning(
+                session,
+                &format!("Too many images (max {MAX_IMAGES}): image {i} skipped"),
+            );
+            continue;
+        }
+        if !ALLOWED_IMAGE_TYPES.contains(&img.media_type.as_str()) {
+            tracing::debug!(target: "chat", image_index = i, media_type = %img.media_type, "image: unsupported type");
+            broadcast_attach_warning(
+                session,
+                &format!("Unsupported image type: {}", img.media_type),
+            );
+            continue;
+        }
+        // F002: Estimate decoded size from base64 string length (avoids full decode allocation).
+        // Standard base64: decoded_len ≈ encoded_len * 3 / 4 (padding-adjusted).
+        let encoded_len = img.data.len();
+        if encoded_len == 0 {
+            tracing::debug!(target: "chat", image_index = i, "image: empty base64 data");
+            broadcast_attach_warning(session, &format!("Invalid base64 data for image {i}"));
+            continue;
+        }
+        let padding = img
+            .data
+            .as_bytes()
+            .iter()
+            .rev()
+            .take(2)
+            .filter(|&&b| b == b'=')
+            .count();
+        let estimated_size = (encoded_len * 3) / 4 - padding;
+        if estimated_size > MAX_IMAGE_SIZE {
+            tracing::debug!(target: "chat", image_index = i, estimated_size, "image: too large");
+            broadcast_attach_warning(
+                session,
+                &format!(
+                    "Image {i} too large (~{:.1} MB, max {} MB)",
+                    estimated_size as f64 / 1_048_576.0,
+                    MAX_IMAGE_SIZE / 1_048_576
+                ),
+            );
+            continue;
+        }
+        blocks.push(serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": img.media_type,
+                "data": img.data,
+            }
+        }));
+        accepted += 1;
+    }
+
+    // F004: Always append the text block (even if empty, claude expects it)
+    blocks.push(serde_json::json!({
+        "type": "text",
+        "text": text,
+    }));
+
+    // If no images were accepted, return just the text as a simple value
+    if accepted == 0 {
+        return serde_json::Value::String(text.to_string());
+    }
+
+    serde_json::Value::Array(blocks)
 }
 
 /// Broadcast an attachment warning as a synthetic event via the session's channel.

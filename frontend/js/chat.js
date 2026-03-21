@@ -34,7 +34,9 @@ const DenChat = (() => {
   let attachBtn = null;
   let attachChipsEl = null;
   let inputAreaEl = null;
+  let imagePreviewEl = null;
   const attachedFiles = []; // array of file path strings
+  const pendingImages = []; // array of {data: base64, mediaType: string, name: string, size: number}
 
   // Session search filter
   let searchFilter = '';
@@ -101,12 +103,14 @@ const DenChat = (() => {
     attachBtn = document.getElementById('chat-attach-btn');
     attachChipsEl = document.getElementById('chat-attach-chips');
     inputAreaEl = document.getElementById('chat-input-area');
+    imagePreviewEl = document.getElementById('chat-image-preview');
 
     sendBtn.addEventListener('click', handleSendOrStop);
 
     // File attachment
     attachBtn.addEventListener('click', handleAttachClick);
     initAttachDragDrop();
+    initImagePaste();
     inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -1082,7 +1086,7 @@ const DenChat = (() => {
     scrollToBottom();
   }
 
-  function appendUserMessage(text, files) {
+  function appendUserMessage(text, files, images) {
     const el = document.createElement('div');
     el.className = 'chat-msg chat-user';
     if (files && files.length > 0) {
@@ -1096,6 +1100,18 @@ const DenChat = (() => {
         filesDiv.appendChild(tag);
       }
       el.appendChild(filesDiv);
+    }
+    if (images && images.length > 0) {
+      const imagesDiv = document.createElement('div');
+      imagesDiv.className = 'chat-user-images';
+      for (const img of images) {
+        const imgEl = document.createElement('img');
+        imgEl.src = 'data:' + img.mediaType + ';base64,' + img.data;
+        imgEl.alt = img.name || 'image';
+        imgEl.className = 'chat-user-image';
+        imagesDiv.appendChild(imgEl);
+      }
+      el.appendChild(imagesDiv);
     }
     if (text) {
       const textNode = document.createTextNode(text);
@@ -1712,7 +1728,7 @@ const DenChat = (() => {
   function initAttachDragDrop() {
     if (!inputAreaEl) return;
     inputAreaEl.addEventListener('dragover', (e) => {
-      if (e.dataTransfer.types.includes('text/x-den-path')) {
+      if (e.dataTransfer.types.includes('text/x-den-path') || hasImageFiles(e.dataTransfer)) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
         inputAreaEl.classList.add('drag-over');
@@ -1725,12 +1741,123 @@ const DenChat = (() => {
     });
     inputAreaEl.addEventListener('drop', (e) => {
       inputAreaEl.classList.remove('drag-over');
+      // Den filer path drop
       const path = e.dataTransfer.getData('text/x-den-path');
       if (path) {
         e.preventDefault();
         addAttachedFile(path);
+        return;
+      }
+      // Native image file drop
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const imageFiles = [...e.dataTransfer.files].filter(f => ALLOWED_IMAGE_TYPES.has(f.type));
+        if (imageFiles.length > 0) {
+          e.preventDefault();
+          for (const file of imageFiles) addImageFile(file);
+        }
       }
     });
+  }
+
+  const ALLOWED_IMAGE_TYPES = new Set([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  ]);
+  const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5 MB
+  const MAX_IMAGES = 10;
+
+  function hasImageFiles(dt) {
+    if (!dt || !dt.types.includes('Files')) return false;
+    // items API available in modern browsers
+    if (dt.items) {
+      for (const item of dt.items) {
+        if (item.kind === 'file' && ALLOWED_IMAGE_TYPES.has(item.type)) return true;
+      }
+    }
+    return dt.types.includes('Files'); // fallback: accept Files drops and filter on drop
+  }
+
+  function initImagePaste() {
+    if (!inputEl) return;
+    inputEl.addEventListener('paste', (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.kind === 'file' && ALLOWED_IMAGE_TYPES.has(item.type)) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) addImageFile(file);
+        }
+      }
+    });
+  }
+
+  function addImageFile(file) {
+    if (pendingImages.length >= MAX_IMAGES) {
+      appendSystem('Maximum ' + MAX_IMAGES + ' images per message.');
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE) {
+      appendSystem('Image too large: ' + file.name + ' (' + (file.size / 1048576).toFixed(1) + ' MB, max 5 MB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      // F003: Re-check limit in async callback to prevent TOCTOU race
+      if (pendingImages.length >= MAX_IMAGES) return;
+      // result is data:image/png;base64,xxxx
+      const dataUrl = reader.result;
+      const commaIdx = dataUrl.indexOf(',');
+      const base64 = dataUrl.substring(commaIdx + 1);
+      pendingImages.push({
+        data: base64,
+        mediaType: file.type,
+        name: file.name || 'image',
+        size: file.size,
+      });
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function removeImage(index) {
+    pendingImages.splice(index, 1);
+    renderImagePreviews();
+  }
+
+  function clearPendingImages() {
+    pendingImages.length = 0;
+    renderImagePreviews();
+  }
+
+  function renderImagePreviews() {
+    if (!imagePreviewEl) return;
+    imagePreviewEl.innerHTML = '';
+    if (pendingImages.length === 0) {
+      imagePreviewEl.hidden = true;
+      return;
+    }
+    imagePreviewEl.hidden = false;
+    for (let i = 0; i < pendingImages.length; i++) {
+      const img = pendingImages[i];
+      const thumb = document.createElement('div');
+      thumb.className = 'chat-image-thumb';
+
+      const imgEl = document.createElement('img');
+      imgEl.src = 'data:' + img.mediaType + ';base64,' + img.data;
+      imgEl.alt = img.name;
+      thumb.appendChild(imgEl);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'chat-image-thumb-remove';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.type = 'button';
+      removeBtn.setAttribute('aria-label', 'Remove ' + img.name);
+      const idx = i;
+      removeBtn.addEventListener('click', () => removeImage(idx));
+      thumb.appendChild(removeBtn);
+
+      imagePreviewEl.appendChild(thumb);
+    }
   }
 
   // ── Send message ──
@@ -1738,7 +1865,8 @@ const DenChat = (() => {
   async function sendMessage() {
     const text = inputEl.value.trim();
     const files = [...attachedFiles];
-    if (!text && files.length === 0) return;
+    const images = [...pendingImages];
+    if (!text && files.length === 0 && images.length === 0) return;
 
     // Auto-restart: WS closed but we can resume with --continue (#75)
     if ((!ws || ws.readyState !== WebSocket.OPEN) && pendingClaudeSessionId) {
@@ -1807,12 +1935,14 @@ const DenChat = (() => {
         });
 
         // F002: only show message and clear input after successful send
-        appendUserMessage(text, files);
+        appendUserMessage(text, files, images);
         inputEl.value = '';
         clearAttachedFiles();
+        clearPendingImages();
         resetInputHeight();
         const cmd = { type: 'message', text };
         if (files.length > 0) cmd.files = files;
+        if (images.length > 0) cmd.images = images.map(img => ({ data: img.data, media_type: img.mediaType }));
         ws.send(JSON.stringify(cmd));
         currentAssistantBubble = null;
         currentThinkingBlock = null;
@@ -1830,12 +1960,14 @@ const DenChat = (() => {
 
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    appendUserMessage(text, files);
+    appendUserMessage(text, files, images);
     const cmd = { type: 'message', text };
     if (files.length > 0) cmd.files = files;
+    if (images.length > 0) cmd.images = images.map(img => ({ data: img.data, media_type: img.mediaType }));
     ws.send(JSON.stringify(cmd));
     inputEl.value = '';
     clearAttachedFiles();
+    clearPendingImages();
     resetInputHeight();
     isStreaming = true;
     currentAssistantBubble = null;

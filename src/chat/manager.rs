@@ -662,6 +662,25 @@ impl ChatSession {
         self.send_raw(&raw).await
     }
 
+    /// Send a multimodal user message (text + images) as stream-json input.
+    /// `content` should be a JSON array of content blocks.
+    pub async fn send_multimodal_message(
+        &self,
+        content: serde_json::Value,
+    ) -> Result<(), ChatError> {
+        let msg = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": content,
+            },
+            "session_id": "default",
+            "parent_tool_use_id": null,
+        });
+        let raw = serde_json::to_string(&msg).map_err(|e| ChatError::WriteFailed(e.to_string()))?;
+        self.send_raw(&raw).await
+    }
+
     /// Send raw JSON directly to stdin.
     pub async fn send_raw(&self, json: &str) -> Result<(), ChatError> {
         if !self.is_alive() {
