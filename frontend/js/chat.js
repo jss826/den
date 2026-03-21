@@ -2125,6 +2125,7 @@ const DenChat = (() => {
   // State scoped to the picker lifecycle (reset on each open)
   let cwdPickerPath = '';
   let cwdPickerAbort = null; // AbortController for in-flight fetches
+  let cwdPickerDrivesLoaded = false;
 
   function getFilerApiBase() {
     if (!chatRemoteId) return '/api/filer';
@@ -2155,19 +2156,19 @@ const DenChat = (() => {
       if (parent && parent !== cwdPickerPath) loadCwdPickerDir(parent);
     });
 
-    // F004: Event delegation for directory item click/dblclick
+    // Single click navigates into folder, double click selects and closes
     listEl.addEventListener('click', (e) => {
       const item = e.target.closest('.cwd-picker-item');
       if (!item) return;
-      for (const el of listEl.querySelectorAll('.cwd-picker-item.selected')) {
-        el.classList.remove('selected');
-      }
-      item.classList.add('selected');
+      loadCwdPickerDir(item.dataset.path);
     });
     listEl.addEventListener('dblclick', (e) => {
       const item = e.target.closest('.cwd-picker-item');
       if (!item) return;
-      loadCwdPickerDir(item.dataset.path);
+      cwdInput.value = item.dataset.path;
+      cwdBar.hidden = false;
+      if (toolsBar) toolsBar.hidden = true;
+      closeCwdPicker();
     });
   }
 
@@ -2176,6 +2177,7 @@ const DenChat = (() => {
     if (!modal) return;
     modal.hidden = false;
     cwdPickerPath = cwdInput.value.trim() || '~';
+    cwdPickerDrivesLoaded = false;
     loadCwdPickerDir(cwdPickerPath);
   }
 
@@ -2210,19 +2212,16 @@ const DenChat = (() => {
       cwdPickerPath = data.path;
       currentEl.textContent = data.path;
 
-      const dirs = (data.entries || []).filter(e => e.is_dir);
+      // Populate drives bar (once per open)
+      if (!cwdPickerDrivesLoaded && data.drives && data.drives.length > 0) {
+        cwdPickerDrivesLoaded = true;
+        renderCwdPickerDrives(data.drives);
+      } else if (!cwdPickerDrivesLoaded) {
+        fetchCwdPickerDrives(data.path);
+      }
 
-      // Prepend drives if available (Windows root)
-      if (data.drives && data.drives.length > 0 && !data.parent) {
-        listEl.innerHTML = '';
-        for (const drive of data.drives) {
-          listEl.appendChild(createPickerItem(drive, drive, true));
-        }
-        for (const d of dirs) {
-          const fullPath = data.path.replace(/[\\/]$/, '') + '\\' + d.name;
-          listEl.appendChild(createPickerItem(d.name, fullPath, false));
-        }
-      } else if (dirs.length === 0) {
+      const dirs = (data.entries || []).filter(e => e.is_dir);
+      if (dirs.length === 0) {
         listEl.innerHTML = '<div class="cwd-picker-empty">No subdirectories</div>';
       } else {
         listEl.innerHTML = '';
@@ -2254,6 +2253,39 @@ const DenChat = (() => {
     item.appendChild(icon);
     item.appendChild(name);
     return item;
+  }
+
+  function renderCwdPickerDrives(drives) {
+    const container = document.getElementById('cwd-picker-drives');
+    if (!container) return;
+    container.innerHTML = '';
+    container.hidden = !drives || drives.length === 0;
+    for (const d of drives) {
+      const btn = document.createElement('button');
+      btn.className = 'cwd-picker-drive-btn';
+      btn.textContent = d;
+      btn.type = 'button';
+      btn.addEventListener('click', () => loadCwdPickerDir(d));
+      container.appendChild(btn);
+    }
+  }
+
+  async function fetchCwdPickerDrives(resolvedPath) {
+    if (cwdPickerDrivesLoaded) return;
+    const match = resolvedPath.match(/^([A-Za-z]:\\)/);
+    if (!match) return;
+    try {
+      const resp = await fetch(
+        `${getFilerApiBase()}/list?path=${encodeURIComponent(match[1])}&show_hidden=false`,
+        { credentials: 'same-origin' }
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.drives && data.drives.length > 0) {
+        cwdPickerDrivesLoaded = true;
+        renderCwdPickerDrives(data.drives);
+      }
+    } catch { /* ignore */ }
   }
 
   // F006: Handle drive root boundary (e.g., "C:" → "C:\", "/" stays "/")

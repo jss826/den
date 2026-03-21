@@ -22,6 +22,7 @@
   --accent-tint-3: rgba(122,162,247,0.3);
   --accent-tint-4: rgba(122,162,247,0.6);
   --error-tint: rgba(247,118,142,0.15);
+  --warn-tint: rgba(224,175,104,0.15);
   --code-bg: rgba(255,255,255,0.1);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -60,6 +61,7 @@
   --accent-tint-3: rgba(37,99,235,0.2);
   --accent-tint-4: rgba(37,99,235,0.4);
   --error-tint: rgba(220,38,38,0.1);
+  --warn-tint: rgba(217,119,6,0.1);
   --code-bg: rgba(0,0,0,0.05);
   --inset-bg: rgba(0,0,0,0.04);
   --overlay-bg: rgba(0,0,0,0.2);
@@ -93,6 +95,7 @@
   --accent-tint-3: rgba(38,139,210,0.3);
   --accent-tint-4: rgba(38,139,210,0.6);
   --error-tint: rgba(220,50,47,0.15);
+  --warn-tint: rgba(181,137,0,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -131,6 +134,7 @@
   --accent-tint-3: rgba(38,139,210,0.2);
   --accent-tint-4: rgba(38,139,210,0.4);
   --error-tint: rgba(220,50,47,0.1);
+  --warn-tint: rgba(181,137,0,0.1);
   --code-bg: rgba(0,0,0,0.05);
   --inset-bg: rgba(0,0,0,0.04);
   --overlay-bg: rgba(0,0,0,0.2);
@@ -164,6 +168,7 @@
   --accent-tint-3: rgba(102,217,239,0.3);
   --accent-tint-4: rgba(102,217,239,0.6);
   --error-tint: rgba(249,38,114,0.15);
+  --warn-tint: rgba(230,219,116,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -197,6 +202,7 @@
   --accent-tint-3: rgba(136,192,208,0.3);
   --accent-tint-4: rgba(136,192,208,0.6);
   --error-tint: rgba(191,97,106,0.15);
+  --warn-tint: rgba(235,203,139,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -230,6 +236,7 @@
   --accent-tint-3: rgba(189,147,249,0.3);
   --accent-tint-4: rgba(189,147,249,0.6);
   --error-tint: rgba(255,85,85,0.15);
+  --warn-tint: rgba(241,250,140,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -263,6 +270,7 @@
   --accent-tint-3: rgba(131,165,152,0.3);
   --accent-tint-4: rgba(131,165,152,0.6);
   --error-tint: rgba(251,73,52,0.15);
+  --warn-tint: rgba(250,189,47,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -301,6 +309,7 @@
   --accent-tint-3: rgba(7,102,120,0.2);
   --accent-tint-4: rgba(7,102,120,0.4);
   --error-tint: rgba(204,36,29,0.1);
+  --warn-tint: rgba(181,118,20,0.1);
   --code-bg: rgba(0,0,0,0.05);
   --inset-bg: rgba(0,0,0,0.04);
   --overlay-bg: rgba(0,0,0,0.2);
@@ -334,6 +343,7 @@
   --accent-tint-3: rgba(137,180,250,0.3);
   --accent-tint-4: rgba(137,180,250,0.6);
   --error-tint: rgba(243,139,168,0.15);
+  --warn-tint: rgba(249,226,175,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -367,6 +377,7 @@
   --accent-tint-3: rgba(97,175,239,0.3);
   --accent-tint-4: rgba(97,175,239,0.6);
   --error-tint: rgba(224,108,117,0.15);
+  --warn-tint: rgba(229,192,123,0.15);
   --code-bg: rgba(255,255,255,0.08);
   --inset-bg: rgba(0,0,0,0.2);
   --overlay-bg: rgba(0,0,0,0.3);
@@ -405,6 +416,7 @@
   --accent-tint-3: rgba(9,105,218,0.2);
   --accent-tint-4: rgba(9,105,218,0.4);
   --error-tint: rgba(207,34,46,0.1);
+  --warn-tint: rgba(154,103,0,0.1);
   --code-bg: rgba(0,0,0,0.04);
   --inset-bg: rgba(0,0,0,0.04);
   --overlay-bg: rgba(0,0,0,0.2);
@@ -443,6 +455,7 @@
   --accent-tint-3: rgba(64,120,242,0.2);
   --accent-tint-4: rgba(64,120,242,0.4);
   --error-tint: rgba(228,86,73,0.1);
+  --warn-tint: rgba(193,132,1,0.1);
   --code-bg: rgba(0,0,0,0.04);
   --inset-bg: rgba(0,0,0,0.04);
   --overlay-bg: rgba(0,0,0,0.2);
@@ -753,10 +766,10 @@ html, body {
   border-left: 3px solid transparent;
 }
 .chat-session-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover);
 }
 .chat-session-item.active {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-strong);
   border-left-color: var(--accent, #4a9eff);
 }
 .chat-session-item-info {
@@ -834,12 +847,12 @@ html, body {
   cursor: pointer;
 }
 .chat-session-action-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--hover-strong);
   color: var(--fg, #ccc);
 }
 .chat-session-action-btn.danger:hover {
-  background: rgba(244, 68, 68, 0.2);
-  color: #f44;
+  background: var(--error-tint);
+  color: var(--error, #f44);
 }
 /* Chat main area */
 .chat-main {
@@ -927,7 +940,7 @@ html, body {
 .chat-assistant pre {
   margin: 8px 0;
   padding: 8px;
-  background: rgba(0,0,0,0.3);
+  background: var(--inset-bg);
   border-radius: 4px;
   overflow-x: auto;
   font-size: 13px;
@@ -983,7 +996,7 @@ html, body {
   padding: 6px 10px;
   font-family: monospace;
   font-weight: bold;
-  background: rgba(255,255,255,0.05);
+  background: var(--hover);
   border-radius: 6px 6px 0 0;
 }
 .chat-tool-input {
@@ -1006,7 +1019,7 @@ html, body {
   white-space: pre-wrap;
 }
 .chat-tool-error {
-  color: #f44;
+  color: var(--error, #f44);
 }
 /* Inline diff viewer */
 .chat-diff-viewer {
@@ -1072,13 +1085,13 @@ html, body {
 /* Notification card for modifying tools (not blocking — tools already executed in -p mode) */
 .chat-tool-notification {
   border-left: 3px solid var(--accent, #4a9eff);
-  background: rgba(74, 158, 255, 0.05);
+  background: var(--accent-tint);
 }
 .chat-tool-notification-header {
   padding: 6px 10px;
   font-family: monospace;
   font-weight: bold;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover);
   border-radius: 6px 6px 0 0;
 }
 .chat-tool-notification-actions {
@@ -1097,7 +1110,7 @@ html, body {
   cursor: pointer;
 }
 .chat-notification-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--hover-strong);
 }
 .chat-notification-btn.primary {
   background: var(--accent, #4a9eff);
@@ -1113,8 +1126,8 @@ html, body {
 
 /* AskUserQuestion inline dialog */
 .chat-ask-dialog {
-  border-left: 3px solid #f0a020;
-  background: rgba(240, 160, 32, 0.05);
+  border-left: 3px solid var(--warn);
+  background: var(--warn-tint);
 }
 .chat-ask-question {
   padding: 8px 10px;
@@ -1143,7 +1156,7 @@ html, body {
   outline: none;
 }
 .chat-ask-input:focus {
-  border-color: #f0a020;
+  border-color: var(--warn);
 }
 .chat-ask-resolved {
   opacity: 0.7;
@@ -1157,15 +1170,15 @@ html, body {
 }
 /* Permission gate dialog */
 .chat-permission-dialog {
-  border-left: 3px solid #e04040;
-  background: rgba(224, 64, 64, 0.05);
+  border-left: 3px solid var(--error);
+  background: var(--error-tint);
 }
 .chat-permission-header {
   padding: 6px 10px;
   font-family: monospace;
   font-weight: bold;
-  color: #e04040;
-  background: rgba(224, 64, 64, 0.08);
+  color: var(--error);
+  background: var(--error-tint);
   border-radius: 6px 6px 0 0;
 }
 .chat-permission-actions {
@@ -1175,28 +1188,28 @@ html, body {
   border-top: 1px solid var(--border, #333);
 }
 .chat-permission-allow {
-  background: #2d7d3a;
+  background: var(--success);
   color: #fff;
-  border-color: #2d7d3a;
+  border-color: var(--success);
 }
 .chat-permission-allow:hover {
-  background: #359943;
+  filter: brightness(1.15);
 }
 .chat-permission-deny {
-  background: #c03030;
+  background: var(--error);
   color: #fff;
-  border-color: #c03030;
+  border-color: var(--error);
 }
 .chat-permission-deny:hover {
-  background: #d04040;
+  filter: brightness(1.15);
 }
 .chat-permission-allowed {
   opacity: 0.7;
-  border-left-color: #2d7d3a;
+  border-left-color: var(--success);
 }
 .chat-permission-denied {
   opacity: 0.7;
-  border-left-color: #c03030;
+  border-left-color: var(--error);
 }
 .chat-permission-status {
   padding: 6px 10px;
@@ -2298,6 +2311,26 @@ pre:hover .code-copy-btn {
   max-width: 420px;
   display: flex;
   flex-direction: column;
+}
+
+.cwd-picker-drives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.cwd-picker-drive-btn {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--fg);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cwd-picker-drive-btn:hover {
+  background: var(--accent);
+  color: #fff;
 }
 
 .cwd-picker-path-bar {
