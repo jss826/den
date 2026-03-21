@@ -614,8 +614,10 @@ const FilerEditor = (() => {
     updateStatusBar(null);
   }
 
+  function getActivePath() { return activePath; }
+
   return {
     init, openFile, closeFile, closeAll, saveActive, hasUnsavedChanges,
-    notifyRenamed, notifyDeleted, goToLine,
+    notifyRenamed, notifyDeleted, goToLine, getActivePath,
   };
 })();

@@ -150,9 +150,13 @@
             <button class="chat-bar-btn" type="button" aria-label="Export JSON" data-tooltip="Export JSON" onclick="DenChat.exportConversation('json')">JSON</button>
           </div>
           <div id="chat-messages" class="chat-messages"></div>
-          <div class="chat-input-area">
-            <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..."></textarea>
-            <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send">Send</button>
+          <div class="chat-input-area" id="chat-input-area">
+            <div id="chat-attach-chips" class="chat-attach-chips" hidden></div>
+            <div class="chat-input-row">
+              <button id="chat-attach-btn" class="chat-attach-btn" type="button" aria-label="Attach file" data-tooltip="Attach file from Filer">&#x1F4CE;</button>
+              <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..."></textarea>
+              <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send">Send</button>
+            </div>
           </div>
         </div>
       </div>

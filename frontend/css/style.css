@@ -803,6 +803,23 @@ html, body {
   border-radius: 8px 8px 2px 8px;
   white-space: pre-wrap;
 }
+.chat-user-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.chat-user-file-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.2);
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-assistant {
   align-self: flex-start;
   background: var(--pane-bg, #1e1e1e);
@@ -1101,10 +1118,69 @@ html, body {
 }
 .chat-input-area {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
   padding: 8px 12px;
   border-top: 1px solid var(--border, #333);
   background: var(--bg, #181818);
+}
+.chat-input-area.drag-over {
+  border-color: var(--accent, #4a9eff);
+  background: color-mix(in srgb, var(--accent, #4a9eff) 8%, var(--bg, #181818));
+}
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.chat-attach-btn {
+  padding: 6px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--pane-bg, #1e1e1e);
+  color: var(--fg, #ccc);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.chat-attach-btn:hover {
+  border-color: var(--accent, #4a9eff);
+}
+.chat-attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-bottom: 6px;
+}
+.chat-attach-chips[hidden] { display: none; }
+.chat-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--pane-bg, #1e1e1e);
+  border: 1px solid var(--border, #333);
+  color: var(--fg, #ccc);
+  font-size: 12px;
+  max-width: 250px;
+}
+.chat-attach-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-attach-chip-remove {
+  border: none;
+  background: none;
+  color: var(--dim, #888);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.chat-attach-chip-remove:hover {
+  color: var(--danger, #e55);
 }
 .chat-input {
   flex: 1;
@@ -1204,6 +1280,8 @@ pre:hover .code-copy-btn {
   }
   .chat-input-area {
     padding: 6px 8px;
+  }
+  .chat-input-row {
     gap: 6px;
   }
   .chat-input {

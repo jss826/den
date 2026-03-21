@@ -109,6 +109,15 @@ const FilerTree = (() => {
       name.textContent = entry.name;
       row.appendChild(name);
 
+      // Drag support for files (used by Chat attach)
+      if (!entry.is_dir) {
+        row.draggable = true;
+        row.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/x-den-path', fullPath);
+          e.dataTransfer.effectAllowed = 'copy';
+        });
+      }
+
       // ツールチップ: サイズ・更新日時
       if (!entry.is_dir && entry.size !== undefined) {
         const tooltip = formatSize(entry.size) + (entry.modified ? '  ' + formatDate(entry.modified) : '');
@@ -371,5 +380,7 @@ const FilerTree = (() => {
     return rootPath;
   }
 
-  return { init, setRoot, refresh, refreshDir, getParentPath, selectFile, getRootPath };
+  function getSelectedPath() { return selectedPath; }
+
+  return { init, setRoot, refresh, refreshDir, getParentPath, selectFile, getRootPath, getSelectedPath };
 })();

@@ -183,7 +183,7 @@ pub(crate) fn err(status: StatusCode, msg: &str) -> ApiError {
 // --- パス検証 ---
 
 /// パスを解決し正規化する。null バイトを拒否。
-fn resolve_path(raw: &str) -> Result<PathBuf, ApiError> {
+pub(crate) fn resolve_path(raw: &str) -> Result<PathBuf, ApiError> {
     if raw.is_empty() {
         return Err(err(StatusCode::BAD_REQUEST, "Empty path"));
     }

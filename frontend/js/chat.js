@@ -30,6 +30,12 @@ const DenChat = (() => {
   let renderPending = false;
   let thinkingRenderPending = false;
 
+  // ── File attachment state ──
+  let attachBtn = null;
+  let attachChipsEl = null;
+  let inputAreaEl = null;
+  const attachedFiles = []; // array of file path strings
+
   // Session search filter
   let searchFilter = '';
 
@@ -92,8 +98,15 @@ const DenChat = (() => {
     toolsCustom = document.getElementById('chat-tools-custom');
     searchInput = document.getElementById('chat-search-input');
     permissionGateCheckbox = document.getElementById('chat-permission-gate');
+    attachBtn = document.getElementById('chat-attach-btn');
+    attachChipsEl = document.getElementById('chat-attach-chips');
+    inputAreaEl = document.getElementById('chat-input-area');
 
     sendBtn.addEventListener('click', handleSendOrStop);
+
+    // File attachment
+    attachBtn.addEventListener('click', handleAttachClick);
+    initAttachDragDrop();
     inputEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -943,6 +956,9 @@ const DenChat = (() => {
         }
         currentSessionState = 'idle';
         break;
+      case 'attach_warning':
+        appendSystem(event.message || 'Attachment warning');
+        break;
       default:
         break;
     }
@@ -1066,10 +1082,25 @@ const DenChat = (() => {
     scrollToBottom();
   }
 
-  function appendUserMessage(text) {
+  function appendUserMessage(text, files) {
     const el = document.createElement('div');
     el.className = 'chat-msg chat-user';
-    el.textContent = text;
+    if (files && files.length > 0) {
+      const filesDiv = document.createElement('div');
+      filesDiv.className = 'chat-user-files';
+      for (const fp of files) {
+        const tag = document.createElement('span');
+        tag.className = 'chat-user-file-tag';
+        tag.textContent = fp.replace(/\\/g, '/').split('/').pop() || fp;
+        tag.title = fp;
+        filesDiv.appendChild(tag);
+      }
+      el.appendChild(filesDiv);
+    }
+    if (text) {
+      const textNode = document.createTextNode(text);
+      el.appendChild(textNode);
+    }
     messagesEl.appendChild(el);
     scrollToBottom();
   }
@@ -1611,11 +1642,103 @@ const DenChat = (() => {
     return result;
   }
 
+  // ── File attachment ──
+
+  function handleAttachClick() {
+    // F003: Block attach when Filer is in SFTP mode (paths are remote, not readable locally)
+    if (typeof FilerRemote !== 'undefined' && FilerRemote.isRemote()) {
+      const info = FilerRemote.getInfo();
+      if (info.mode === 'sftp') {
+        appendSystem('Cannot attach files from SFTP remote. Only local or Den-connected files are supported.');
+        return;
+      }
+    }
+    // Try to get the currently selected file from the filer tree, or active editor file
+    let path = null;
+    if (typeof FilerTree !== 'undefined') path = FilerTree.getSelectedPath();
+    if (!path && typeof FilerEditor !== 'undefined') path = FilerEditor.getActivePath();
+    if (path) {
+      addAttachedFile(path);
+    }
+  }
+
+  function addAttachedFile(filePath) {
+    if (attachedFiles.includes(filePath)) return;
+    attachedFiles.push(filePath);
+    renderAttachChips();
+  }
+
+  function removeAttachedFile(filePath) {
+    const idx = attachedFiles.indexOf(filePath);
+    if (idx >= 0) attachedFiles.splice(idx, 1);
+    renderAttachChips();
+  }
+
+  function clearAttachedFiles() {
+    attachedFiles.length = 0;
+    renderAttachChips();
+  }
+
+  function renderAttachChips() {
+    if (!attachChipsEl) return;
+    attachChipsEl.innerHTML = '';
+    if (attachedFiles.length === 0) {
+      attachChipsEl.hidden = true;
+      return;
+    }
+    attachChipsEl.hidden = false;
+    for (const fp of attachedFiles) {
+      const chip = document.createElement('span');
+      chip.className = 'chat-attach-chip';
+
+      const name = document.createElement('span');
+      name.className = 'chat-attach-chip-name';
+      name.textContent = fp.replace(/\\/g, '/').split('/').pop() || fp;
+      name.title = fp;
+      chip.appendChild(name);
+
+      const btn = document.createElement('button');
+      btn.className = 'chat-attach-chip-remove';
+      btn.textContent = '\u00d7';
+      btn.type = 'button';
+      btn.setAttribute('aria-label', 'Remove ' + name.textContent);
+      btn.addEventListener('click', () => removeAttachedFile(fp));
+      chip.appendChild(btn);
+
+      attachChipsEl.appendChild(chip);
+    }
+  }
+
+  function initAttachDragDrop() {
+    if (!inputAreaEl) return;
+    inputAreaEl.addEventListener('dragover', (e) => {
+      if (e.dataTransfer.types.includes('text/x-den-path')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        inputAreaEl.classList.add('drag-over');
+      }
+    });
+    inputAreaEl.addEventListener('dragleave', (e) => {
+      if (!inputAreaEl.contains(e.relatedTarget)) {
+        inputAreaEl.classList.remove('drag-over');
+      }
+    });
+    inputAreaEl.addEventListener('drop', (e) => {
+      inputAreaEl.classList.remove('drag-over');
+      const path = e.dataTransfer.getData('text/x-den-path');
+      if (path) {
+        e.preventDefault();
+        addAttachedFile(path);
+      }
+    });
+  }
+
   // ── Send message ──
   let autoRestartInFlight = false;
   async function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text) return;
+    const files = [...attachedFiles];
+    if (!text && files.length === 0) return;
 
     // Auto-restart: WS closed but we can resume with --continue (#75)
     if ((!ws || ws.readyState !== WebSocket.OPEN) && pendingClaudeSessionId) {
@@ -1684,10 +1807,13 @@ const DenChat = (() => {
         });
 
         // F002: only show message and clear input after successful send
-        appendUserMessage(text);
+        appendUserMessage(text, files);
         inputEl.value = '';
+        clearAttachedFiles();
         resetInputHeight();
-        ws.send(JSON.stringify({ type: 'message', text }));
+        const cmd = { type: 'message', text };
+        if (files.length > 0) cmd.files = files;
+        ws.send(JSON.stringify(cmd));
         currentAssistantBubble = null;
         currentThinkingBlock = null;
         inputEl.focus();
@@ -1704,9 +1830,12 @@ const DenChat = (() => {
 
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    appendUserMessage(text);
-    ws.send(JSON.stringify({ type: 'message', text }));
+    appendUserMessage(text, files);
+    const cmd = { type: 'message', text };
+    if (files.length > 0) cmd.files = files;
+    ws.send(JSON.stringify(cmd));
     inputEl.value = '';
+    clearAttachedFiles();
     resetInputHeight();
     isStreaming = true;
     currentAssistantBubble = null;
@@ -2028,5 +2157,6 @@ const DenChat = (() => {
     exportConversation,
     setRemote,
     prefillInput,
+    attachFile: addAttachedFile,
   };
 })();

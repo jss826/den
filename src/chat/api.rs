@@ -384,8 +384,27 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                 Message::Text(text) => {
                     match serde_json::from_str::<ChatWsCommand>(&text) {
                         Ok(cmd) => match cmd {
-                            ChatWsCommand::Message { text } => {
-                                if let Err(e) = session_for_write.send_message(&text).await {
+                            ChatWsCommand::Message { text, files } => {
+                                let msg = if files.is_empty() {
+                                    text
+                                } else {
+                                    // F002: Run sync I/O in spawn_blocking
+                                    let t = text.clone();
+                                    let f = files.clone();
+                                    let s = Arc::clone(&session_for_write);
+                                    match tokio::task::spawn_blocking(move || {
+                                        build_message_with_files(&t, &f, &s)
+                                    })
+                                    .await
+                                    {
+                                        Ok(result) => result,
+                                        Err(e) => {
+                                            tracing::warn!("attach spawn_blocking failed: {e}");
+                                            text
+                                        }
+                                    }
+                                };
+                                if let Err(e) = session_for_write.send_message(&msg).await {
                                     tracing::warn!("Chat send_message failed: {e}");
                                     break;
                                 }
@@ -445,8 +464,13 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
 #[serde(tag = "type")]
 enum ChatWsCommand {
     /// Send a user message (will be wrapped in stream-json format).
+    /// Optional `files` are read server-side and prepended as context.
     #[serde(rename = "message")]
-    Message { text: String },
+    Message {
+        text: String,
+        #[serde(default)]
+        files: Vec<String>,
+    },
     /// Respond to an AskUserQuestion (sent as a follow-up user message).
     #[serde(rename = "ask_response")]
     AskResponse {
@@ -457,6 +481,161 @@ enum ChatWsCommand {
     /// Respond to a permission gate request (Allow/Deny from frontend).
     #[serde(rename = "permission_response")]
     PermissionResponse { request_id: String, allowed: bool },
+}
+
+/// Maximum size per attached file (100 KB).
+const MAX_ATTACH_FILE_SIZE: u64 = 100 * 1024;
+/// Maximum total size for all attached files (500 KB).
+const MAX_ATTACH_TOTAL_SIZE: u64 = 500 * 1024;
+/// Maximum number of attached files per message.
+const MAX_ATTACH_FILES: usize = 20;
+
+/// Read attached files and prepend their contents to the user message.
+/// Broadcasts warnings via the session's broadcast channel for skipped files.
+/// Files are sandboxed to the session's cwd (or home directory as fallback).
+fn build_message_with_files(
+    text: &str,
+    files: &[String],
+    session: &super::manager::ChatSession,
+) -> String {
+    use crate::filer::api::{is_binary, resolve_path};
+
+    // F001: Sandbox — restrict file access to session cwd or home dir
+    let sandbox_root = session
+        .cwd
+        .as_ref()
+        .and_then(|c| resolve_path(c).ok())
+        .or_else(|| {
+            std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let mut context_parts: Vec<String> = Vec::new();
+    // total_size tracks only successfully attached text files (binary-skipped files excluded)
+    let mut total_size: u64 = 0;
+
+    for raw_path in files.iter().take(MAX_ATTACH_FILES) {
+        let path = match resolve_path(raw_path) {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::warn!(target: "chat", path = %raw_path, "attach: resolve failed");
+                broadcast_attach_warning(session, &format!("File not found: {raw_path}"));
+                continue;
+            }
+        };
+
+        // F001: Verify file is within sandbox root
+        if !path.starts_with(&sandbox_root) {
+            tracing::warn!(
+                target: "chat",
+                path = %path.display(),
+                sandbox = %sandbox_root.display(),
+                "attach: path outside sandbox"
+            );
+            broadcast_attach_warning(
+                session,
+                &format!("Access denied (outside workspace): {raw_path}"),
+            );
+            continue;
+        }
+
+        let metadata = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(target: "chat", path = %raw_path, error = %e, "attach: metadata failed");
+                broadcast_attach_warning(session, &format!("Cannot read: {raw_path}"));
+                continue;
+            }
+        };
+
+        if !metadata.is_file() {
+            broadcast_attach_warning(session, &format!("Not a file: {raw_path}"));
+            continue;
+        }
+
+        let size = metadata.len();
+        if size > MAX_ATTACH_FILE_SIZE {
+            tracing::warn!(target: "chat", path = %raw_path, size, "attach: file too large");
+            broadcast_attach_warning(
+                session,
+                &format!(
+                    "File too large ({} KB, max {} KB): {raw_path}",
+                    size / 1024,
+                    MAX_ATTACH_FILE_SIZE / 1024
+                ),
+            );
+            continue;
+        }
+
+        if total_size + size > MAX_ATTACH_TOTAL_SIZE {
+            tracing::warn!(target: "chat", path = %raw_path, total_size, "attach: total size exceeded");
+            broadcast_attach_warning(
+                session,
+                &format!(
+                    "Total attachment size exceeded ({} KB max): {raw_path} skipped",
+                    MAX_ATTACH_TOTAL_SIZE / 1024
+                ),
+            );
+            continue;
+        }
+
+        let data = match std::fs::read(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(target: "chat", path = %raw_path, error = %e, "attach: read failed");
+                broadcast_attach_warning(session, &format!("Read error for {raw_path}: {e}"));
+                continue;
+            }
+        };
+
+        if is_binary(&data) {
+            tracing::debug!(target: "chat", path = %raw_path, "attach: binary file skipped");
+            broadcast_attach_warning(session, &format!("Binary file skipped: {raw_path}"));
+            continue;
+        }
+
+        let content = String::from_utf8_lossy(&data);
+        total_size += size;
+        // F004: Escape path for safe embedding in XML-like tag
+        let escaped_path = raw_path
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        context_parts.push(format!(
+            "<file path=\"{escaped_path}\">\n{content}\n</file>"
+        ));
+        tracing::debug!(target: "chat", path = %raw_path, size, "attach: file added");
+    }
+
+    if files.len() > MAX_ATTACH_FILES {
+        broadcast_attach_warning(
+            session,
+            &format!(
+                "Too many files ({}, max {}): extra files skipped",
+                files.len(),
+                MAX_ATTACH_FILES
+            ),
+        );
+    }
+
+    if context_parts.is_empty() {
+        return text.to_string();
+    }
+
+    format!("{}\n\n{text}", context_parts.join("\n\n"))
+}
+
+/// Broadcast an attachment warning as a synthetic event via the session's channel.
+fn broadcast_attach_warning(session: &super::manager::ChatSession, msg: &str) {
+    let payload = serde_json::json!({
+        "type": "attach_warning",
+        "message": msg,
+    });
+    session.broadcast_event(&payload.to_string());
 }
 
 fn chat_error_response(e: ChatError) -> axum::response::Response {
