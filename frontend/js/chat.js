@@ -1350,17 +1350,18 @@ const DenChat = (() => {
   // ── Mobile viewport handling ──
   function setupMobileViewport() {
     if (!window.visualViewport) return;
-    window.visualViewport.addEventListener('resize', () => {
-      const chatPane = document.getElementById('chat-pane');
-      if (!chatPane || chatPane.hidden) return;
-      const vvHeight = window.visualViewport.height;
-      const windowHeight = window.innerHeight;
-      if (vvHeight < windowHeight * 0.8) {
-        chatPane.style.height = vvHeight + 'px';
-      } else {
-        chatPane.style.height = '';
-      }
-    });
+    let rafId = null;
+    const onViewportChange = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const chatPane = document.getElementById('chat-pane');
+        if (!chatPane || chatPane.hidden) return;
+        scrollToBottom();
+      });
+    };
+    window.visualViewport.addEventListener('resize', onViewportChange);
+    window.visualViewport.addEventListener('scroll', onViewportChange);
   }
 
   // ── Public API ──
