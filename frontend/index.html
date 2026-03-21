@@ -387,6 +387,7 @@
           <button class="settings-tab" role="tab" data-tab="sg-terminal">Terminal</button>
           <button class="settings-tab" role="tab" data-tab="sg-keybar">Keybar</button>
           <button class="settings-tab" role="tab" data-tab="sg-snippets">Snippets</button>
+          <button class="settings-tab" role="tab" data-tab="sg-mcp">MCP</button>
           <button class="settings-tab" role="tab" data-tab="sg-tls">TLS</button>
         </div>
         <div class="settings-tab-panel active" id="sg-appearance" role="tabpanel">
@@ -571,6 +572,39 @@
                 <div class="keybar-form-actions">
                   <button id="snippet-add-confirm" class="modal-btn primary" type="button">Add</button>
                   <button id="snippet-add-cancel" class="modal-btn" type="button">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="settings-tab-panel" id="sg-mcp" role="tabpanel" hidden>
+          <div class="modal-section">
+            <p class="setting-hint">Configure MCP servers for Chat sessions. Enabled servers are automatically included when creating new sessions.</p>
+            <div class="mcp-editor">
+              <div id="mcp-server-list" class="mcp-server-list"></div>
+              <div class="keybar-editor-actions">
+                <button id="mcp-add-btn" class="modal-btn" type="button">Add Server</button>
+              </div>
+              <div id="mcp-add-form" class="mcp-add-form" hidden>
+                <div class="keybar-form-row">
+                  <label>Name</label>
+                  <input type="text" id="mcp-new-name" class="settings-input" placeholder="e.g. my-server" maxlength="64">
+                </div>
+                <div class="keybar-form-row">
+                  <label>Command</label>
+                  <input type="text" id="mcp-new-command" class="settings-input" placeholder="e.g. npx -y @example/mcp-server">
+                </div>
+                <div class="keybar-form-row">
+                  <label>Arguments</label>
+                  <input type="text" id="mcp-new-args" class="settings-input" placeholder="e.g. --port 3000 (space-separated)">
+                </div>
+                <div class="keybar-form-row">
+                  <label>Environment</label>
+                  <textarea id="mcp-new-env" class="settings-input mcp-env-textarea" rows="2" placeholder="KEY=VALUE (one per line)"></textarea>
+                </div>
+                <div class="keybar-form-actions">
+                  <button id="mcp-add-confirm" class="modal-btn primary" type="button">Add</button>
+                  <button id="mcp-add-cancel" class="modal-btn" type="button">Cancel</button>
                 </div>
               </div>
             </div>

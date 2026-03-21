@@ -240,6 +240,72 @@ pub async fn put_settings(
             }
         }
     }
+    // Validate mcp_servers
+    if let Some(ref servers) = settings.mcp_servers {
+        if servers.len() > 20 {
+            return (StatusCode::UNPROCESSABLE_ENTITY, "too many MCP servers").into_response();
+        }
+        let mut seen_names = std::collections::HashSet::new();
+        for srv in servers {
+            if srv.name.trim().is_empty() || srv.command.trim().is_empty() {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "MCP server name/command required",
+                )
+                    .into_response();
+            }
+            if srv.name.len() > 64
+                || !srv
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "invalid MCP server name")
+                    .into_response();
+            }
+            if srv.name.starts_with("den-") {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "MCP server name must not start with 'den-'",
+                )
+                    .into_response();
+            }
+            if !seen_names.insert(&srv.name) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "duplicate MCP server name",
+                )
+                    .into_response();
+            }
+            if srv.command.len() > 4096 {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "MCP command too long").into_response();
+            }
+            if srv.args.len() > 64 || srv.args.iter().any(|a| a.len() > 4096) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "MCP args too many or too long",
+                )
+                    .into_response();
+            }
+            if srv.env.len() > 50 {
+                return (StatusCode::UNPROCESSABLE_ENTITY, "too many MCP env vars").into_response();
+            }
+            for (k, v) in &srv.env {
+                if k.is_empty()
+                    || k.len() > 256
+                    || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    || k.starts_with(|c: char| c.is_ascii_digit())
+                {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "invalid MCP env key")
+                        .into_response();
+                }
+                if v.len() > 4096 {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "MCP env value too long")
+                        .into_response();
+                }
+            }
+        }
+    }
     // sleep_prevention_mode: enum 化により serde が不正値を拒否（422 を返す）
     settings.sleep_prevention_timeout = settings.sleep_prevention_timeout.clamp(1, 480);
 

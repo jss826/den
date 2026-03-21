@@ -174,6 +174,18 @@ fn default_orientation() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_size")]
     pub font_size: u8,
@@ -208,6 +220,8 @@ pub struct Settings {
     pub theme_chat: Option<String>,
     #[serde(default)]
     pub theme_files: Option<String>,
+    #[serde(default)]
+    pub mcp_servers: Option<Vec<McpServer>>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -246,6 +260,7 @@ impl Default for Settings {
             theme_terminal: None,
             theme_chat: None,
             theme_files: None,
+            mcp_servers: None,
             version: String::new(),
             hostname: String::new(),
         }

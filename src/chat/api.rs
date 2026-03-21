@@ -53,6 +53,20 @@ pub async fn create_session(
         None
     };
 
+    // Load enabled MCP servers from settings
+    let settings = state.store.load_settings();
+    let enabled_mcp: Vec<_> = settings
+        .mcp_servers
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.enabled)
+        .collect();
+    let mcp_servers = if enabled_mcp.is_empty() {
+        None
+    } else {
+        Some(enabled_mcp)
+    };
+
     match state
         .chat_manager
         .create(
@@ -60,6 +74,7 @@ pub async fn create_session(
             body.cwd.as_deref(),
             body.allowed_tools.as_deref(),
             body.permission_gate,
+            mcp_servers.as_deref(),
         )
         .await
     {

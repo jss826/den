@@ -194,12 +194,14 @@ impl ChatManager {
     /// If `cwd` is provided, the process starts in that directory.
     /// If `allowed_tools` is provided, each tool is passed via `--allowedTools`.
     /// If `permission_gate` is true, dangerous tools are routed through an MCP permission gate.
+    /// If `mcp_servers` is provided, they are included in the MCP config file.
     pub async fn create(
         &self,
         resume_id: Option<&str>,
         cwd: Option<&str>,
         allowed_tools: Option<&[String]>,
         permission_gate: bool,
+        mcp_servers: Option<&[crate::store::McpServer]>,
     ) -> Result<Arc<ChatSession>, ChatError> {
         // F007: Validate resume_id format before passing to CLI
         if let Some(rid) = resume_id
@@ -268,17 +270,40 @@ impl ChatManager {
             }
         }
 
-        // Permission gate: generate MCP config and disable built-in gated tools
+        // Build MCP config: permission gate + user-defined MCP servers
         let gate_token: Option<String>;
         let mcp_config_path: Option<PathBuf>;
-        if permission_gate {
-            let token = generate_gate_token();
-            let exe_path = std::env::current_exe()
-                .map_err(|e| ChatError::SpawnFailed(format!("cannot resolve exe path: {e}")))?;
-            let config_file = std::env::temp_dir().join(format!("den-gate-{}.json", &id));
-            let mcp_config = serde_json::json!({
-                "mcpServers": {
-                    "den-gate": {
+        let has_user_mcp = mcp_servers.map(|s| !s.is_empty()).unwrap_or(false);
+
+        if permission_gate || has_user_mcp {
+            let mut servers = serde_json::Map::new();
+
+            // Add user-defined MCP servers (enabled ones only, already filtered by caller)
+            if let Some(user_servers) = mcp_servers {
+                for srv in user_servers {
+                    let mut env_map = serde_json::Map::new();
+                    for (k, v) in &srv.env {
+                        env_map.insert(k.clone(), serde_json::Value::String(v.clone()));
+                    }
+                    servers.insert(
+                        srv.name.clone(),
+                        serde_json::json!({
+                            "command": srv.command,
+                            "args": srv.args,
+                            "env": serde_json::Value::Object(env_map),
+                        }),
+                    );
+                }
+            }
+
+            // Add permission gate server
+            if permission_gate {
+                let token = generate_gate_token();
+                let exe_path = std::env::current_exe()
+                    .map_err(|e| ChatError::SpawnFailed(format!("cannot resolve exe path: {e}")))?;
+                servers.insert(
+                    "den-gate".to_string(),
+                    serde_json::json!({
                         "command": exe_path.to_string_lossy(),
                         "args": ["--mcp-gate"],
                         "env": {
@@ -286,20 +311,27 @@ impl ChatManager {
                             "DEN_GATE_SESSION_ID": &id,
                             "DEN_GATE_TOKEN": &token,
                         }
-                    }
+                    }),
+                );
+                gate_token = Some(token);
+
+                for tool in super::permission::GATED_TOOLS {
+                    args.push("--disallowedTools".to_string());
+                    args.push((*tool).to_string());
                 }
-            });
-            std::fs::write(&config_file, serde_json::to_string(&mcp_config).unwrap())
+            } else {
+                gate_token = None;
+            }
+
+            let config_file = std::env::temp_dir().join(format!("den-mcp-{}.json", &id));
+            let mcp_config = serde_json::json!({ "mcpServers": servers });
+            let config_json = serde_json::to_string(&mcp_config)
+                .map_err(|e| ChatError::SpawnFailed(format!("cannot serialize MCP config: {e}")))?;
+            std::fs::write(&config_file, config_json)
                 .map_err(|e| ChatError::SpawnFailed(format!("cannot write MCP config: {e}")))?;
 
             args.push("--mcp-config".to_string());
             args.push(config_file.to_string_lossy().to_string());
-            for tool in super::permission::GATED_TOOLS {
-                args.push("--disallowedTools".to_string());
-                args.push((*tool).to_string());
-            }
-
-            gate_token = Some(token);
             mcp_config_path = Some(config_file);
         } else {
             gate_token = None;
