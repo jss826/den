@@ -157,6 +157,22 @@
       </div>
     </div>
 
+    <!-- ディレクトリ選択モーダル -->
+    <div id="chat-cwd-picker-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Select working directory">
+      <div class="modal-content cwd-picker-content">
+        <h3>Select Working Directory</h3>
+        <div class="cwd-picker-path-bar">
+          <button id="cwd-picker-up" class="cwd-picker-up-btn" type="button" aria-label="Go up" data-tooltip="Parent directory">&#8679; Up</button>
+          <span id="cwd-picker-current" class="cwd-picker-current"></span>
+        </div>
+        <div id="cwd-picker-list" class="cwd-picker-list" role="listbox" aria-label="Directories"></div>
+        <div class="cwd-picker-actions">
+          <button id="cwd-picker-cancel" class="btn" type="button">Cancel</button>
+          <button id="cwd-picker-select" class="btn btn-primary" type="button">Select</button>
+        </div>
+      </div>
+    </div>
+
     <!-- アップロードモーダル -->
     <div id="filer-upload-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Upload file">
       <div class="modal-content">

@@ -94,11 +94,7 @@ const DenChat = (() => {
     // Sidebar controls
     newBtn.addEventListener('click', () => startNewSession());
     continueBtn.addEventListener('click', () => continueLastSession());
-    cwdToggle.addEventListener('click', () => {
-      cwdBar.hidden = !cwdBar.hidden;
-      if (toolsBar) toolsBar.hidden = true;
-      if (!cwdBar.hidden) cwdInput.focus();
-    });
+    cwdToggle.addEventListener('click', () => openCwdPicker());
     toolsToggle.addEventListener('click', () => {
       toolsBar.hidden = !toolsBar.hidden;
       if (cwdBar) cwdBar.hidden = true;
@@ -150,6 +146,9 @@ const DenChat = (() => {
 
     // Handle visualViewport for mobile keyboard avoidance
     setupMobileViewport();
+
+    // Initialize directory picker (registers listeners once)
+    initCwdPicker();
 
     // Restore last session or create a new one
     refreshSidebar().then(() => restoreOrCreateSession());
@@ -1373,6 +1372,154 @@ const DenChat = (() => {
     };
     window.visualViewport.addEventListener('resize', onViewportChange);
     window.visualViewport.addEventListener('scroll', onViewportChange);
+  }
+
+  // ── Directory picker modal ──
+  // State scoped to the picker lifecycle (reset on each open)
+  let cwdPickerPath = '';
+  let cwdPickerAbort = null; // AbortController for in-flight fetches
+
+  function getFilerApiBase() {
+    if (!chatRemoteId) return '/api/filer';
+    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}/filer`;
+    return `/api/remote/${chatRemoteId}/filer`;
+  }
+
+  // F001: Register listeners once in init, not per-open
+  function initCwdPicker() {
+    const modal = document.getElementById('chat-cwd-picker-modal');
+    const cancelBtn = document.getElementById('cwd-picker-cancel');
+    const selectBtn = document.getElementById('cwd-picker-select');
+    const upBtn = document.getElementById('cwd-picker-up');
+    const listEl = document.getElementById('cwd-picker-list');
+    if (!modal || !cancelBtn || !selectBtn || !upBtn || !listEl) return;
+
+    cancelBtn.addEventListener('click', closeCwdPicker);
+    selectBtn.addEventListener('click', () => {
+      const selected = listEl.querySelector('.cwd-picker-item.selected');
+      const finalPath = selected ? selected.dataset.path : cwdPickerPath;
+      cwdInput.value = finalPath;
+      cwdBar.hidden = false;
+      if (toolsBar) toolsBar.hidden = true;
+      closeCwdPicker();
+    });
+    upBtn.addEventListener('click', () => {
+      const parent = getParentDir(cwdPickerPath);
+      if (parent && parent !== cwdPickerPath) loadCwdPickerDir(parent);
+    });
+
+    // F004: Event delegation for directory item click/dblclick
+    listEl.addEventListener('click', (e) => {
+      const item = e.target.closest('.cwd-picker-item');
+      if (!item) return;
+      for (const el of listEl.querySelectorAll('.cwd-picker-item.selected')) {
+        el.classList.remove('selected');
+      }
+      item.classList.add('selected');
+    });
+    listEl.addEventListener('dblclick', (e) => {
+      const item = e.target.closest('.cwd-picker-item');
+      if (!item) return;
+      loadCwdPickerDir(item.dataset.path);
+    });
+  }
+
+  function openCwdPicker() {
+    const modal = document.getElementById('chat-cwd-picker-modal');
+    if (!modal) return;
+    modal.hidden = false;
+    cwdPickerPath = cwdInput.value.trim() || '~';
+    loadCwdPickerDir(cwdPickerPath);
+  }
+
+  function closeCwdPicker() {
+    const modal = document.getElementById('chat-cwd-picker-modal');
+    if (modal) modal.hidden = true;
+    // F003: Cancel any in-flight fetch
+    if (cwdPickerAbort) { cwdPickerAbort.abort(); cwdPickerAbort = null; }
+  }
+
+  async function loadCwdPickerDir(dirPath) {
+    const listEl = document.getElementById('cwd-picker-list');
+    const currentEl = document.getElementById('cwd-picker-current');
+    if (!listEl || !currentEl) return;
+
+    // F003: Abort previous in-flight request to prevent stale responses
+    if (cwdPickerAbort) cwdPickerAbort.abort();
+    const controller = new AbortController();
+    cwdPickerAbort = controller;
+
+    listEl.innerHTML = '<div class="cwd-picker-empty">Loading...</div>';
+    try {
+      const resp = await fetch(
+        `${getFilerApiBase()}/list?path=${encodeURIComponent(dirPath)}&show_hidden=false`,
+        { credentials: 'same-origin', signal: controller.signal }
+      );
+      if (!resp.ok) {
+        listEl.innerHTML = '<div class="cwd-picker-empty">Failed to load directory</div>';
+        return;
+      }
+      const data = await resp.json();
+      cwdPickerPath = data.path;
+      currentEl.textContent = data.path;
+
+      const dirs = (data.entries || []).filter(e => e.is_dir);
+
+      // Prepend drives if available (Windows root)
+      if (data.drives && data.drives.length > 0 && !data.parent) {
+        listEl.innerHTML = '';
+        for (const drive of data.drives) {
+          listEl.appendChild(createPickerItem(drive, drive, true));
+        }
+        for (const d of dirs) {
+          const fullPath = data.path.replace(/[\\/]$/, '') + '\\' + d.name;
+          listEl.appendChild(createPickerItem(d.name, fullPath, false));
+        }
+      } else if (dirs.length === 0) {
+        listEl.innerHTML = '<div class="cwd-picker-empty">No subdirectories</div>';
+      } else {
+        listEl.innerHTML = '';
+        const sep = data.path.includes('/') ? '/' : '\\';
+        const base = data.path.replace(/[\\/]$/, '');
+        for (const d of dirs) {
+          listEl.appendChild(createPickerItem(d.name, base + sep + d.name, false));
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return; // Superseded by newer request
+      listEl.innerHTML = '<div class="cwd-picker-empty">Error loading directory</div>';
+    }
+  }
+
+  function createPickerItem(label, path, isDrive) {
+    const item = document.createElement('div');
+    item.className = 'cwd-picker-item';
+    item.setAttribute('role', 'option');
+    item.dataset.path = path;
+
+    const icon = document.createElement('span');
+    icon.className = 'cwd-picker-item-icon';
+    icon.textContent = isDrive ? '\uD83D\uDCBF' : '\uD83D\uDCC1';
+
+    const name = document.createElement('span');
+    name.textContent = label;
+
+    item.appendChild(icon);
+    item.appendChild(name);
+    return item;
+  }
+
+  // F006: Handle drive root boundary (e.g., "C:" → "C:\", "/" stays "/")
+  function getParentDir(p) {
+    const normalized = p.replace(/[\\/]+$/, '');
+    const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+    if (lastSep < 0) return p; // No separator at all (e.g., "C:") — can't go higher
+    if (lastSep === 0) return normalized.substring(0, 1); // Unix root "/"
+    // Windows drive root: "C:\foo" → "C:\"
+    if (normalized.length >= 2 && normalized[1] === ':' && lastSep === 2) {
+      return normalized.substring(0, 3); // "C:\"
+    }
+    return normalized.substring(0, lastSep);
   }
 
   // ── Public API ──
