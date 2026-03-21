@@ -506,7 +506,14 @@ const DenSettings = (() => {
   function apply() {
     document.documentElement.style.setProperty('--den-font-size', current.font_size + 'px');
     applyTheme();
+    applyChatInputPosition();
     updateDocumentTitle();
+  }
+
+  function applyChatInputPosition() {
+    const chatMain = document.querySelector('.chat-main');
+    if (!chatMain) return;
+    chatMain.classList.toggle('chat-input-top', current.chat_input_position === 'top');
   }
 
   /** Resolve 'system' theme to actual value */
@@ -846,6 +853,9 @@ const DenSettings = (() => {
       sel.value = current['theme_' + suffix] || '';
     }
 
+    const chatInputPosSelect = document.getElementById('setting-chat-input-position');
+    if (chatInputPosSelect) chatInputPosSelect.value = current.chat_input_position || 'bottom';
+
     const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
     if (agentFwdCheck) agentFwdCheck.checked = !!current.ssh_agent_forwarding;
 
@@ -989,6 +999,9 @@ const DenSettings = (() => {
       const themeChat = document.getElementById('setting-theme-chat')?.value || null;
       const themeFiles = document.getElementById('setting-theme-files')?.value || null;
 
+      const chatInputPosEl = document.getElementById('setting-chat-input-position');
+      const chatInputPosition = chatInputPosEl ? chatInputPosEl.value : 'bottom';
+
       Spinner.button(saveBtn, async () => {
         const ok = await save({
           font_size: Math.max(8, Math.min(32, fontSize)),
@@ -1005,6 +1018,7 @@ const DenSettings = (() => {
           sleep_prevention_mode: sleepMode,
           sleep_prevention_timeout: sleepTimeout,
           group_remote_sessions: groupRemote,
+          chat_input_position: chatInputPosition === 'bottom' ? null : chatInputPosition,
         });
         if (!ok) return;
         apply();

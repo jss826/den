@@ -141,6 +141,12 @@ pub async fn put_settings(
             pos.orientation = "horizontal".to_string();
         }
     }
+    // Validate chat_input_position: only "top" allowed (None = bottom default)
+    if let Some(ref pos) = settings.chat_input_position
+        && pos != "top"
+    {
+        settings.chat_input_position = None;
+    }
     // Validate snippets: limit count, label/command length, reject empty
     if let Some(ref snips) = settings.snippets {
         if snips.len() > 100 {

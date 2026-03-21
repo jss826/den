@@ -1221,6 +1221,11 @@ html, body {
   border-top: 1px solid var(--border, #333);
   background: var(--bg, #181818);
 }
+.chat-main.chat-input-top .chat-input-area {
+  order: -1;
+  border-top: none;
+  border-bottom: 1px solid var(--border, #333);
+}
 .chat-input-area.drag-over {
   border-color: var(--accent, #4a9eff);
   background: color-mix(in srgb, var(--accent, #4a9eff) 8%, var(--bg, #181818));
