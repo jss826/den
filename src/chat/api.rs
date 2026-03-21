@@ -233,6 +233,9 @@ pub struct GateRequest {
     pub input: serde_json::Value,
 }
 
+/// Maximum concurrent pending gate requests per session.
+const MAX_PENDING_GATE_REQUESTS: usize = 10;
+
 /// POST /api/chat/sessions/{id}/gate/request — MCP gate server requests permission.
 /// Long-polls until the user responds via WS or timeout (5 min).
 pub async fn gate_request(
@@ -269,8 +272,20 @@ pub async fn gate_request(
             .into_response();
     }
 
-    // Register pending permission and broadcast to WS clients
-    let rx = perm.register(body.request_id.clone()).await;
+    // Atomically check pending count + register (prevents TOCTOU and duplicate request_id)
+    let rx = match perm
+        .try_register(body.request_id.clone(), MAX_PENDING_GATE_REQUESTS)
+        .await
+    {
+        Some(rx) => rx,
+        None => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({"error": "too many pending gate requests"})),
+            )
+                .into_response();
+        }
+    };
 
     let event = serde_json::json!({
         "type": "permission_request",
@@ -287,6 +302,7 @@ pub async fn gate_request(
         Ok(Ok(allowed)) => Json(serde_json::json!({ "allowed": allowed })).into_response(),
         _ => {
             // Timeout or channel dropped — auto-deny
+            tracing::warn!(session_id = %id, request_id = %request_id, "gate request timed out, auto-denied");
             perm_cleanup.remove(&request_id).await;
             Json(serde_json::json!({ "allowed": false })).into_response()
         }

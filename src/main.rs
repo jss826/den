@@ -1,6 +1,7 @@
 use den::config::Config;
 use den::pty::registry::SessionRegistry;
 use den::store::Store;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -148,10 +149,13 @@ async fn main() {
         .unwrap();
     } else {
         tracing::info!("Listening on http://{}:{}", bind_address, port);
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(shutdown_registry, clipboard_handle))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal(shutdown_registry, clipboard_handle))
+        .await
+        .unwrap();
     }
 
     // Abort SSH server task so its TCP listener is released before restart

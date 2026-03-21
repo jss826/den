@@ -293,6 +293,31 @@ pub async fn user_auth_middleware(
     }
 }
 
+/// Loopback-only middleware.
+/// Rejects requests from non-loopback IPs (127.0.0.1, ::1) with 403 Forbidden.
+/// Used for endpoints that should only be accessed by local processes (e.g. MCP gate).
+pub async fn loopback_only_middleware(req: Request<axum::body::Body>, next: Next) -> Response {
+    use axum::extract::connect_info::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let is_loopback = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().is_loopback())
+        .unwrap_or(false);
+
+    if !is_loopback {
+        let remote = req
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.to_string());
+        tracing::warn!(remote_addr = ?remote, "Rejected non-loopback gate request");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    next.run(req).await
+}
+
 /// Content-Security-Policy ミドルウェア
 /// script-src 'self' で外部スクリプト注入を防止し、XSS リスクを軽減する。
 pub async fn csp_middleware(req: Request<axum::body::Body>, next: Next) -> Response {

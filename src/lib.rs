@@ -98,17 +98,21 @@ pub fn create_app_with_secret(
         chat_manager,
     });
 
+    // Gate route — loopback-only + per-session gate token auth
+    let gate_route = Router::new()
+        .route(
+            "/api/chat/sessions/{id}/gate/request",
+            post(chat::api::gate_request),
+        )
+        .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
+
     // 認証不要のルート
     let public_routes = Router::new()
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .route("/api/system/tls", get(tls::status))
         .route("/api/system/tls/certificate", get(tls::certificate))
-        // Gate request endpoint — authenticated by per-session gate token, not user cookie
-        .route(
-            "/api/chat/sessions/{id}/gate/request",
-            post(chat::api::gate_request),
-        )
+        .merge(gate_route)
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 

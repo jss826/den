@@ -45,6 +45,27 @@ impl PermissionState {
         }
     }
 
+    /// Atomically check the pending count and register a new request.
+    /// Returns None if the pending count is at or above max, or if request_id already exists.
+    pub async fn try_register(
+        &self,
+        request_id: String,
+        max: usize,
+    ) -> Option<oneshot::Receiver<bool>> {
+        let mut map = self.pending.lock().await;
+        if map.len() >= max || map.contains_key(&request_id) {
+            return None;
+        }
+        let (tx, rx) = oneshot::channel();
+        map.insert(request_id, tx);
+        Some(rx)
+    }
+
+    /// Return the number of currently pending permission requests.
+    pub async fn pending_count(&self) -> usize {
+        self.pending.lock().await.len()
+    }
+
     /// Remove a pending request (e.g. on timeout).
     pub async fn remove(&self, request_id: &str) {
         self.pending.lock().await.remove(request_id);
@@ -56,5 +77,67 @@ impl PermissionState {
         for (_, tx) in entries {
             let _ = tx.send(false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn pending_count_tracks_registrations() {
+        let state = PermissionState::new("token".to_string());
+        assert_eq!(state.pending_count().await, 0);
+
+        let _rx1 = state.register("r1".to_string()).await;
+        assert_eq!(state.pending_count().await, 1);
+
+        let _rx2 = state.register("r2".to_string()).await;
+        assert_eq!(state.pending_count().await, 2);
+
+        state.resolve("r1", true).await;
+        assert_eq!(state.pending_count().await, 1);
+
+        state.remove("r2").await;
+        assert_eq!(state.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn drain_all_clears_pending() {
+        let state = PermissionState::new("token".to_string());
+        let _rx1 = state.register("r1".to_string()).await;
+        let _rx2 = state.register("r2".to_string()).await;
+        assert_eq!(state.pending_count().await, 2);
+
+        state.drain_all().await;
+        assert_eq!(state.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn try_register_enforces_max() {
+        let state = PermissionState::new("token".to_string());
+
+        let _rx1 = state.try_register("r1".to_string(), 2).await;
+        assert!(_rx1.is_some());
+        let _rx2 = state.try_register("r2".to_string(), 2).await;
+        assert!(_rx2.is_some());
+
+        // At max — should reject
+        let rx3 = state.try_register("r3".to_string(), 2).await;
+        assert!(rx3.is_none());
+        assert_eq!(state.pending_count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn try_register_rejects_duplicate() {
+        let state = PermissionState::new("token".to_string());
+
+        let _rx1 = state.try_register("r1".to_string(), 10).await;
+        assert!(_rx1.is_some());
+
+        // Same request_id — should reject
+        let rx_dup = state.try_register("r1".to_string(), 10).await;
+        assert!(rx_dup.is_none());
+        assert_eq!(state.pending_count().await, 1);
     }
 }

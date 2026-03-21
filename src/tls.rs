@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Once;
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -499,6 +500,12 @@ pub async fn serve(
                             return;
                         }
                     };
+
+                    // Inject ConnectInfo so handlers can access the remote address
+                    let service = tower::ServiceExt::map_request(service, move |mut req: axum::http::Request<_>| {
+                        req.extensions_mut().insert(ConnectInfo(remote_addr));
+                        req
+                    });
 
                     let io = TokioIo::new(tls_stream);
                     let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
