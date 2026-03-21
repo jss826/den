@@ -41,6 +41,8 @@ const DenChat = (() => {
   const MODIFYING_TOOLS = new Set([
     'Edit', 'Write', 'MultiEdit', 'Bash', 'NotebookEdit',
   ]);
+  const DIFF_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
+  const toolInputMap = new Map();
   const autoDismissedTools = new Set();
   // Permission gate: tools auto-allowed by user for this session
   const autoAllowedTools = new Set();
@@ -790,6 +792,7 @@ const DenChat = (() => {
   async function createSession() {
     autoDismissedTools.clear();
     autoAllowedTools.clear();
+    toolInputMap.clear();
     permissionGateEnabled = permissionGateCheckbox ? permissionGateCheckbox.checked : false;
     const base = getApiBase();
     const cwd = cwdInput ? cwdInput.value.trim() : '';
@@ -854,6 +857,7 @@ const DenChat = (() => {
       isStreaming = false;
       currentSessionState = 'idle';
       autoDismissedTools.clear();
+      toolInputMap.clear();
       if (pendingClaudeSessionId) {
         // Auto-restart available — keep input ready, no "ended" message
       } else if (explicitStop) {
@@ -883,6 +887,7 @@ const DenChat = (() => {
     isStreaming = false;
     currentSessionState = 'idle';
     autoDismissedTools.clear();
+    toolInputMap.clear();
     pendingClaudeSessionId = null;
     explicitStop = false;
     viewingHistory = false;
@@ -894,6 +899,7 @@ const DenChat = (() => {
     if (messagesEl) messagesEl.innerHTML = '';
     currentAssistantBubble = null;
     currentThinkingBlock = null;
+    toolInputMap.clear();
     sessionCostUsd = 0;
     sessionInputTokens = 0;
     sessionOutputTokens = 0;
@@ -1125,6 +1131,11 @@ const DenChat = (() => {
     // Strip MCP prefix for display and matching
     const displayName = stripMcpPrefix(block.name);
     const displayBlock = { ...block, name: displayName };
+
+    // Store input for diff rendering
+    if (DIFF_TOOLS.has(displayName)) {
+      toolInputMap.set(block.id, { name: displayName, input: block.input });
+    }
 
     // If permission gate is active, gated tools go through the permission flow
     // (the MCP server handles blocking). We just show a collapsed block here.
@@ -1410,29 +1421,194 @@ const DenChat = (() => {
     ws.send(JSON.stringify({ type: 'permission_response', request_id: requestId, allowed }));
   }
 
+  function extractToolResultText(item) {
+    let text = '';
+    if (typeof item.content === 'string') {
+      text = item.content;
+    } else if (Array.isArray(item.content)) {
+      text = item.content
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text)
+        .join('\n');
+    }
+    if (text.length > 2000) {
+      text = text.substring(0, 2000) + '\n... (truncated)';
+    }
+    return text;
+  }
+
   function appendToolResult(item) {
     const toolEl = document.getElementById('tool-' + item.tool_use_id);
-    if (toolEl) {
-      const resultDiv = document.createElement('div');
-      resultDiv.className = 'chat-tool-result' + (item.is_error ? ' chat-tool-error' : '');
-      let text = '';
-      if (typeof item.content === 'string') {
-        text = item.content;
-      } else if (Array.isArray(item.content)) {
-        text = item.content
-          .filter((c) => c.type === 'text')
-          .map((c) => c.text)
-          .join('\n');
+    if (!toolEl) return;
+
+    const toolInfo = toolInputMap.get(item.tool_use_id);
+    const text = extractToolResultText(item);
+
+    // Try diff rendering for Edit/Write/MultiEdit
+    if (toolInfo && !item.is_error) {
+      const diffEl = renderDiffResult(toolInfo);
+      if (diffEl) {
+        toolEl.appendChild(diffEl);
+        // F005: append tool result text in a collapsible details
+        if (text) {
+          const details = document.createElement('details');
+          details.className = 'chat-tool-result';
+          const summary = document.createElement('summary');
+          summary.textContent = 'Tool output';
+          details.appendChild(summary);
+          const pre = document.createElement('pre');
+          pre.textContent = text;
+          details.appendChild(pre);
+          toolEl.appendChild(details);
+        }
+        toolInputMap.delete(item.tool_use_id);
+        scrollToBottom();
+        return;
       }
-      if (text.length > 2000) {
-        text = text.substring(0, 2000) + '\n... (truncated)';
-      }
-      const pre = document.createElement('pre');
-      pre.textContent = text;
-      resultDiv.appendChild(pre);
-      toolEl.appendChild(resultDiv);
-      scrollToBottom();
     }
+
+    // Fallback: plain text rendering
+    const resultDiv = document.createElement('div');
+    resultDiv.className = 'chat-tool-result' + (item.is_error ? ' chat-tool-error' : '');
+    const pre = document.createElement('pre');
+    pre.textContent = text;
+    resultDiv.appendChild(pre);
+    toolEl.appendChild(resultDiv);
+    if (toolInfo) toolInputMap.delete(item.tool_use_id);
+    scrollToBottom();
+  }
+
+  function renderDiffResult(toolInfo) {
+    const { name, input } = toolInfo;
+    if (!input) return null;
+
+    const container = document.createElement('div');
+    container.className = 'chat-diff-viewer';
+
+    if (name === 'Edit' && input.old_string != null && input.new_string != null) {
+      if (!appendDiffHunk(container, input.file_path, input.old_string, input.new_string)) {
+        return null; // old === new, fall back to plain text
+      }
+    } else if (name === 'MultiEdit' && Array.isArray(input.edits)) {
+      let anyDiff = false;
+      for (const edit of input.edits) {
+        if (edit.old_string != null && edit.new_string != null) {
+          if (appendDiffHunk(container, input.file_path, edit.old_string, edit.new_string)) {
+            anyDiff = true;
+          }
+        }
+      }
+      if (!anyDiff) return null;
+    } else if (name === 'Write' && input.file_path) {
+      appendDiffFileHeader(container, input.file_path);
+      const info = document.createElement('div');
+      info.className = 'chat-diff-separator';
+      info.textContent = 'File written';
+      container.appendChild(info);
+    } else {
+      return null;
+    }
+
+    return container.children.length > 0 ? container : null;
+  }
+
+  function appendDiffFileHeader(container, filePath) {
+    if (!filePath) return;
+    const header = document.createElement('div');
+    header.className = 'chat-diff-file-header';
+    header.textContent = filePath;
+    header.title = 'Open in Files tab';
+    header.addEventListener('click', () => {
+      if (window.FilerEditor) window.FilerEditor.openFile(filePath);
+      if (window.DenApp) window.DenApp.switchTab('filer');
+    });
+    container.appendChild(header);
+  }
+
+  const MAX_DIFF_LINES = 200;
+
+  function appendDiffHunk(container, filePath, oldStr, newStr) {
+    // F008: skip diff if old === new (no actual change)
+    if (oldStr === newStr) return false;
+
+    appendDiffFileHeader(container, filePath);
+
+    const diffLines = computeLineDiff(oldStr, newStr);
+    const hunk = document.createElement('div');
+    hunk.className = 'chat-diff-hunk';
+
+    const limit = Math.min(diffLines.length, MAX_DIFF_LINES);
+    for (let i = 0; i < limit; i++) {
+      const line = diffLines[i];
+      const div = document.createElement('div');
+      div.className = 'chat-diff-line ' + line.type;
+      const prefix = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+      div.textContent = prefix + line.text;
+      hunk.appendChild(div);
+    }
+
+    if (diffLines.length > MAX_DIFF_LINES) {
+      const trunc = document.createElement('div');
+      trunc.className = 'chat-diff-separator';
+      trunc.textContent = `... ${diffLines.length - MAX_DIFF_LINES} more lines omitted`;
+      hunk.appendChild(trunc);
+    }
+
+    container.appendChild(hunk);
+    return true;
+  }
+
+  function splitLines(s) {
+    if (s === '') return [];
+    return s.split('\n');
+  }
+
+  function computeLineDiff(oldStr, newStr) {
+    const oldLines = splitLines(oldStr);
+    const newLines = splitLines(newStr);
+
+    // Find common prefix lines
+    let prefixLen = 0;
+    while (prefixLen < oldLines.length && prefixLen < newLines.length
+           && oldLines[prefixLen] === newLines[prefixLen]) {
+      prefixLen++;
+    }
+
+    // Find common suffix lines
+    let suffixLen = 0;
+    while (suffixLen < oldLines.length - prefixLen
+           && suffixLen < newLines.length - prefixLen
+           && oldLines[oldLines.length - 1 - suffixLen] === newLines[newLines.length - 1 - suffixLen]) {
+      suffixLen++;
+    }
+
+    const result = [];
+    const ctxBefore = 3;
+    const ctxAfter = 3;
+
+    // Context before
+    const ctxStart = Math.max(0, prefixLen - ctxBefore);
+    for (let i = ctxStart; i < prefixLen; i++) {
+      result.push({ type: 'ctx', text: oldLines[i] });
+    }
+
+    // Deleted lines
+    for (let i = prefixLen; i < oldLines.length - suffixLen; i++) {
+      result.push({ type: 'del', text: oldLines[i] });
+    }
+
+    // Added lines
+    for (let i = prefixLen; i < newLines.length - suffixLen; i++) {
+      result.push({ type: 'add', text: newLines[i] });
+    }
+
+    // Context after
+    const ctxEnd = Math.min(oldLines.length, oldLines.length - suffixLen + ctxAfter);
+    for (let i = oldLines.length - suffixLen; i < ctxEnd; i++) {
+      result.push({ type: 'ctx', text: oldLines[i] });
+    }
+
+    return result;
   }
 
   // ── Send message ──

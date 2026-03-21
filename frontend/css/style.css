@@ -28,6 +28,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(158,206,106,0.15);
+  --diff-del-bg: rgba(247,118,142,0.15);
   --keybar-vertical-top: 80px; /* tab-bar(40px) + session-bar(40px) */
 }
 
@@ -64,6 +66,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.4);
   --shadow: rgba(0,0,0,0.12);
   --spinner-track: rgba(0,0,0,0.1);
+  --diff-add-bg: rgba(22,163,74,0.12);
+  --diff-del-bg: rgba(220,38,38,0.12);
 }
 
 /* === Solarized Dark テーマ === */
@@ -95,6 +99,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(133,153,0,0.15);
+  --diff-del-bg: rgba(220,50,47,0.15);
 }
 
 /* === Solarized Light テーマ === */
@@ -131,6 +137,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.4);
   --shadow: rgba(0,0,0,0.12);
   --spinner-track: rgba(0,0,0,0.1);
+  --diff-add-bg: rgba(133,153,0,0.12);
+  --diff-del-bg: rgba(220,50,47,0.12);
 }
 
 /* === Monokai テーマ === */
@@ -162,6 +170,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(166,227,161,0.15);
+  --diff-del-bg: rgba(249,38,114,0.15);
 }
 
 /* === Nord テーマ === */
@@ -193,6 +203,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(163,190,140,0.15);
+  --diff-del-bg: rgba(191,97,106,0.15);
 }
 
 /* === Dracula テーマ === */
@@ -224,6 +236,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(80,250,123,0.15);
+  --diff-del-bg: rgba(255,85,85,0.15);
 }
 
 /* === Gruvbox Dark テーマ === */
@@ -255,6 +269,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(184,187,38,0.15);
+  --diff-del-bg: rgba(251,73,52,0.15);
 }
 
 /* === Gruvbox Light テーマ === */
@@ -291,6 +307,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.4);
   --shadow: rgba(0,0,0,0.12);
   --spinner-track: rgba(0,0,0,0.1);
+  --diff-add-bg: rgba(121,116,14,0.12);
+  --diff-del-bg: rgba(204,36,29,0.12);
 }
 
 /* === Catppuccin Mocha テーマ === */
@@ -322,6 +340,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(166,227,161,0.15);
+  --diff-del-bg: rgba(243,139,168,0.15);
 }
 
 /* === One Dark テーマ === */
@@ -353,6 +373,8 @@
   --overlay-bg-strong: rgba(0,0,0,0.5);
   --shadow: rgba(0,0,0,0.4);
   --spinner-track: rgba(255,255,255,0.15);
+  --diff-add-bg: rgba(152,195,121,0.15);
+  --diff-del-bg: rgba(224,108,117,0.15);
 }
 
 /* CodeMirror ライトテーマ対応 */
@@ -870,6 +892,51 @@ html, body {
 }
 .chat-tool-error {
   color: #f44;
+}
+/* Inline diff viewer */
+.chat-diff-viewer {
+  border-top: 1px solid var(--border, #333);
+  max-height: 400px;
+  overflow: auto;
+  font-size: 12px;
+  font-family: monospace;
+}
+.chat-diff-file-header {
+  padding: 4px 10px;
+  font-weight: bold;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border, #333);
+  cursor: pointer;
+  color: var(--accent);
+  text-decoration: none;
+}
+.chat-diff-file-header:hover {
+  text-decoration: underline;
+}
+.chat-diff-hunk {
+  margin: 0;
+  padding: 0;
+}
+.chat-diff-line {
+  margin: 0;
+  padding: 1px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.chat-diff-line.add {
+  background: var(--diff-add-bg);
+}
+.chat-diff-line.del {
+  background: var(--diff-del-bg);
+}
+.chat-diff-line.ctx {
+  opacity: 0.7;
+}
+.chat-diff-separator {
+  padding: 2px 10px;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 11px;
 }
 .chat-run-in-terminal-btn {
   display: inline-block;
