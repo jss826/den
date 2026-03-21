@@ -42,6 +42,10 @@ const DenChat = (() => {
     'Edit', 'Write', 'MultiEdit', 'Bash', 'NotebookEdit',
   ]);
   const autoDismissedTools = new Set();
+  // Permission gate: tools auto-allowed by user for this session
+  const autoAllowedTools = new Set();
+  let permissionGateEnabled = false;
+  let permissionGateCheckbox = null;
 
   // ── Push notification state ──
   let notificationsEnabled = false;
@@ -85,6 +89,7 @@ const DenChat = (() => {
     toolsSelect = document.getElementById('chat-tools-select');
     toolsCustom = document.getElementById('chat-tools-custom');
     searchInput = document.getElementById('chat-search-input');
+    permissionGateCheckbox = document.getElementById('chat-permission-gate');
 
     sendBtn.addEventListener('click', handleSendOrStop);
     inputEl.addEventListener('keydown', (e) => {
@@ -779,6 +784,8 @@ const DenChat = (() => {
 
   async function createSession() {
     autoDismissedTools.clear();
+    autoAllowedTools.clear();
+    permissionGateEnabled = permissionGateCheckbox ? permissionGateCheckbox.checked : false;
     const base = getApiBase();
     const cwd = cwdInput ? cwdInput.value.trim() : '';
     const tools = getAllowedTools();
@@ -787,6 +794,7 @@ const DenChat = (() => {
       const body = {};
       if (cwd) body.cwd = cwd;
       if (tools) body.allowed_tools = tools;
+      if (permissionGateEnabled) body.permission_gate = true;
 
       const resp = await fetch(`${base}/chat/sessions`, {
         method: 'POST',
@@ -911,6 +919,9 @@ const DenChat = (() => {
       case 'result':
         handleResultEvent(event);
         break;
+      case 'permission_request':
+        handlePermissionRequest(event);
+        break;
       case 'session_ended':
         if (explicitStop) {
           appendSystem('Session stopped.');
@@ -981,9 +992,10 @@ const DenChat = (() => {
             });
           } else {
             appendToolUse(block);
-            if (MODIFYING_TOOLS.has(block.name)) {
+            const displayName = stripMcpPrefix(block.name);
+            if (MODIFYING_TOOLS.has(displayName)) {
               ensureNotificationPermission().then(() => {
-                showNotification(`Tool: ${block.name}`, JSON.stringify(block.input || {}).substring(0, 100));
+                showNotification(`Tool: ${displayName}`, JSON.stringify(block.input || {}).substring(0, 100));
               });
             }
           }
@@ -1105,13 +1117,24 @@ const DenChat = (() => {
     currentAssistantBubble = null;
     currentThinkingBlock = null;
 
-    const isModifying = MODIFYING_TOOLS.has(block.name);
-    const isDismissed = autoDismissedTools.has(block.name);
+    // Strip MCP prefix for display and matching
+    const displayName = stripMcpPrefix(block.name);
+    const displayBlock = { ...block, name: displayName };
+
+    // If permission gate is active, gated tools go through the permission flow
+    // (the MCP server handles blocking). We just show a collapsed block here.
+    if (permissionGateEnabled && block.name.startsWith('mcp__den-gate__')) {
+      appendToolBlock(displayBlock);
+      return;
+    }
+
+    const isModifying = MODIFYING_TOOLS.has(displayName);
+    const isDismissed = autoDismissedTools.has(displayName);
 
     if (isModifying && !isDismissed) {
-      appendToolNotification(block);
+      appendToolNotification(displayBlock);
     } else {
-      appendToolBlock(block);
+      appendToolBlock(displayBlock);
     }
   }
 
@@ -1259,6 +1282,102 @@ const DenChat = (() => {
     scrollToBottom();
   }
 
+  // ── Permission gate ──
+
+  /** Strip MCP server prefix from tool name (e.g. "mcp__den-gate__Bash" → "Bash") */
+  function stripMcpPrefix(name) {
+    const prefix = 'mcp__den-gate__';
+    return name.startsWith(prefix) ? name.slice(prefix.length) : name;
+  }
+
+  function handlePermissionRequest(event) {
+    const toolName = event.tool || 'Unknown';
+    const requestId = event.request_id;
+
+    // Auto-allow if user previously chose "Auto-allow" for this tool
+    if (autoAllowedTools.has(toolName)) {
+      sendPermissionResponse(requestId, true);
+      appendSystem(`Auto-allowed: ${toolName}`);
+      return;
+    }
+
+    appendPermissionDialog(requestId, toolName, event.input || {});
+    ensureNotificationPermission().then(() => {
+      showNotification(`Permission: ${toolName}`, 'Approval required');
+    });
+  }
+
+  function appendPermissionDialog(requestId, toolName, toolInput) {
+    currentAssistantBubble = null;
+    currentThinkingBlock = null;
+
+    const card = document.createElement('div');
+    card.className = 'chat-msg chat-tool chat-permission-dialog';
+    card.dataset.requestId = requestId;
+
+    const header = document.createElement('div');
+    header.className = 'chat-permission-header';
+    header.textContent = `${toolName} — Approval Required`;
+    card.appendChild(header);
+
+    const inputPre = document.createElement('pre');
+    inputPre.className = 'chat-tool-input';
+    inputPre.textContent = JSON.stringify(toolInput, null, 2);
+    card.appendChild(inputPre);
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-permission-actions';
+
+    const allowBtn = document.createElement('button');
+    allowBtn.className = 'chat-notification-btn chat-permission-allow';
+    allowBtn.textContent = 'Allow';
+    allowBtn.addEventListener('click', () => {
+      resolvePermission(card, requestId, true);
+    });
+
+    const denyBtn = document.createElement('button');
+    denyBtn.className = 'chat-notification-btn chat-permission-deny';
+    denyBtn.textContent = 'Deny';
+    denyBtn.addEventListener('click', () => {
+      resolvePermission(card, requestId, false);
+    });
+
+    const autoAllowBtn = document.createElement('button');
+    autoAllowBtn.className = 'chat-notification-btn primary';
+    autoAllowBtn.textContent = 'Auto-allow';
+    autoAllowBtn.addEventListener('click', () => {
+      autoAllowedTools.add(toolName);
+      resolvePermission(card, requestId, true);
+    });
+
+    actions.appendChild(allowBtn);
+    actions.appendChild(denyBtn);
+    actions.appendChild(autoAllowBtn);
+    card.appendChild(actions);
+
+    messagesEl.appendChild(card);
+    scrollToBottom();
+  }
+
+  function resolvePermission(card, requestId, allowed) {
+    sendPermissionResponse(requestId, allowed);
+    card.classList.add(allowed ? 'chat-permission-allowed' : 'chat-permission-denied');
+    const status = document.createElement('div');
+    status.className = 'chat-permission-status';
+    status.textContent = allowed ? 'Allowed' : 'Denied';
+    const actions = card.querySelector('.chat-permission-actions');
+    if (actions) actions.remove();
+    card.appendChild(status);
+  }
+
+  function sendPermissionResponse(requestId, allowed) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      appendSystem('Cannot send permission response: connection lost.');
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'permission_response', request_id: requestId, allowed }));
+  }
+
   function appendToolResult(item) {
     const toolEl = document.getElementById('tool-' + item.tool_use_id);
     if (toolEl) {
@@ -1314,7 +1433,10 @@ const DenChat = (() => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'same-origin',
-          body: JSON.stringify({ resume_session_id: claudeSid }),
+          body: JSON.stringify({
+            resume_session_id: claudeSid,
+            permission_gate: permissionGateEnabled,
+          }),
         });
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));

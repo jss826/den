@@ -958,6 +958,65 @@ html, body {
   font-style: italic;
   border-top: 1px solid var(--border, #333);
 }
+/* Permission gate dialog */
+.chat-permission-dialog {
+  border-left: 3px solid #e04040;
+  background: rgba(224, 64, 64, 0.05);
+}
+.chat-permission-header {
+  padding: 6px 10px;
+  font-family: monospace;
+  font-weight: bold;
+  color: #e04040;
+  background: rgba(224, 64, 64, 0.08);
+  border-radius: 6px 6px 0 0;
+}
+.chat-permission-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border, #333);
+}
+.chat-permission-allow {
+  background: #2d7d3a;
+  color: #fff;
+  border-color: #2d7d3a;
+}
+.chat-permission-allow:hover {
+  background: #359943;
+}
+.chat-permission-deny {
+  background: #c03030;
+  color: #fff;
+  border-color: #c03030;
+}
+.chat-permission-deny:hover {
+  background: #d04040;
+}
+.chat-permission-allowed {
+  opacity: 0.7;
+  border-left-color: #2d7d3a;
+}
+.chat-permission-denied {
+  opacity: 0.7;
+  border-left-color: #c03030;
+}
+.chat-permission-status {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--dim, #888);
+  border-top: 1px solid var(--border, #333);
+}
+.chat-gate-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dim, #888);
+  cursor: pointer;
+  white-space: nowrap;
+}
 .chat-input-area {
   display: flex;
   gap: 8px;

@@ -39,7 +39,7 @@ russh-sftp = "2.1"
 anyhow = "1"
 dotenvy = "0.15"
 gethostname = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 tokio-tungstenite = "0.26"
 hyper-util = { version = "0.1.20", features = ["server-auto", "http1", "http2", "tokio"] }
 tower = { version = "0.5", features = ["util"] }

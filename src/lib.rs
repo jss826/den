@@ -7,6 +7,7 @@ pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
+pub mod mcp_gate;
 pub mod port_detection;
 pub mod port_forward;
 pub mod port_monitor;
@@ -76,7 +77,10 @@ pub fn create_app_with_secret(
     let port_monitor = Arc::new(port_monitor::PortMonitor::new());
     let remote_manager = Arc::new(remote::RemoteManager::default());
 
-    let chat_manager = Arc::new(chat::manager::ChatManager::new(&config.data_dir));
+    let chat_manager = Arc::new(chat::manager::ChatManager::new(
+        &config.data_dir,
+        config.port,
+    ));
 
     let state = Arc::new(AppState {
         config,
@@ -100,6 +104,11 @@ pub fn create_app_with_secret(
         .route("/api/logout", post(auth::logout))
         .route("/api/system/tls", get(tls::status))
         .route("/api/system/tls/certificate", get(tls::certificate))
+        // Gate request endpoint — authenticated by per-session gate token, not user cookie
+        .route(
+            "/api/chat/sessions/{id}/gate/request",
+            post(chat::api::gate_request),
+        )
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 

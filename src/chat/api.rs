@@ -31,6 +31,9 @@ pub struct CreateSessionRequest {
     /// Allowed tools for this session (passed as --allowedTools to claude CLI).
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
+    /// If true, enable MCP permission gate for modifying tools.
+    #[serde(default)]
+    pub permission_gate: bool,
 }
 
 /// POST /api/chat/sessions — create a new chat session (optionally resuming).
@@ -56,6 +59,7 @@ pub async fn create_session(
             resume_id.as_deref(),
             body.cwd.as_deref(),
             body.allowed_tools.as_deref(),
+            body.permission_gate,
         )
         .await
     {
@@ -220,6 +224,75 @@ pub async fn delete_history(
     }
 }
 
+// ── Permission gate endpoint (called by MCP gate server) ────────
+
+#[derive(Deserialize)]
+pub struct GateRequest {
+    pub request_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+}
+
+/// POST /api/chat/sessions/{id}/gate/request — MCP gate server requests permission.
+/// Long-polls until the user responds via WS or timeout (5 min).
+pub async fn gate_request(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<GateRequest>,
+) -> impl IntoResponse {
+    let session = match state.chat_manager.get(&id).await {
+        Ok(s) => s,
+        Err(e) => return chat_error_response(e),
+    };
+
+    // Verify gate token
+    let perm = match &session.permission {
+        Some(p) => Arc::clone(p),
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "permission gate not enabled"})),
+            )
+                .into_response();
+        }
+    };
+    let provided_token = headers
+        .get("X-Gate-Token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if provided_token != perm.gate_token {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "invalid gate token"})),
+        )
+            .into_response();
+    }
+
+    // Register pending permission and broadcast to WS clients
+    let rx = perm.register(body.request_id.clone()).await;
+
+    let event = serde_json::json!({
+        "type": "permission_request",
+        "request_id": body.request_id,
+        "tool": body.tool,
+        "input": body.input,
+    });
+    session.broadcast_event(&event.to_string());
+
+    // Wait for user response or timeout
+    let request_id = body.request_id.clone();
+    let perm_cleanup = Arc::clone(&perm);
+    match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+        Ok(Ok(allowed)) => Json(serde_json::json!({ "allowed": allowed })).into_response(),
+        _ => {
+            // Timeout or channel dropped — auto-deny
+            perm_cleanup.remove(&request_id).await;
+            Json(serde_json::json!({ "allowed": false })).into_response()
+        }
+    }
+}
+
 // ── WebSocket endpoint ──────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -330,6 +403,20 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                                     break;
                                 }
                             }
+                            ChatWsCommand::PermissionResponse {
+                                request_id,
+                                allowed,
+                            } => {
+                                tracing::debug!(
+                                    target: "chat",
+                                    request_id = %request_id,
+                                    allowed = allowed,
+                                    "permission_response received"
+                                );
+                                if let Some(perm) = &session_for_write.permission {
+                                    perm.resolve(&request_id, allowed).await;
+                                }
+                            }
                         },
                         // F007: Log WS command parse failures for observability
                         Err(e) => {
@@ -367,6 +454,9 @@ enum ChatWsCommand {
         /// F003: Tool use ID for protocol correctness (currently informational).
         tool_use_id: Option<String>,
     },
+    /// Respond to a permission gate request (Allow/Deny from frontend).
+    #[serde(rename = "permission_response")]
+    PermissionResponse { request_id: String, allowed: bool },
 }
 
 fn chat_error_response(e: ChatError) -> axum::response::Response {

@@ -6,6 +6,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
+use super::permission::PermissionState;
+
 /// Maximum concurrent chat sessions.
 const MAX_SESSIONS: usize = 5;
 
@@ -25,6 +27,8 @@ pub struct ChatManager {
     sessions: RwLock<HashMap<String, Arc<ChatSession>>>,
     /// Directory for persisting chat history (`{data_dir}/chat/`).
     chat_dir: PathBuf,
+    /// Server port — needed for MCP gate config generation.
+    port: u16,
 }
 
 /// Session activity state derived from stream-json events.
@@ -79,6 +83,10 @@ pub struct ChatSession {
     pub cwd: Option<String>,
     /// User-editable display name.
     name: Mutex<Option<String>>,
+    /// Permission gate state (None = gate disabled, Some = gate enabled).
+    pub permission: Option<Arc<PermissionState>>,
+    /// Path to temporary MCP config file (cleaned up on drop).
+    mcp_config_path: Option<PathBuf>,
 }
 
 #[derive(serde::Serialize)]
@@ -161,7 +169,7 @@ fn is_valid_claude_session_id(id: &str) -> bool {
 }
 
 impl ChatManager {
-    pub fn new(data_dir: &str) -> Self {
+    pub fn new(data_dir: &str, port: u16) -> Self {
         let chat_dir = PathBuf::from(data_dir).join("chat");
         // Ensure the chat directory exists
         if let Err(e) = std::fs::create_dir_all(&chat_dir) {
@@ -170,6 +178,7 @@ impl ChatManager {
         Self {
             sessions: RwLock::new(HashMap::new()),
             chat_dir,
+            port,
         }
     }
 
@@ -184,11 +193,13 @@ impl ChatManager {
     /// If `resume_id` is provided, the claude CLI is started with `--resume <id>`.
     /// If `cwd` is provided, the process starts in that directory.
     /// If `allowed_tools` is provided, each tool is passed via `--allowedTools`.
+    /// If `permission_gate` is true, dangerous tools are routed through an MCP permission gate.
     pub async fn create(
         &self,
         resume_id: Option<&str>,
         cwd: Option<&str>,
         allowed_tools: Option<&[String]>,
+        permission_gate: bool,
     ) -> Result<Arc<ChatSession>, ChatError> {
         // F007: Validate resume_id format before passing to CLI
         if let Some(rid) = resume_id
@@ -257,6 +268,44 @@ impl ChatManager {
             }
         }
 
+        // Permission gate: generate MCP config and disable built-in gated tools
+        let gate_token: Option<String>;
+        let mcp_config_path: Option<PathBuf>;
+        if permission_gate {
+            let token = generate_gate_token();
+            let exe_path = std::env::current_exe()
+                .map_err(|e| ChatError::SpawnFailed(format!("cannot resolve exe path: {e}")))?;
+            let config_file = std::env::temp_dir().join(format!("den-gate-{}.json", &id));
+            let mcp_config = serde_json::json!({
+                "mcpServers": {
+                    "den-gate": {
+                        "command": exe_path.to_string_lossy(),
+                        "args": ["--mcp-gate"],
+                        "env": {
+                            "DEN_GATE_API_URL": format!("http://127.0.0.1:{}", self.port),
+                            "DEN_GATE_SESSION_ID": &id,
+                            "DEN_GATE_TOKEN": &token,
+                        }
+                    }
+                }
+            });
+            std::fs::write(&config_file, serde_json::to_string(&mcp_config).unwrap())
+                .map_err(|e| ChatError::SpawnFailed(format!("cannot write MCP config: {e}")))?;
+
+            args.push("--mcp-config".to_string());
+            args.push(config_file.to_string_lossy().to_string());
+            for tool in super::permission::GATED_TOOLS {
+                args.push("--disallowedTools".to_string());
+                args.push((*tool).to_string());
+            }
+
+            gate_token = Some(token);
+            mcp_config_path = Some(config_file);
+        } else {
+            gate_token = None;
+            mcp_config_path = None;
+        }
+
         cmd.args(&args);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
@@ -309,6 +358,8 @@ impl ChatManager {
         // F010: Removed dead code — initial_history is always empty.
         // Resume history replay is handled by the frontend (loads from /api/chat/history/{id}).
 
+        let permission_state = gate_token.map(|token| Arc::new(PermissionState::new(token)));
+
         let session = Arc::new(ChatSession {
             id: id.clone(),
             created_at: chrono::Utc::now(),
@@ -323,6 +374,8 @@ impl ChatManager {
             state: AtomicU8::new(SessionState::Idle.as_u8()),
             cwd: effective_cwd,
             name: Mutex::new(None),
+            permission: permission_state,
+            mcp_config_path,
         });
 
         // Spawn stdout reader task
@@ -575,6 +628,8 @@ impl ChatSession {
             state: AtomicU8::new(SessionState::Idle.as_u8()),
             cwd: None,
             name: Mutex::new(None),
+            permission: None,
+            mcp_config_path: None,
         }
     }
 
@@ -708,12 +763,21 @@ impl ChatSession {
         self.dirty.store(true, Ordering::Release);
     }
 
-    /// Kill the child process.
+    /// Inject a synthetic event into the broadcast channel (e.g. permission_request).
+    pub fn broadcast_event(&self, event: &str) {
+        let _ = self.output_tx.send(event.to_string());
+    }
+
+    /// Kill the child process and clean up MCP config.
     async fn kill(&self) {
         self.alive.store(false, Ordering::Release);
         self.stdin.lock().await.take();
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
+        }
+        // Clean up temporary MCP config file
+        if let Some(ref path) = self.mcp_config_path {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -794,6 +858,13 @@ fn count_history_entries(json: &str) -> usize {
 fn generate_session_id() -> String {
     use rand::Rng;
     let mut buf = [0u8; 8];
+    rand::thread_rng().fill(&mut buf);
+    hex::encode(buf)
+}
+
+fn generate_gate_token() -> String {
+    use rand::Rng;
+    let mut buf = [0u8; 32];
     rand::thread_rng().fill(&mut buf);
     hex::encode(buf)
 }
