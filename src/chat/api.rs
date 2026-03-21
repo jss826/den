@@ -270,6 +270,12 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
                     let claude_sid = session_for_read.claude_session_id().await;
+                    tracing::debug!(
+                        target: "chat",
+                        session_id = %session_id,
+                        claude_session_id = ?claude_sid,
+                        "Chat session ended (broadcast closed)"
+                    );
                     let msg = serde_json::json!({
                         "type": "session_ended",
                         "claude_session_id": claude_sid,

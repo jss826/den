@@ -643,9 +643,12 @@ const DenChat = (() => {
       if (resp.ok) {
         const data = await resp.json();
         if (data.history) {
+          suppressScroll = true; // F004: avoid forced reflow per event
           for (const line of data.history) {
             handleEvent(line);
           }
+          suppressScroll = false;
+          scrollToBottom();
         }
       } else {
         appendSystem('Failed to load history.');
@@ -840,11 +843,13 @@ const DenChat = (() => {
       autoDismissedTools.clear();
       if (pendingClaudeSessionId) {
         // Auto-restart available — keep input ready, no "ended" message
-        updateInputState();
+      } else if (explicitStop) {
+        // F008: don't duplicate "Session stopped" from session_ended handler
       } else {
         appendSystem('Session ended.');
-        updateInputState();
       }
+      explicitStop = false; // F003: reset after consumption
+      updateInputState();
       refreshSidebar();
     };
 
@@ -1280,22 +1285,28 @@ const DenChat = (() => {
   }
 
   // ── Send message ──
+  let autoRestartInFlight = false;
   async function sendMessage() {
     const text = inputEl.value.trim();
     if (!text) return;
 
     // Auto-restart: WS closed but we can resume with --continue (#75)
     if ((!ws || ws.readyState !== WebSocket.OPEN) && pendingClaudeSessionId) {
-      appendUserMessage(text);
-      inputEl.value = '';
-      resetInputHeight();
-      isStreaming = true;
-      updateInputState();
-      inputEl.focus();
+      if (autoRestartInFlight) return; // F001: prevent double invocation
+      autoRestartInFlight = true;
 
       const claudeSid = pendingClaudeSessionId;
       pendingClaudeSessionId = null;
       explicitStop = false;
+      isStreaming = true;
+      updateInputState();
+
+      // F001: invalidate any lingering old WS before opening a new one
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+        ws = null;
+      }
 
       const base = getApiBase();
       try {
@@ -1308,6 +1319,7 @@ const DenChat = (() => {
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           appendSystem('Failed to restart: ' + (err.error || resp.statusText));
+          pendingClaudeSessionId = claudeSid; // F002: restore for retry
           isStreaming = false;
           updateInputState();
           return;
@@ -1318,29 +1330,44 @@ const DenChat = (() => {
         refreshSidebar();
         saveSessionToStorage();
 
-        // Wait for WS to open, then send the message
+        // Wait for WS to open, then send the message (F005: 10s timeout)
         await new Promise((resolve, reject) => {
           const origOpen = ws.onopen;
           const origClose = ws.onclose;
+          const timer = setTimeout(() => {
+            ws.onopen = origOpen;
+            ws.onclose = origClose;
+            reject(new Error('WS open timeout'));
+          }, 10000);
           ws.onopen = (e) => {
-            // Restore original handlers
+            clearTimeout(timer);
             ws.onopen = origOpen;
             ws.onclose = origClose;
             if (origOpen) origOpen.call(ws, e);
             resolve();
           };
           ws.onclose = (e) => {
+            clearTimeout(timer);
             reject(new Error('WS closed before open'));
             if (origClose) origClose.call(ws, e);
           };
         });
+
+        // F002: only show message and clear input after successful send
+        appendUserMessage(text);
+        inputEl.value = '';
+        resetInputHeight();
         ws.send(JSON.stringify({ type: 'message', text }));
         currentAssistantBubble = null;
         currentThinkingBlock = null;
+        inputEl.focus();
       } catch (e) {
         appendSystem('Failed to restart: ' + e.message);
+        pendingClaudeSessionId = claudeSid; // F002: restore for retry
         isStreaming = false;
         updateInputState();
+      } finally {
+        autoRestartInFlight = false;
       }
       return;
     }
@@ -1364,7 +1391,7 @@ const DenChat = (() => {
       sendBtn.classList.remove('chat-stop-btn');
       sendBtn.disabled = true;
       inputEl.disabled = true;
-      inputEl.placeholder = 'Viewing history — click Resume to continue';
+      inputEl.placeholder = 'Viewing history \u2014 click \u25b6 to resume';
     } else if (isStreaming) {
       sendBtn.textContent = 'Stop';
       sendBtn.classList.add('chat-stop-btn');
@@ -1380,7 +1407,9 @@ const DenChat = (() => {
     }
   }
 
+  let suppressScroll = false; // F004: suppress during bulk history replay
   function scrollToBottom() {
+    if (suppressScroll) return;
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
