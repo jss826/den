@@ -136,7 +136,7 @@ const FloatTerminal = (() => {
       fontSize,
       fontFamily: DenTerminal.getFontFamily(),
       scrollback,
-      theme: DenTerminal.getXtermTheme(),
+      theme: DenTerminal.getXtermTheme(DenSettings.getPaneTheme('terminal-pane')),
     });
 
     fitAddon = new FitAddon.FitAddon();
@@ -804,7 +804,7 @@ const FloatTerminal = (() => {
     const fontSize = DenSettings.get('font_size') ?? 15;
     term.options.scrollback = Math.max(100, Math.min(50000, scrollback));
     term.options.fontSize = Math.max(8, Math.min(32, fontSize));
-    term.options.theme = DenTerminal.getXtermTheme();
+    term.options.theme = DenTerminal.getXtermTheme(DenSettings.getPaneTheme('terminal-pane'));
     fitAndRefresh();
   }
 
@@ -815,6 +815,12 @@ const FloatTerminal = (() => {
   function isVisible() {
     return visible && !minimized;
   }
+
+  // Update xterm theme when Den theme changes
+  document.addEventListener('den:theme-changed', () => {
+    if (!term) return;
+    term.options.theme = DenTerminal.getXtermTheme(DenSettings.getPaneTheme('terminal-pane'));
+  });
 
   return {
     init,

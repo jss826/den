@@ -1,4 +1,4 @@
-/* global CM, DenMarkdown, FilerRemote */
+/* global CM, DenMarkdown, DenSettings, FilerRemote */
 // Den - ファイラ CodeMirror 6 エディタ統合
 // eslint-disable-next-line no-unused-vars
 const FilerEditor = (() => {
@@ -93,11 +93,12 @@ const FilerEditor = (() => {
 
     // CodeMirror インスタンス作成
     const lang = detectLanguage(filePath);
-    const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-    const isDark = !['light', 'solarized-light', 'gruvbox-light'].includes(theme);
+    const theme = DenSettings.getPaneTheme('filer-pane');
+    const isDark = !DenSettings.LIGHT_THEMES.includes(theme);
+    const themeCompartment = new CM.Compartment();
     const extensions = [
       ...CM.denSetup,
-      ...(isDark ? [CM.oneDark] : []),
+      themeCompartment.of(isDark ? [CM.oneDark] : []),
       CM.search(),
       CM.EditorView.updateListener.of((update) => {
         if (update.docChanged) {
@@ -120,6 +121,7 @@ const FilerEditor = (() => {
 
     openFiles.set(filePath, {
       view,
+      themeCompartment,
       content: data.content,
       dirty: false,
     });
@@ -615,6 +617,18 @@ const FilerEditor = (() => {
   }
 
   function getActivePath() { return activePath; }
+
+  // Update CodeMirror theme for all open editors when Den theme changes
+  document.addEventListener('den:theme-changed', () => {
+    const theme = DenSettings.getPaneTheme('filer-pane');
+    const isDark = !DenSettings.LIGHT_THEMES.includes(theme);
+    for (const entry of openFiles.values()) {
+      if (!entry.view || !entry.themeCompartment) continue;
+      entry.view.dispatch({
+        effects: entry.themeCompartment.reconfigure(isDark ? [CM.oneDark] : []),
+      });
+    }
+  });
 
   return {
     init, openFile, closeFile, closeAll, saveActive, hasUnsavedChanges,

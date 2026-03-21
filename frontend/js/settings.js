@@ -18,7 +18,30 @@ const DenSettings = (() => {
     snippets: null,
     sleep_prevention_mode: 'user-activity',
     sleep_prevention_timeout: 30,
+    theme_terminal: null,
+    theme_chat: null,
+    theme_files: null,
   };
+
+  // All available theme options (value → label)
+  const THEME_OPTIONS = [
+    ['dark', 'Dark'],
+    ['light', 'Light'],
+    ['github-light', 'GitHub Light'],
+    ['one-light', 'One Light'],
+    ['solarized-dark', 'Solarized Dark'],
+    ['solarized-light', 'Solarized Light'],
+    ['monokai', 'Monokai'],
+    ['nord', 'Nord'],
+    ['dracula', 'Dracula'],
+    ['gruvbox-dark', 'Gruvbox Dark'],
+    ['gruvbox-light', 'Gruvbox Light'],
+    ['catppuccin', 'Catppuccin Mocha'],
+    ['one-dark', 'One Dark'],
+    ['system', 'System'],
+  ];
+
+  const LIGHT_THEMES = ['light', 'solarized-light', 'gruvbox-light', 'github-light', 'one-light'];
 
   // キーバー設定で使用する一時配列
   let editingKeybarButtons = null;
@@ -278,7 +301,7 @@ const DenSettings = (() => {
   let remoteSettings = null;
 
   const SECTION_KEYS = {
-    appearance: ['theme', 'font_size'],
+    appearance: ['theme', 'font_size', 'theme_terminal', 'theme_chat', 'theme_files'],
     terminal: ['terminal_scrollback', 'ssh_agent_forwarding', 'sleep_prevention_mode', 'sleep_prevention_timeout', 'group_remote_sessions'],
     keybar: ['keybar_buttons', 'keybar_secondary_buttons'],
     snippets: ['snippets'],
@@ -483,6 +506,14 @@ const DenSettings = (() => {
     updateDocumentTitle();
   }
 
+  /** Resolve 'system' theme to actual value */
+  function resolveTheme(theme) {
+    if (theme === 'system') {
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    return theme || 'dark';
+  }
+
   function applyTheme() {
     const theme = current.theme || 'dark';
     // 既存の mediaQuery リスナーを破棄
@@ -497,28 +528,59 @@ const DenSettings = (() => {
       document.documentElement.classList.add('theme-transition');
     }
 
+    const resolved = resolveTheme(theme);
+    document.documentElement.setAttribute('data-theme', resolved);
+
     if (theme === 'system') {
       mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
       mediaQuery.addEventListener('change', onSystemThemeChange);
-      const resolved = mediaQuery.matches ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', resolved);
-    } else {
-      document.documentElement.setAttribute('data-theme', theme);
     }
 
     if (!skipTransition) {
       setTimeout(() => document.documentElement.classList.remove('theme-transition'), 300);
     }
-    // light 系テーマでは color-scheme を light に
-    const lightThemes = ['light', 'solarized-light', 'gruvbox-light'];
-    const resolved = theme === 'system'
-      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-      : theme;
-    document.documentElement.style.colorScheme = lightThemes.includes(resolved) ? 'light' : 'dark';
+    document.documentElement.style.colorScheme = LIGHT_THEMES.includes(resolved) ? 'light' : 'dark';
+
+    // Apply per-tab theme overrides
+    applyPaneThemes();
+  }
+
+  function applyPaneThemes() {
+    const panes = [
+      ['terminal-pane', current.theme_terminal],
+      ['chat-pane', current.theme_chat],
+      ['filer-pane', current.theme_files],
+    ];
+    for (const [id, override] of panes) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      if (override) {
+        el.setAttribute('data-theme', resolveTheme(override));
+      } else {
+        el.removeAttribute('data-theme');
+      }
+    }
+    // Notify terminal/editor to update their themes
+    document.dispatchEvent(new CustomEvent('den:theme-changed'));
+  }
+
+  /** Get the resolved theme for a specific pane */
+  function getPaneTheme(paneId) {
+    const map = {
+      'terminal-pane': current.theme_terminal,
+      'chat-pane': current.theme_chat,
+      'filer-pane': current.theme_files,
+    };
+    const override = map[paneId];
+    if (override) return resolveTheme(override);
+    return resolveTheme(current.theme || 'dark');
   }
 
   function onSystemThemeChange(e) {
-    document.documentElement.setAttribute('data-theme', e.matches ? 'light' : 'dark');
+    const resolved = e.matches ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', resolved);
+    document.documentElement.style.colorScheme = e.matches ? 'light' : 'dark';
+    applyPaneThemes();
   }
 
   /**
@@ -709,6 +771,19 @@ const DenSettings = (() => {
     const themeSelect = document.getElementById('setting-theme');
     if (themeSelect) themeSelect.value = current.theme || 'dark';
 
+    // Populate per-tab theme dropdowns
+    for (const suffix of ['terminal', 'chat', 'files']) {
+      const sel = document.getElementById('setting-theme-' + suffix);
+      if (!sel) continue;
+      if (sel.options.length === 0) {
+        sel.appendChild(new Option('Global (follow main)', ''));
+        for (const [val, label] of THEME_OPTIONS) {
+          sel.appendChild(new Option(label, val));
+        }
+      }
+      sel.value = current['theme_' + suffix] || '';
+    }
+
     const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
     if (agentFwdCheck) agentFwdCheck.checked = !!current.ssh_agent_forwarding;
 
@@ -835,11 +910,19 @@ const DenSettings = (() => {
       const groupRemoteCheck = document.getElementById('setting-group-remote');
       const groupRemote = groupRemoteCheck ? groupRemoteCheck.checked : true;
 
+      // Per-tab theme overrides (empty string → null)
+      const themeTerminal = document.getElementById('setting-theme-terminal')?.value || null;
+      const themeChat = document.getElementById('setting-theme-chat')?.value || null;
+      const themeFiles = document.getElementById('setting-theme-files')?.value || null;
+
       Spinner.button(saveBtn, async () => {
         const ok = await save({
           font_size: Math.max(8, Math.min(32, fontSize)),
           terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
           theme: theme,
+          theme_terminal: themeTerminal,
+          theme_chat: themeChat,
+          theme_files: themeFiles,
           keybar_buttons: keybarButtons,
           keybar_secondary_buttons: keybarSecondaryButtons,
           ssh_agent_forwarding: sshAgentFwd,
@@ -1230,5 +1313,5 @@ const DenSettings = (() => {
 
   }
 
-  return { load, save, apply, get, getAll, bindUI, openModal, setTitleTab, setOscTitle };
+  return { load, save, apply, get, getAll, bindUI, openModal, setTitleTab, setOscTitle, getPaneTheme, LIGHT_THEMES };
 })();

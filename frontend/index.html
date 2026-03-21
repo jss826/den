@@ -399,6 +399,8 @@
             <select id="setting-theme" class="settings-input">
               <option value="dark">Dark</option>
               <option value="light">Light</option>
+              <option value="github-light">GitHub Light</option>
+              <option value="one-light">One Light</option>
               <option value="solarized-dark">Solarized Dark</option>
               <option value="solarized-light">Solarized Light</option>
               <option value="monokai">Monokai</option>
@@ -410,6 +412,17 @@
               <option value="one-dark">One Dark</option>
               <option value="system">System</option>
             </select>
+            <details class="per-tab-theme-details">
+              <summary>Per-tab theme override</summary>
+              <div class="per-tab-theme-grid">
+                <label>Terminal</label>
+                <select id="setting-theme-terminal" class="settings-input settings-input-sm"></select>
+                <label>Chat</label>
+                <select id="setting-theme-chat" class="settings-input settings-input-sm"></select>
+                <label>Files</label>
+                <select id="setting-theme-files" class="settings-input settings-input-sm"></select>
+              </div>
+            </details>
           </div>
           <div class="modal-section">
             <label>Font Size</label>

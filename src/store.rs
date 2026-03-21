@@ -202,6 +202,12 @@ pub struct Settings {
     pub sleep_prevention_timeout: u16,
     #[serde(default = "default_true")]
     pub group_remote_sessions: bool,
+    #[serde(default)]
+    pub theme_terminal: Option<String>,
+    #[serde(default)]
+    pub theme_chat: Option<String>,
+    #[serde(default)]
+    pub theme_files: Option<String>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -237,6 +243,9 @@ impl Default for Settings {
             sleep_prevention_mode: SleepPreventionMode::default(),
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
             group_remote_sessions: true,
+            theme_terminal: None,
+            theme_chat: None,
+            theme_files: None,
             version: String::new(),
             hostname: String::new(),
         }
