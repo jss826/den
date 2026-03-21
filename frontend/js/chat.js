@@ -89,6 +89,7 @@ const DenChat = (() => {
     inputEl.addEventListener('compositionend', () => {
       setTimeout(() => { composing = false; autoResizeInput(); }, 0);
     });
+    inputEl.addEventListener('blur', () => { composing = false; });
 
     // Sidebar controls
     newBtn.addEventListener('click', () => startNewSession());
