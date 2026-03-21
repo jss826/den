@@ -339,13 +339,14 @@ fn execute_bash(args: &Value) -> Value {
         None => return tool_error("Missing 'command' argument"),
     };
 
-    let _timeout_ms = args
+    let timeout_ms = args
         .get("timeout")
         .and_then(|t| t.as_u64())
         .unwrap_or(BASH_TIMEOUT_SECS * 1000)
         .min(600_000);
+    let timeout = std::time::Duration::from_millis(timeout_ms);
 
-    let output = std::process::Command::new(if cfg!(windows) { "cmd" } else { "bash" })
+    let mut child = match std::process::Command::new(if cfg!(windows) { "cmd" } else { "bash" })
         .args(if cfg!(windows) {
             vec!["/C", command]
         } else {
@@ -353,7 +354,28 @@ fn execute_bash(args: &Value) -> Value {
         })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return tool_error(&format!("Failed to spawn command: {e}")),
+    };
+
+    // Wait with timeout
+    let start = std::time::Instant::now();
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break child.wait_with_output(),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return tool_error(&format!("Command timed out after {timeout_ms}ms"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return tool_error(&format!("Failed to wait for command: {e}")),
+        }
+    };
 
     match output {
         Ok(out) => {

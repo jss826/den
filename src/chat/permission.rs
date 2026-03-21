@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use tokio::sync::{Mutex, oneshot};
 
 /// Tools that require permission when the gate is enabled.
-pub const GATED_TOOLS: &[&str] = &["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+/// NotebookEdit is excluded — rarely used and not worth implementing in MCP gate.
+pub const GATED_TOOLS: &[&str] = &["Bash", "Edit", "Write", "MultiEdit"];
 
 /// Manages pending permission requests for a single chat session.
 pub struct PermissionState {
@@ -47,5 +48,13 @@ impl PermissionState {
     /// Remove a pending request (e.g. on timeout).
     pub async fn remove(&self, request_id: &str) {
         self.pending.lock().await.remove(request_id);
+    }
+
+    /// Drain all pending requests with denial (used on session kill).
+    pub async fn drain_all(&self) {
+        let entries: Vec<_> = self.pending.lock().await.drain().collect();
+        for (_, tx) in entries {
+            let _ = tx.send(false);
+        }
     }
 }

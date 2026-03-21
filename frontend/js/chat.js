@@ -580,6 +580,9 @@ const DenChat = (() => {
       // Use cached sessions from refreshSidebar (already fetched)
       const alive = cachedActiveSessions.find((s) => s.id === savedId && s.alive);
       if (alive) {
+        // Restore permission gate state from localStorage
+        permissionGateEnabled = localStorage.getItem('chat-permission-gate') === 'true';
+        if (permissionGateCheckbox) permissionGateCheckbox.checked = permissionGateEnabled;
         switchToActiveSession(savedId);
         return;
       }
@@ -591,8 +594,10 @@ const DenChat = (() => {
   function saveSessionToStorage() {
     if (sessionId) {
       localStorage.setItem('chat-active-session', sessionId);
+      localStorage.setItem('chat-permission-gate', String(permissionGateEnabled));
     } else {
       localStorage.removeItem('chat-active-session');
+      localStorage.removeItem('chat-permission-gate');
     }
   }
 
@@ -1360,6 +1365,10 @@ const DenChat = (() => {
   }
 
   function resolvePermission(card, requestId, allowed) {
+    // Guard against double-click
+    if (card.dataset.resolved) return;
+    card.dataset.resolved = 'true';
+
     sendPermissionResponse(requestId, allowed);
     card.classList.add(allowed ? 'chat-permission-allowed' : 'chat-permission-denied');
     const status = document.createElement('div');

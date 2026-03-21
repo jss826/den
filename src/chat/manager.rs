@@ -771,6 +771,10 @@ impl ChatSession {
     /// Kill the child process and clean up MCP config.
     async fn kill(&self) {
         self.alive.store(false, Ordering::Release);
+        // Drain pending permission requests so MCP gate server unblocks immediately
+        if let Some(ref perm) = self.permission {
+            perm.drain_all().await;
+        }
         self.stdin.lock().await.take();
         if let Some(mut child) = self.child.lock().await.take() {
             let _ = child.kill().await;
