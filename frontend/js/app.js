@@ -93,6 +93,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // Ctrl+Shift+Enter: Send terminal selection to Chat（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key === 'Enter' && !anyModalOpen) {
+      const t = DenTerminal.getTerminal();
+      if (t) {
+        const sel = t.getSelection();
+        if (sel) {
+          e.preventDefault();
+          document.dispatchEvent(new CustomEvent('den:send-to-chat', {
+            detail: { text: sel, source: 'terminal' },
+          }));
+          return;
+        }
+      }
+    }
+
     // Ctrl+Shift+F: ファイラ検索フォーカス（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key === 'F' && !anyModalOpen) {
       e.preventDefault();

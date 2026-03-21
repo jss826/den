@@ -140,6 +140,21 @@ const DenChat = (() => {
       });
     }
 
+    // Listen for "Send to Chat" from terminal or other sources
+    document.addEventListener('den:send-to-chat', (e) => {
+      const text = e.detail?.text;
+      if (!text) return;
+      // Switch to Chat tab
+      if (window.DenApp) window.DenApp.switchTab('chat');
+      // Prefill input with code block
+      const prefill = '```\n' + text + '\n```\n';
+      inputEl.value = prefill;
+      inputEl.focus();
+      autoResizeInput();
+      // Place cursor at end
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    });
+
     // Listen for remote connection changes (F002)
     document.addEventListener('den:remote-changed', (e) => {
       const { mode, connectionId } = e.detail || {};
@@ -1143,6 +1158,23 @@ const DenChat = (() => {
     }
   }
 
+  function maybeAddRunInTerminal(parentEl, block) {
+    const name = stripMcpPrefix(block.name);
+    if (name !== 'Bash') return;
+    const cmd = block.input?.command;
+    if (!cmd) return;
+    const btn = document.createElement('button');
+    btn.className = 'chat-run-in-terminal-btn';
+    btn.textContent = 'Run in Terminal';
+    btn.addEventListener('click', () => {
+      document.dispatchEvent(new CustomEvent('den:run-in-terminal', {
+        detail: { command: cmd },
+      }));
+      if (window.DenApp) window.DenApp.switchTab('terminal');
+    });
+    parentEl.appendChild(btn);
+  }
+
   function appendToolBlock(block) {
     const details = document.createElement('details');
     details.className = 'chat-msg chat-tool';
@@ -1156,6 +1188,8 @@ const DenChat = (() => {
     inputPre.className = 'chat-tool-input';
     inputPre.textContent = JSON.stringify(block.input, null, 2);
     details.appendChild(inputPre);
+
+    maybeAddRunInTerminal(details, block);
 
     messagesEl.appendChild(details);
     scrollToBottom();
@@ -1201,6 +1235,8 @@ const DenChat = (() => {
     actions.appendChild(dismiss);
     actions.appendChild(autoDismiss);
     card.appendChild(actions);
+
+    maybeAddRunInTerminal(card, block);
 
     messagesEl.appendChild(card);
     scrollToBottom();

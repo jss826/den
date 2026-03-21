@@ -871,6 +871,21 @@ html, body {
 .chat-tool-error {
   color: #f44;
 }
+.chat-run-in-terminal-btn {
+  display: inline-block;
+  margin: 6px 10px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  background: var(--accent-tint-strong);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chat-run-in-terminal-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
+}
 
 /* Notification card for modifying tools (not blocking — tools already executed in -p mode) */
 .chat-tool-notification {
