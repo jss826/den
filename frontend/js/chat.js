@@ -1350,14 +1350,25 @@ const DenChat = (() => {
   // ── Mobile viewport handling ──
   function setupMobileViewport() {
     if (!window.visualViewport) return;
+    const chatPane = document.getElementById('chat-pane');
+    if (!chatPane) return;
     let rafId = null;
     const onViewportChange = () => {
       if (rafId) return;
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        const chatPane = document.getElementById('chat-pane');
-        if (!chatPane || chatPane.hidden) return;
-        scrollToBottom();
+        if (chatPane.hidden) return;
+        // Adjust pane height when keyboard is visible
+        const vvHeight = window.visualViewport.height;
+        const windowHeight = window.innerHeight;
+        if (vvHeight < windowHeight * 0.8) {
+          chatPane.style.height = vvHeight + 'px';
+        } else {
+          chatPane.style.height = '';
+        }
+        // Only scroll to bottom if user was already near the bottom
+        const gap = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+        if (gap < 80) scrollToBottom();
       });
     };
     window.visualViewport.addEventListener('resize', onViewportChange);
