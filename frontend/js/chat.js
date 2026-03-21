@@ -58,6 +58,15 @@ const DenChat = (() => {
   // ── Frontend-side state for current session ──
   let currentSessionState = 'idle';
 
+  // ── Auto-restart state (#75) ──
+  // When claude process exits normally, we save the claude_session_id
+  // so we can auto-restart with --continue on the next user message.
+  let pendingClaudeSessionId = null;
+  // Flag to distinguish explicit Stop from normal process exit.
+  let explicitStop = false;
+  // True when viewing a persisted history (read-only mode, no active session).
+  let viewingHistory = false;
+
   // ── Init ──
   function init() {
     messagesEl = document.getElementById('chat-messages');
@@ -411,7 +420,7 @@ const DenChat = (() => {
     actions.appendChild(delBtn);
 
     item.appendChild(actions);
-    item.addEventListener('click', () => resumeSession(s.id, s.claude_session_id));
+    item.addEventListener('click', () => viewHistory(s.id));
     return item;
   }
 
@@ -546,6 +555,8 @@ const DenChat = (() => {
 
   async function stopSession() {
     if (!sessionId) return;
+    explicitStop = true;
+    pendingClaudeSessionId = null;
     const base = getApiBase();
     try {
       await fetch(`${base}/chat/sessions/${encodeURIComponent(sessionId)}/stop`, {
@@ -615,6 +626,34 @@ const DenChat = (() => {
     disconnectWs();
     clearMessages();
     await createSession();
+  }
+
+  // View a persisted session's history without creating a new active session (#71)
+  async function viewHistory(persistedId) {
+    disconnectWs();
+    clearMessages();
+    viewingHistory = true;
+    updateInputState();
+
+    const base = getApiBase();
+    try {
+      const resp = await fetch(`${base}/chat/history/${encodeURIComponent(persistedId)}`, {
+        credentials: 'same-origin',
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.history) {
+          for (const line of data.history) {
+            handleEvent(line);
+          }
+        }
+      } else {
+        appendSystem('Failed to load history.');
+      }
+    } catch {
+      appendSystem('Failed to load history.');
+    }
+    updateActiveHighlight();
   }
 
   function switchToActiveSession(id) {
@@ -781,6 +820,7 @@ const DenChat = (() => {
   // ── WebSocket ──
   function connectWs() {
     if (!sessionId) return;
+    viewingHistory = false;
     const url = getChatWsUrl(sessionId);
     ws = new WebSocket(url);
 
@@ -794,12 +834,17 @@ const DenChat = (() => {
     };
 
     ws.onclose = () => {
-      appendSystem('Session ended.');
       ws = null;
       isStreaming = false;
       currentSessionState = 'idle';
       autoDismissedTools.clear();
-      updateInputState();
+      if (pendingClaudeSessionId) {
+        // Auto-restart available — keep input ready, no "ended" message
+        updateInputState();
+      } else {
+        appendSystem('Session ended.');
+        updateInputState();
+      }
       refreshSidebar();
     };
 
@@ -820,6 +865,9 @@ const DenChat = (() => {
     isStreaming = false;
     currentSessionState = 'idle';
     autoDismissedTools.clear();
+    pendingClaudeSessionId = null;
+    explicitStop = false;
+    viewingHistory = false;
     updateInputState();
     // Don't clear localStorage here — only clear when session truly ends
   }
@@ -859,7 +907,13 @@ const DenChat = (() => {
         handleResultEvent(event);
         break;
       case 'session_ended':
-        appendSystem('Claude process ended.');
+        if (explicitStop) {
+          appendSystem('Session stopped.');
+          pendingClaudeSessionId = null;
+        } else if (event.claude_session_id) {
+          // Normal process exit — save for auto-restart
+          pendingClaudeSessionId = event.claude_session_id;
+        }
         currentSessionState = 'idle';
         break;
       default:
@@ -1226,9 +1280,72 @@ const DenChat = (() => {
   }
 
   // ── Send message ──
-  function sendMessage() {
+  async function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!text) return;
+
+    // Auto-restart: WS closed but we can resume with --continue (#75)
+    if ((!ws || ws.readyState !== WebSocket.OPEN) && pendingClaudeSessionId) {
+      appendUserMessage(text);
+      inputEl.value = '';
+      resetInputHeight();
+      isStreaming = true;
+      updateInputState();
+      inputEl.focus();
+
+      const claudeSid = pendingClaudeSessionId;
+      pendingClaudeSessionId = null;
+      explicitStop = false;
+
+      const base = getApiBase();
+      try {
+        const resp = await fetch(`${base}/chat/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ resume_session_id: claudeSid }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          appendSystem('Failed to restart: ' + (err.error || resp.statusText));
+          isStreaming = false;
+          updateInputState();
+          return;
+        }
+        const data = await resp.json();
+        sessionId = data.id;
+        connectWs();
+        refreshSidebar();
+        saveSessionToStorage();
+
+        // Wait for WS to open, then send the message
+        await new Promise((resolve, reject) => {
+          const origOpen = ws.onopen;
+          const origClose = ws.onclose;
+          ws.onopen = (e) => {
+            // Restore original handlers
+            ws.onopen = origOpen;
+            ws.onclose = origClose;
+            if (origOpen) origOpen.call(ws, e);
+            resolve();
+          };
+          ws.onclose = (e) => {
+            reject(new Error('WS closed before open'));
+            if (origClose) origClose.call(ws, e);
+          };
+        });
+        ws.send(JSON.stringify({ type: 'message', text }));
+        currentAssistantBubble = null;
+        currentThinkingBlock = null;
+      } catch (e) {
+        appendSystem('Failed to restart: ' + e.message);
+        isStreaming = false;
+        updateInputState();
+      }
+      return;
+    }
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     appendUserMessage(text);
     ws.send(JSON.stringify({ type: 'message', text }));
@@ -1242,14 +1359,24 @@ const DenChat = (() => {
   }
 
   function updateInputState() {
-    if (isStreaming) {
+    if (viewingHistory) {
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('chat-stop-btn');
+      sendBtn.disabled = true;
+      inputEl.disabled = true;
+      inputEl.placeholder = 'Viewing history — click Resume to continue';
+    } else if (isStreaming) {
       sendBtn.textContent = 'Stop';
       sendBtn.classList.add('chat-stop-btn');
       sendBtn.disabled = false;
+      inputEl.disabled = false;
+      inputEl.placeholder = '';
     } else {
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('chat-stop-btn');
       sendBtn.disabled = false;
+      inputEl.disabled = false;
+      inputEl.placeholder = '';
     }
   }
 

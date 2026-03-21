@@ -269,11 +269,12 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                     }
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
-                    let _ = ws_tx
-                        .send(Message::Text(
-                            r#"{"type":"session_ended"}"#.to_string().into(),
-                        ))
-                        .await;
+                    let claude_sid = session_for_read.claude_session_id().await;
+                    let msg = serde_json::json!({
+                        "type": "session_ended",
+                        "claude_session_id": claude_sid,
+                    });
+                    let _ = ws_tx.send(Message::Text(msg.to_string().into())).await;
                     break;
                 }
                 Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
@@ -283,11 +284,12 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                 Err(_) => {
                     // Timeout — check if session is still alive
                     if !session_for_read.is_alive() {
-                        let _ = ws_tx
-                            .send(Message::Text(
-                                r#"{"type":"session_ended"}"#.to_string().into(),
-                            ))
-                            .await;
+                        let claude_sid = session_for_read.claude_session_id().await;
+                        let msg = serde_json::json!({
+                            "type": "session_ended",
+                            "claude_session_id": claude_sid,
+                        });
+                        let _ = ws_tx.send(Message::Text(msg.to_string().into())).await;
                         break;
                     }
                 }
