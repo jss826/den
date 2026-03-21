@@ -1143,6 +1143,25 @@ const DenChat = (() => {
     }
   }
 
+  function maybeAddRunInTerminal(parentEl, block) {
+    const name = stripMcpPrefix(block.name);
+    if (name !== 'Bash') return;
+    // Do not show Run in Terminal for permission-gated tools
+    if (permissionGateEnabled && block.name.startsWith('mcp__den-gate__')) return;
+    const cmd = block.input?.command;
+    if (!cmd) return;
+    const btn = document.createElement('button');
+    btn.className = 'chat-run-in-terminal-btn';
+    btn.textContent = 'Run in Terminal';
+    btn.addEventListener('click', () => {
+      document.dispatchEvent(new CustomEvent('den:run-in-terminal', {
+        detail: { command: cmd },
+      }));
+      if (window.DenApp) window.DenApp.switchTab('terminal');
+    });
+    parentEl.appendChild(btn);
+  }
+
   function appendToolBlock(block) {
     const details = document.createElement('details');
     details.className = 'chat-msg chat-tool';
@@ -1156,6 +1175,8 @@ const DenChat = (() => {
     inputPre.className = 'chat-tool-input';
     inputPre.textContent = JSON.stringify(block.input, null, 2);
     details.appendChild(inputPre);
+
+    maybeAddRunInTerminal(details, block);
 
     messagesEl.appendChild(details);
     scrollToBottom();
@@ -1201,6 +1222,8 @@ const DenChat = (() => {
     actions.appendChild(dismiss);
     actions.appendChild(autoDismiss);
     card.appendChild(actions);
+
+    maybeAddRunInTerminal(card, block);
 
     messagesEl.appendChild(card);
     scrollToBottom();
@@ -1809,11 +1832,25 @@ const DenChat = (() => {
     return normalized.substring(0, lastSep);
   }
 
+  function prefillInput(text) {
+    if (!inputEl) return;
+    // Build code fence that won't collide with content (CommonMark)
+    const maxRun = (text.match(/`+/g) || []).reduce((m, s) => Math.max(m, s.length), 2);
+    const fence = '`'.repeat(maxRun + 1);
+    const prefill = fence + '\n' + text + '\n' + fence + '\n';
+    // Append to existing input instead of overwriting
+    inputEl.value = inputEl.value ? inputEl.value + '\n' + prefill : prefill;
+    inputEl.focus();
+    autoResizeInput();
+    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+  }
+
   // ── Public API ──
   return {
     init,
     toggleAllDetails,
     exportConversation,
     setRemote,
+    prefillInput,
   };
 })();

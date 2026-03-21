@@ -93,6 +93,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // Ctrl+Shift+Enter: Send terminal selection to Chat（モーダル中はスキップ）
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key === 'Enter' && !anyModalOpen) {
+      const t = DenTerminal.getTerminal();
+      if (t) {
+        const sel = t.getSelection();
+        if (sel) {
+          e.preventDefault();
+          document.dispatchEvent(new CustomEvent('den:send-to-chat', {
+            detail: { text: sel, source: 'terminal' },
+          }));
+          return;
+        }
+      }
+    }
+
     // Ctrl+Shift+F: ファイラ検索フォーカス（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key === 'F' && !anyModalOpen) {
       e.preventDefault();
@@ -294,6 +309,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // ハッシュルーティング: 初期タブ適用 + hashchange リスナー
     if (initialHash.tab !== 'terminal') switchTab(initialHash.tab);
     window.addEventListener('hashchange', applyHash);
+
+    // Listen for "Send to Chat" — handles Chat lazy init (F003)
+    document.addEventListener('den:send-to-chat', (e) => {
+      const text = e.detail?.text;
+      if (!text) return;
+      switchTab('chat'); // triggers DenChat.init() if not yet initialized
+      DenChat.prefillInput(text);
+    });
 
     // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
     // Safari はキーボード表示時にページ自体をスクロールする（overflow:hidden でも）

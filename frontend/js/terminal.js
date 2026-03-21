@@ -276,7 +276,72 @@ const DenTerminal = (() => {
       }
     });
 
+    // Context menu: "Send to Chat" when text is selected
+    container.addEventListener('contextmenu', (e) => {
+      const sel = term.getSelection();
+      if (!sel) return; // no selection — let default menu through
+      e.preventDefault();
+      showTerminalContextMenu(e.clientX, e.clientY, sel);
+    });
+
     return term;
+  }
+
+  // ── Terminal context menu ──
+  let ctxMenu = null;
+
+  function showTerminalContextMenu(x, y, selectedText) {
+    hideTerminalContextMenu();
+    ctxMenu = document.createElement('div');
+    ctxMenu.className = 'context-menu';
+    ctxMenu.style.left = x + 'px';
+    ctxMenu.style.top = y + 'px';
+
+    const sendItem = document.createElement('div');
+    sendItem.className = 'context-menu-item';
+    sendItem.textContent = 'Send to Chat';
+    sendItem.addEventListener('click', () => {
+      document.dispatchEvent(new CustomEvent('den:send-to-chat', {
+        detail: { text: selectedText, source: 'terminal' },
+      }));
+      hideTerminalContextMenu();
+    });
+    ctxMenu.appendChild(sendItem);
+
+    const copyItem = document.createElement('div');
+    copyItem.className = 'context-menu-item';
+    copyItem.textContent = 'Copy';
+    copyItem.addEventListener('click', () => {
+      DenClipboard.write(selectedText).catch(() => {});
+      hideTerminalContextMenu();
+    });
+    ctxMenu.appendChild(copyItem);
+
+    document.body.appendChild(ctxMenu);
+
+    // Clamp to viewport
+    const rect = ctxMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) ctxMenu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+    if (rect.bottom > window.innerHeight) ctxMenu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+
+    // Close on click outside or Escape
+    setTimeout(() => {
+      document.addEventListener('click', hideTerminalContextMenu, { once: true });
+      document.addEventListener('keydown', ctxMenuEscHandler);
+    }, 0);
+  }
+
+  function ctxMenuEscHandler(e) {
+    if (e.key === 'Escape') hideTerminalContextMenu();
+  }
+
+  function hideTerminalContextMenu() {
+    if (ctxMenu) {
+      ctxMenu.remove();
+      ctxMenu = null;
+      document.removeEventListener('click', hideTerminalContextMenu);
+      document.removeEventListener('keydown', ctxMenuEscHandler);
+    }
   }
 
   function connect(sessionName, remoteName) {
@@ -1475,6 +1540,18 @@ const DenTerminal = (() => {
   function getCurrentRemote() {
     return currentRemote;
   }
+
+  // Listen for "Run in Terminal" requests from Chat (module-scope, registered once)
+  document.addEventListener('den:run-in-terminal', (e) => {
+    const cmd = e.detail?.command;
+    if (!cmd) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (typeof Toast !== 'undefined') Toast.error('Terminal not connected');
+      return;
+    }
+    // Paste command without executing — user presses Enter to confirm
+    sendInput(cmd);
+  });
 
   return {
     init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
