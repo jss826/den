@@ -936,6 +936,11 @@ html, body {
   background: var(--pane-bg, #1e1e1e);
   border: 1px solid var(--border, #333);
   max-width: 95%;
+  overflow: hidden;
+}
+.chat-assistant ul, .chat-assistant ol {
+  padding-left: 1.5em;
+  margin: 4px 0;
 }
 .chat-assistant pre {
   margin: 8px 0;
@@ -1020,6 +1025,37 @@ html, body {
 }
 .chat-tool-error {
   color: var(--error, #f44);
+}
+/* Tool group (consecutive tool_use accordion) */
+.chat-tool-group {
+  align-self: flex-start;
+  max-width: 95%;
+  font-size: 13px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 0;
+}
+.chat-tool-group > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  font-family: monospace;
+  font-weight: bold;
+  background: var(--hover);
+  border-radius: 6px;
+  color: var(--dim, #888);
+  font-size: 12px;
+}
+.chat-tool-group[open] > summary {
+  border-radius: 6px 6px 0 0;
+}
+.chat-tool-group .chat-tool {
+  border: none;
+  border-top: 1px solid var(--border, #333);
+  border-radius: 0;
+  max-width: 100%;
+}
+.chat-tool-group .chat-tool summary {
+  border-radius: 0;
 }
 /* Inline diff viewer */
 .chat-diff-viewer {

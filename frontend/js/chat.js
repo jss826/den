@@ -1313,8 +1313,65 @@ const DenChat = (() => {
 
     maybeAddRunInTerminal(details, block);
 
-    messagesEl.appendChild(details);
+    // Group consecutive tool blocks into a collapsible accordion
+    const lastChild = messagesEl.lastElementChild;
+    if (lastChild && lastChild.classList.contains('chat-tool-group')) {
+      // Add to existing group
+      lastChild.appendChild(details);
+      addToolToGroupMeta(lastChild, block.name);
+    } else if (lastChild && lastChild.classList.contains('chat-tool')
+               && !lastChild.classList.contains('chat-tool-notification')
+               && !lastChild.classList.contains('chat-ask-dialog')) {
+      // Promote previous single tool into a new group
+      const prev = messagesEl.removeChild(lastChild);
+      const group = document.createElement('details');
+      group.className = 'chat-tool-group';
+      group.appendChild(document.createElement('summary'));
+      // Initialize meta from previous tool
+      group._toolCount = 0;
+      group._toolNames = [];
+      group._errorCount = 0;
+      const prevSummary = prev.querySelector('summary');
+      addToolToGroupMeta(group, prevSummary ? prevSummary.textContent : '');
+      group.appendChild(prev);
+      // Add new tool
+      addToolToGroupMeta(group, block.name);
+      group.appendChild(details);
+      messagesEl.appendChild(group);
+    } else {
+      // Single tool — append directly (no group wrapper)
+      messagesEl.appendChild(details);
+    }
     scrollToBottom();
+  }
+
+  function addToolToGroupMeta(group, name) {
+    if (!group._toolCount) {
+      group._toolCount = 0;
+      group._toolNames = [];
+      group._errorCount = 0;
+    }
+    group._toolCount++;
+    if (!group._toolNames.includes(name)) {
+      group._toolNames.push(name);
+    }
+    updateToolGroupLabel(group);
+  }
+
+  function updateToolGroupLabel(group) {
+    const summary = group.querySelector(':scope > summary');
+    if (!summary) return;
+    const count = group._toolCount || 0;
+    const names = group._toolNames || [];
+    const errors = group._errorCount || 0;
+    const label = names.length <= 3
+      ? names.join(', ')
+      : names.slice(0, 3).join(', ') + ', ...';
+    let text = `${count} tool${count > 1 ? 's' : ''} used (${label})`;
+    if (errors > 0) {
+      text += ` — ${errors} failed`;
+    }
+    summary.textContent = text;
   }
 
   function appendToolNotification(block) {
@@ -1564,6 +1621,15 @@ const DenChat = (() => {
   function appendToolResult(item) {
     const toolEl = document.getElementById('tool-' + item.tool_use_id);
     if (!toolEl) return;
+
+    // Update group summary if tool errored
+    if (item.is_error) {
+      const group = toolEl.closest('.chat-tool-group');
+      if (group) {
+        group._errorCount = (group._errorCount || 0) + 1;
+        updateToolGroupLabel(group);
+      }
+    }
 
     const toolInfo = toolInputMap.get(item.tool_use_id);
     const text = extractToolResultText(item);
