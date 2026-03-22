@@ -621,6 +621,10 @@ html, body {
   right: 0;
   bottom: env(safe-area-inset-bottom, 0px);
 }
+
+/* Vertical keybar layout — push pane content aside */
+body[data-keybar-layout="right"] .pane { right: var(--keybar-layout-width, 0px); }
+body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 .pane[hidden],
 #terminal-pane[hidden],
 #chat-pane[hidden] {

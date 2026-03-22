@@ -161,6 +161,7 @@ const Keybar = (() => {
     resizeRafId = requestAnimationFrame(() => {
       resizeRafId = null;
       clampToViewport();
+      updatePaneLayout();
     });
   }
 
@@ -171,6 +172,7 @@ const Keybar = (() => {
         ? customSecondaryKeys : DEFAULT_SECONDARY_KEYS;
     }
     render();
+    updatePaneLayout();
   }
 
   function getDefaultKeys() {
@@ -214,6 +216,29 @@ const Keybar = (() => {
       container.hidden = true;
       tabEl.hidden = true;
     }
+    updatePaneLayout();
+  }
+
+  /** Push pane content aside when vertical keybar occupies layout space */
+  let paneLayoutRafId = null;
+  function updatePaneLayout() {
+    if (paneLayoutRafId !== null) {
+      cancelAnimationFrame(paneLayoutRafId);
+      paneLayoutRafId = null;
+    }
+    const occupiesLayout = keybarVisible && !collapsed && orientation === 'vertical';
+    if (occupiesLayout) {
+      // Defer measurement to after DOM update
+      paneLayoutRafId = requestAnimationFrame(() => {
+        paneLayoutRafId = null;
+        const width = container.offsetWidth;
+        document.documentElement.style.setProperty('--keybar-layout-width', width + 'px');
+        document.body.dataset.keybarLayout = collapseSide;
+      });
+    } else {
+      delete document.body.dataset.keybarLayout;
+      document.documentElement.style.removeProperty('--keybar-layout-width');
+    }
   }
 
   function toggleVisibility() {
@@ -247,6 +272,7 @@ const Keybar = (() => {
     } else {
       setDefaultPosition();
     }
+    updatePaneLayout();
     requestAnimationFrame(() => clampToViewport());
     schedulePositionSave();
   }
@@ -272,6 +298,7 @@ const Keybar = (() => {
       secondaryContainer.hidden = !secondaryVisible;
     }
     updateSecondaryToggleIcon();
+    updatePaneLayout();
     schedulePositionSave();
   }
 
@@ -407,6 +434,7 @@ const Keybar = (() => {
       lastTapTime = now;
     }
 
+    updatePaneLayout();
     schedulePositionSave();
   }
 
