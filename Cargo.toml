@@ -1,6 +1,6 @@
 [package]
 name = "den"
-version = "2.8.1"
+version = "2.9.0"
 edition = "2024"
 description = "A self-hosted web workstation accessible from tablets and phones"
 license = "MIT"
