@@ -354,6 +354,10 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
+    // Channel for pong responses (ping keepalive from frontend).
+    // F006/F007: Use watch instead of mpsc — no capacity overflow, no stale poll after close.
+    let (pong_tx, mut pong_rx) = tokio::sync::watch::channel(());
+
     // Subscribe BEFORE reading history to prevent message gaps
     let mut output_rx = session.subscribe();
 
@@ -365,46 +369,54 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
         }
     }
 
-    // Claude stdout → WebSocket
+    // Claude stdout → WebSocket (also handles pong responses)
     let session_for_read = Arc::clone(&session);
     let claude_to_ws = async move {
+        let tick = std::time::Duration::from_secs(1);
         loop {
-            match tokio::time::timeout(std::time::Duration::from_secs(1), output_rx.recv()).await {
-                Ok(Ok(event)) => {
-                    if ws_tx.send(Message::Text(event.into())).await.is_err() {
-                        break;
+            tokio::select! {
+                result = tokio::time::timeout(tick, output_rx.recv()) => {
+                    match result {
+                        Ok(Ok(event)) => {
+                            if ws_tx.send(Message::Text(event.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Ok(Err(broadcast::error::RecvError::Closed)) => {
+                            let claude_sid = session_for_read.claude_session_id().await;
+                            tracing::debug!(
+                                target: "chat",
+                                session_id = %session_id,
+                                claude_session_id = ?claude_sid,
+                                "Chat session ended (broadcast closed)"
+                            );
+                            let msg = serde_json::json!({
+                                "type": "session_ended",
+                                "claude_session_id": claude_sid,
+                            });
+                            let _ = ws_tx.send(Message::Text(msg.to_string().into())).await;
+                            break;
+                        }
+                        Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
+                            tracing::warn!("Chat WS client lagged {n} messages");
+                            continue;
+                        }
+                        Err(_) => {
+                            // Timeout — check if session is still alive
+                            if !session_for_read.is_alive() {
+                                let claude_sid = session_for_read.claude_session_id().await;
+                                let msg = serde_json::json!({
+                                    "type": "session_ended",
+                                    "claude_session_id": claude_sid,
+                                });
+                                let _ = ws_tx.send(Message::Text(msg.to_string().into())).await;
+                                break;
+                            }
+                        }
                     }
                 }
-                Ok(Err(broadcast::error::RecvError::Closed)) => {
-                    let claude_sid = session_for_read.claude_session_id().await;
-                    tracing::debug!(
-                        target: "chat",
-                        session_id = %session_id,
-                        claude_session_id = ?claude_sid,
-                        "Chat session ended (broadcast closed)"
-                    );
-                    let msg = serde_json::json!({
-                        "type": "session_ended",
-                        "claude_session_id": claude_sid,
-                    });
-                    let _ = ws_tx.send(Message::Text(msg.to_string().into())).await;
-                    break;
-                }
-                Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
-                    tracing::warn!("Chat WS client lagged {n} messages");
-                    continue;
-                }
-                Err(_) => {
-                    // Timeout — check if session is still alive
-                    if !session_for_read.is_alive() {
-                        let claude_sid = session_for_read.claude_session_id().await;
-                        let msg = serde_json::json!({
-                            "type": "session_ended",
-                            "claude_session_id": claude_sid,
-                        });
-                        let _ = ws_tx.send(Message::Text(msg.to_string().into())).await;
-                        break;
-                    }
+                Ok(()) = pong_rx.changed() => {
+                    let _ = ws_tx.send(Message::Text("pong".into())).await;
                 }
             }
         }
@@ -484,6 +496,9 @@ async fn handle_chat_socket(socket: WebSocket, chat_manager: Arc<ChatManager>, s
                                     perm.resolve(&request_id, allowed).await;
                                 }
                             }
+                            ChatWsCommand::Ping => {
+                                pong_tx.send_replace(());
+                            }
                         },
                         // F007: Log WS command parse failures for observability
                         Err(e) => {
@@ -532,6 +547,9 @@ enum ChatWsCommand {
     /// Respond to a permission gate request (Allow/Deny from frontend).
     #[serde(rename = "permission_response")]
     PermissionResponse { request_id: String, allowed: bool },
+    /// Keepalive ping from frontend.
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 /// Base64-encoded image attachment from the frontend.

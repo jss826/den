@@ -80,6 +80,13 @@ const DenChat = (() => {
   let explicitStop = false;
   // True when viewing a persisted history (read-only mode, no active session).
   let viewingHistory = false;
+  // True when no session is active (welcome state — user must explicitly start one).
+  let noSession = false;
+
+  // ── WS keepalive ──
+  let pingTimer = null;
+  let pongReceived = true;
+  const PING_INTERVAL = 30000; // 30s
 
   // ── Init ──
   function init() {
@@ -171,7 +178,7 @@ const DenChat = (() => {
       }
       disconnectWs();
       clearMessages();
-      refreshSidebar().then(() => createSession());
+      refreshSidebar().then(() => showWelcomeState());
     });
 
     // Request notification permission early
@@ -607,7 +614,17 @@ const DenChat = (() => {
       }
       localStorage.removeItem('chat-active-session');
     }
-    await createSession();
+    // Don't auto-create — show welcome state and let user explicitly start
+    showWelcomeState();
+  }
+
+  function showWelcomeState() {
+    noSession = true;
+    sessionId = null;
+    disconnectWs();
+    clearMessages();
+    appendSystem('Click "+" to start a new session, or select one from the sidebar.');
+    updateInputState();
   }
 
   function saveSessionToStorage() {
@@ -622,6 +639,7 @@ const DenChat = (() => {
 
   // ── Continue last session ──
   async function continueLastSession() {
+    noSession = false;
     appendSystem('Continuing last session...');
 
     const base = getApiBase();
@@ -659,6 +677,7 @@ const DenChat = (() => {
 
   // View a persisted session's history without creating a new active session (#71)
   async function viewHistory(persistedId) {
+    noSession = false;
     disconnectWs();
     clearMessages();
     viewingHistory = true;
@@ -690,6 +709,7 @@ const DenChat = (() => {
 
   function switchToActiveSession(id) {
     if (id === sessionId) return;
+    noSession = false;
     disconnectWs();
     clearMessages();
     sessionId = id;
@@ -705,6 +725,12 @@ const DenChat = (() => {
       return;
     }
 
+    // Confirm before resuming — user may just want to view history
+    if (!confirm('Resume this session? A new claude process will start with --continue.')) {
+      return;
+    }
+
+    noSession = false;
     disconnectWs();
     clearMessages();
     appendSystem('Resuming session...');
@@ -807,6 +833,7 @@ const DenChat = (() => {
   }
 
   async function createSession() {
+    noSession = false;
     autoDismissedTools.clear();
     autoAllowedTools.clear();
     toolInputMap.clear();
@@ -863,14 +890,21 @@ const DenChat = (() => {
     ws.onopen = () => {
       appendSystem('Session started.');
       currentSessionState = 'idle';
+      noSession = false;
+      updateInputState();
+      startPing();
     };
 
     ws.onmessage = (e) => {
+      // Treat any incoming message as proof of liveness
+      pongReceived = true;
+      if (e.data === 'pong') return; // keepalive response, don't process
       handleEvent(e.data);
     };
 
     ws.onclose = () => {
       ws = null;
+      stopPing();
       isStreaming = false;
       currentSessionState = 'idle';
       autoDismissedTools.clear();
@@ -881,6 +915,8 @@ const DenChat = (() => {
         // F008: don't duplicate "Session stopped" from session_ended handler
       } else {
         appendSystem('Session ended.');
+        // F005: no pending restart and not explicit stop — session is truly gone
+        noSession = true;
       }
       explicitStop = false; // F003: reset after consumption
       updateInputState();
@@ -895,6 +931,7 @@ const DenChat = (() => {
   }
 
   function disconnectWs() {
+    stopPing();
     if (ws) {
       ws.onclose = null;
       ws.close();
@@ -910,6 +947,46 @@ const DenChat = (() => {
     viewingHistory = false;
     updateInputState();
     // Don't clear localStorage here — only clear when session truly ends
+  }
+
+  const PING_MSG = JSON.stringify({ type: 'ping' }); // F008: constant
+
+  function startPing() {
+    stopPing();
+    pongReceived = true;
+    pingTimer = setInterval(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        stopPing();
+        return;
+      }
+      if (!pongReceived) {
+        // No response since last ping — connection is dead
+        // F001: clear sessionId so switchToActiveSession can reconnect
+        const lostSessionId = sessionId;
+        sessionId = null;
+        // F004: set explicitStop to prevent duplicate "Session ended." from onclose
+        explicitStop = true;
+        appendSystem('Connection lost. Session may still be running — click it to reconnect.');
+        ws.close();
+        // F005: if no session, disable input properly
+        noSession = !lostSessionId;
+        updateInputState();
+        return;
+      }
+      pongReceived = false;
+      try {
+        ws.send(PING_MSG);
+      } catch {
+        // send failed — onclose will handle
+      }
+    }, PING_INTERVAL);
+  }
+
+  function stopPing() {
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
   }
 
   function clearMessages() {
@@ -1977,7 +2054,13 @@ const DenChat = (() => {
   }
 
   function updateInputState() {
-    if (viewingHistory) {
+    if (noSession) {
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('chat-stop-btn');
+      sendBtn.disabled = true;
+      inputEl.disabled = true;
+      inputEl.placeholder = 'No active session \u2014 click + to start';
+    } else if (viewingHistory) {
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('chat-stop-btn');
       sendBtn.disabled = true;
