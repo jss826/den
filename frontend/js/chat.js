@@ -118,12 +118,8 @@ const DenChat = (() => {
     attachBtn.addEventListener('click', handleAttachClick);
     initAttachDragDrop();
     initImagePaste();
-    inputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        handleSendOrStop();
-      }
-    });
+    // Enter = newline (default textarea behavior), send via button only
+    // No keydown override needed — textarea naturally inserts newline on Enter
     inputEl.addEventListener('input', () => { if (!composing) autoResizeInput(); });
     inputEl.addEventListener('compositionstart', () => { composing = true; });
     inputEl.addEventListener('compositionend', () => {
@@ -639,6 +635,7 @@ const DenChat = (() => {
 
   // ── Continue last session ──
   async function continueLastSession() {
+    if (!confirm('Continue last session?')) return;
     noSession = false;
     appendSystem('Continuing last session...');
 
@@ -833,13 +830,17 @@ const DenChat = (() => {
   }
 
   async function createSession() {
+    // Confirm cwd before creating session
+    const cwd = cwdInput ? cwdInput.value.trim() : '';
+    const displayCwd = cwd || '(default)';
+    if (!confirm(`Create new session?\nWorking directory: ${displayCwd}`)) return;
+
     noSession = false;
     autoDismissedTools.clear();
     autoAllowedTools.clear();
     toolInputMap.clear();
     permissionGateEnabled = permissionGateCheckbox ? permissionGateCheckbox.checked : false;
     const base = getApiBase();
-    const cwd = cwdInput ? cwdInput.value.trim() : '';
     const tools = getAllowedTools();
 
     try {
@@ -2014,6 +2015,7 @@ const DenChat = (() => {
     // Auto-restart: WS closed but we can resume with --continue (#75)
     if ((!ws || ws.readyState !== WebSocket.OPEN) && pendingClaudeSessionId) {
       if (autoRestartInFlight) return; // F001: prevent double invocation
+      if (!confirm('Session ended. Resume with --continue?')) return;
       autoRestartInFlight = true;
 
       const claudeSid = pendingClaudeSessionId;
