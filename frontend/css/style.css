@@ -1984,10 +1984,20 @@ pre:hover .code-copy-btn {
   min-width: 0;
 }
 
+.keybar-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
 .keybar-secondary-toggle {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   background: none;
   border: none;
   color: var(--muted);
@@ -2035,8 +2045,8 @@ pre:hover .code-copy-btn {
 
 .keybar-collapse-btn {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   background: none;
   border: none;
   color: var(--muted);
@@ -2097,8 +2107,8 @@ pre:hover .code-copy-btn {
 /* Orientation toggle button */
 .keybar-orientation-btn {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   background: none;
   border: none;
   color: var(--muted);
@@ -2179,6 +2189,16 @@ pre:hover .code-copy-btn {
 
 #keybar[data-orientation="vertical"] .keybar-secondary {
   padding: 0 4px 4px 4px;
+}
+
+#keybar[data-orientation="vertical"] .keybar-controls {
+  flex-direction: column;
+  margin-left: 0;
+  margin-top: 4px;
+  padding-left: 0;
+  padding-top: 8px;
+  border-left: none;
+  border-top: 1px solid var(--border);
 }
 
 #keybar[data-orientation="vertical"] .keybar-secondary-toggle {

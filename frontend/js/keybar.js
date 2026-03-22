@@ -337,7 +337,7 @@ const Keybar = (() => {
   function onContainerDragStart(e) {
     if (e.button !== 0) return;
     // Don't drag when clicking on buttons, collapse, orientation, or secondary toggle
-    if (e.target.closest('.key-btn, .keybar-collapse-btn, .keybar-orientation-btn, .keybar-secondary-toggle')) return;
+    if (e.target.closest('.key-btn, .keybar-controls, .keybar-collapse-btn, .keybar-orientation-btn, .keybar-secondary-toggle')) return;
     e.preventDefault();
     const rect = container.getBoundingClientRect();
     dragState = {
@@ -376,7 +376,7 @@ const Keybar = (() => {
       dragState.pendingSide = center < dragState.vw / 2 ? 'left' : 'right';
     } else {
       let newTop = dragState.origTop + dy;
-      newTop = Math.max(0, Math.min(newTop, dragState.vh - 40));
+      newTop = Math.max(0, Math.min(newTop, dragState.vh - container.offsetHeight));
       container.style.top = newTop + 'px';
     }
   }
@@ -599,7 +599,7 @@ const Keybar = (() => {
       // Write phase — bar (Y-axis only, full-width)
       if (!container.hidden) {
         const barRect = container.getBoundingClientRect();
-        const top = Math.max(0, Math.min(barRect.top, vh - 40));
+        const top = Math.max(0, Math.min(barRect.top, vh - container.offsetHeight));
         container.style.top = top + 'px';
       }
 
