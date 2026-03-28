@@ -293,8 +293,28 @@ class DenResttyTerminal {
 
   // --- Options (theme, font) ---
 
+  /** Returns a Proxy so `term.options.theme = val` triggers applyTheme */
   get options() {
-    return { fontSize: this._fontSize };
+    const self = this;
+    return new Proxy({ fontSize: this._fontSize }, {
+      set(_target, prop, value) {
+        if (prop === 'theme') {
+          const ghosttyTheme = xtermThemeToGhostty(value);
+          if (ghosttyTheme) {
+            try {
+              const parsed = parseGhosttyTheme(ghosttyTheme);
+              self._restty?.applyTheme(parsed, 'inline');
+            } catch (_) {}
+          }
+        } else if (prop === 'fontSize') {
+          self._fontSize = value;
+          try { self._restty?.setFontSize(value); } catch (_) {}
+        } else if (prop === 'scrollback') {
+          // restty manages its own scrollback — ignore
+        }
+        return true;
+      },
+    });
   }
 
   set options(next) {
@@ -311,12 +331,6 @@ class DenResttyTerminal {
     if (next.fontSize) {
       this._fontSize = next.fontSize;
       try { this._restty?.setFontSize(next.fontSize); } catch (_) {}
-    }
-    if (next.fontFamily) {
-      const fontSources = fontFamilyToSources(next.fontFamily);
-      if (fontSources) {
-        try { this._restty?.setFontSources(fontSources); } catch (_) {}
-      }
     }
   }
 
