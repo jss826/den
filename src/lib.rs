@@ -2,6 +2,7 @@ use tokio::net::TcpListener;
 
 pub mod assets;
 pub mod auth;
+pub mod channel;
 pub mod chat;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
@@ -45,6 +46,7 @@ pub struct AppState {
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
     pub chat_manager: Arc<chat::manager::ChatManager>,
+    pub channel_state: chat::channel_state::ChannelState,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -96,6 +98,7 @@ pub fn create_app_with_secret(
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
         chat_manager,
+        channel_state: chat::channel_state::ChannelState::new(),
     });
 
     // Gate route — loopback-only + per-session gate token auth
@@ -106,6 +109,17 @@ pub fn create_app_with_secret(
         )
         .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
 
+    // Channel server routes — loopback-only, token auth in handler
+    let channel_server_routes = Router::new()
+        .route("/api/channel/poll", get(chat::channel_api::poll_message))
+        .route("/api/channel/reply", post(chat::channel_api::post_reply))
+        .route(
+            "/api/channel/permission",
+            post(chat::channel_api::post_permission),
+        )
+        .route("/api/channel/verdict", get(chat::channel_api::poll_verdict))
+        .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
+
     // 認証不要のルート
     let public_routes = Router::new()
         .route("/api/login", post(auth::login))
@@ -113,6 +127,7 @@ pub fn create_app_with_secret(
         .route("/api/system/tls", get(tls::status))
         .route("/api/system/tls/certificate", get(tls::certificate))
         .merge(gate_route)
+        .merge(channel_server_routes)
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
@@ -243,6 +258,19 @@ pub fn create_app_with_secret(
         // WebSocket proxy for forwarded ports
         .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
         .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
+        // Channel API (Chat v2)
+        .route(
+            "/api/channel/message",
+            post(chat::channel_api::send_message),
+        )
+        .route(
+            "/api/channel/verdict",
+            post(chat::channel_api::send_verdict),
+        )
+        .route(
+            "/api/channel/ws",
+            get(chat::channel_api::channel_ws_handler),
+        )
         // Chat API
         .route(
             "/api/chat/sessions",

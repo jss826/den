@@ -14,6 +14,11 @@ async fn main() {
         den::mcp_gate::run();
         return;
     }
+    // Channel server mode: MCP channel server for Claude Code Channels API
+    if std::env::args().nth(1).as_deref() == Some("--channel-server") {
+        den::channel::run();
+        return;
+    }
     // Load .env: CWD first, then platform-specific config directory as fallback.
     // Later values do NOT override earlier ones, so CWD takes precedence.
     let _ = dotenvy::dotenv();
