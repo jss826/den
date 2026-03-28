@@ -57,6 +57,10 @@ const FloatTerminal = (() => {
   let sessionSelect = null;
   let clientsSpan = null;
 
+  // WS keepalive ping
+  let pingTimer = null;
+  const WS_PING_INTERVAL_MS = 30000;
+  const WS_PING_MSG = JSON.stringify({ type: 'ping' });
   // Drag state
   let dragState = null;
   // Resize state
@@ -71,7 +75,7 @@ const FloatTerminal = (() => {
   const SESSION_REFRESH_INTERVAL = 5000;
   const CONNECT_DELAY_MS = 200;
   const STALL_TIMEOUT_MS = 3000;
-  const RECONNECT_COUNTDOWN_S = 3;
+  const RECONNECT_COUNTDOWN_S = 1;
   const DRAG_VISIBLE_PX = 100;
   const VIEWPORT_MARGIN = 20;
   const DEFAULT_MAX_W = 800;
@@ -307,6 +311,12 @@ const FloatTerminal = (() => {
 
       ws.onopen = () => {
         if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(WS_PING_MSG);
+          }
+        }, WS_PING_INTERVAL_MS);
         term.focus();
         fitAndRefresh();
       };
@@ -358,6 +368,7 @@ const FloatTerminal = (() => {
       };
 
       ws.onclose = () => {
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
         // Cancel any pending rAF to prevent stale data from a closed connection
         // being written to the terminal after reconnect.
@@ -430,6 +441,7 @@ const FloatTerminal = (() => {
 
   function disconnect() {
     connectGeneration++;
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (connectDelayTimer) { clearTimeout(connectDelayTimer); connectDelayTimer = null; }
     if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
     if (ws) {

@@ -6,6 +6,9 @@ const DenTerminal = (() => {
   let currentSession = null;
   let currentRemote = null; // null for local, connectionId for remote Den (direct or relay)
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
+  let pingTimer = null; // WS keepalive ping interval
+  const WS_PING_INTERVAL_MS = 30000;
+  const WS_PING_MSG = JSON.stringify({ type: 'ping' });
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
 
   /** Strip port from host:port string, returning just hostname */
@@ -106,7 +109,11 @@ const DenTerminal = (() => {
   }
 
   function fitAndRefresh() {
-    scheduleFit({ force: true, refresh: true });
+    // Synchronous fit — no rAF delay.  Needed for tab-switch where the
+    // previous tab's content must disappear in the same frame.
+    if (fitRafId != null) { cancelAnimationFrame(fitRafId); fitRafId = null; }
+    pendingFitOptions = { force: false, refresh: false };
+    flushFit({ force: true, refresh: true });
   }
 
   // xterm.js theme definitions per Den theme
@@ -467,6 +474,7 @@ const DenTerminal = (() => {
 
   function disconnect() {
     connectGeneration++;
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
     if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
     if (ws) {
       ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
@@ -513,6 +521,12 @@ const DenTerminal = (() => {
 
       ws.onopen = () => {
         retries = 0;
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(WS_PING_MSG);
+          }
+        }, WS_PING_INTERVAL_MS);
         term.focus();
         fitAndRefresh();
       };
@@ -566,6 +580,7 @@ const DenTerminal = (() => {
       };
 
       ws.onclose = () => {
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         // Cancel any pending rAF to prevent stale data from a closed connection
         // being written to the terminal after reconnect.
         if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
@@ -613,7 +628,7 @@ const DenTerminal = (() => {
       return;
     }
 
-    let countdown = 3;
+    let countdown = 1;
     term.write(`\r\n\x1b[31mDisconnected.\x1b[0m Reconnecting in \x1b[33m${countdown}\x1b[0m...`);
     const timer = setInterval(() => {
       if (generation !== connectGeneration) { clearInterval(timer); return; }
@@ -1637,7 +1652,7 @@ const DenTerminal = (() => {
   });
 
   return {
-    init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, getTerminal,
+    init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, scheduleFit, getTerminal,
     getCurrentSession, getCurrentRemote, switchSession, refreshSessionList, initSessionBar,
     fetchSessions, fetchAllSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,

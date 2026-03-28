@@ -331,6 +331,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (vv.offsetTop > 0) {
           window.scrollTo(0, 0);
         }
+        // Bypass ResizeObserver chain — trigger terminal fit directly
+        DenTerminal.scheduleFit();
       };
       window.visualViewport.addEventListener('resize', update);
       window.visualViewport.addEventListener('scroll', update);

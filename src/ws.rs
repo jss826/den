@@ -40,6 +40,8 @@ enum WsCommand {
     Resize { cols: u16, rows: u16 },
     #[serde(rename = "input")]
     Input { data: String },
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 /// WebSocket エンドポイント
@@ -195,6 +197,10 @@ async fn handle_socket(
                                     );
                                     break;
                                 }
+                            }
+                            WsCommand::Ping => {
+                                // Keepalive — no response needed; the message
+                                // itself prevents idle-timeout disconnection.
                             }
                         }
                     }
