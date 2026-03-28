@@ -32,6 +32,13 @@ cargo test --target-dir target-test
 - `#filer-pane` は `display: flex` を追加してはいけない。absolute positioning + `.filer-layout { height: 100% }` で正しく動作している
 - E2E テスト（Playwright）で CSS レイアウト変更を必ず検証すること: `npx playwright test tests/e2e/filer-ui.e2e.ts`
 
+## CSP 注意点
+
+- CSP は `src/auth.rs` の `csp_middleware` で定義
+- vendor ライブラリ（restty 等）が WASM・外部フォント等を必要とするため、CSP 変更時は vendor の要件を壊さないこと
+- 現在の CSP: `script-src 'self' 'wasm-unsafe-eval'`、`connect-src 'self' ws: wss: https://cdn.jsdelivr.net`
+- inline イベントハンドラ（`onclick` 等）は CSP で禁止されている。`addEventListener` を使うこと
+
 ## 言語規約
 
 - コミットメッセージ: 英語 (Conventional Commits: feat/fix/chore/refactor/docs/perf/test)
