@@ -42,6 +42,14 @@ function xtermThemeToGhostty(theme) {
  * CSS: '"Cascadia Code", "Fira Code", monospace'
  * restty: [{ type: "local", matchers: ["cascadia code"], label: "Cascadia Code" }, ...]
  */
+/** CDN fallback fonts — used when no local font is available (e.g. iPad) */
+const CDN_FONT_FALLBACKS = [
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Regular/JetBrainsMonoNLNerdFontMono-Regular.ttf', label: 'JetBrains Mono NL Nerd Font Regular (CDN)' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Bold/JetBrainsMonoNLNerdFontMono-Bold.ttf', label: 'JetBrains Mono NL Nerd Font Bold (CDN)' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Italic/JetBrainsMonoNLNerdFontMono-Italic.ttf', label: 'JetBrains Mono NL Nerd Font Italic (CDN)' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/BoldItalic/JetBrainsMonoNLNerdFontMono-BoldItalic.ttf', label: 'JetBrains Mono NL Nerd Font Bold Italic (CDN)' },
+];
+
 function fontFamilyToSources(fontFamily) {
   if (!fontFamily) return undefined;
   const sources = [];
@@ -51,6 +59,8 @@ function fontFamilyToSources(fontFamily) {
     if (lower === 'monospace' || lower === 'sans-serif' || lower === 'serif') continue;
     sources.push({ type: 'local', matchers: [lower], label: family });
   }
+  // Append CDN fallbacks so restty can render even when no local fonts exist
+  sources.push(...CDN_FONT_FALLBACKS);
   return sources.length > 0 ? sources : undefined;
 }
 
