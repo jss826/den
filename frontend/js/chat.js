@@ -34,6 +34,10 @@ const DenChat = (() => {
   let activeSessionId = null;
   let sessions = []; // cached session list
   let pollTimer = null;
+  let sendingInFlight = false;
+  let wsReconnectDelay = 1000;
+  const WS_RECONNECT_MAX = 30000;
+  let visibilityListenerRegistered = false;
 
   // ── Remote connection state ──
   let chatRemoteId = null;
@@ -134,16 +138,19 @@ const DenChat = (() => {
   function startSessionPoll() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(fetchSessions, 5000);
-    // Pause when tab hidden
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      } else {
-        fetchSessions();
-        startSessionPoll();
-      }
-    });
+    // Register visibilitychange once at module level
+    if (!visibilityListenerRegistered) {
+      visibilityListenerRegistered = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        } else {
+          fetchSessions();
+          startSessionPoll();
+        }
+      });
+    }
   }
 
   function renderSessionList() {
@@ -175,7 +182,11 @@ const DenChat = (() => {
 
       item.appendChild(label);
       item.appendChild(badge);
-      item.addEventListener('click', () => switchSession(s.id));
+      if (s.alive) {
+        item.addEventListener('click', () => switchSession(s.id));
+      } else {
+        item.style.cursor = 'default';
+      }
       sessionListEl.appendChild(item);
     }
 
@@ -219,10 +230,14 @@ const DenChat = (() => {
     const id = activeSessionId;
 
     try {
-      await fetch(`${getApiBase()}/channel/sessions/${encodeURIComponent(id)}`, {
+      const resp = await fetch(`${getApiBase()}/channel/sessions/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         credentials: 'same-origin',
       });
+      if (!resp.ok) {
+        appendSystemMessage(`Failed to stop session (${resp.status})`);
+        return;
+      }
       appendSystemMessage(`Session ${id.slice(0, 8)} stopped.`);
     } catch (err) {
       appendSystemMessage(`Error stopping session: ${err.message}`);
@@ -269,6 +284,7 @@ const DenChat = (() => {
     ws = new WebSocket(url);
 
     ws.addEventListener('open', () => {
+      wsReconnectDelay = 1000; // reset on successful connection
       updateConnectionStatus(true);
     });
 
@@ -285,10 +301,12 @@ const DenChat = (() => {
     ws.addEventListener('close', () => {
       updateConnectionStatus(false);
       ws = null;
-      // Reconnect after delay if session still active
+      // Reconnect with exponential backoff if session still active
+      const delay = wsReconnectDelay;
+      wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX);
       setTimeout(() => {
         if (!ws && activeSessionId) connectWs();
-      }, 3000);
+      }, delay);
     });
 
     ws.addEventListener('error', () => {
@@ -317,7 +335,7 @@ const DenChat = (() => {
   // ── Sending messages ──
 
   async function handleSend() {
-    if (!activeSessionId) return;
+    if (!activeSessionId || sendingInFlight) return;
     const text = inputEl.value.trim();
     if (!text) return;
 
@@ -331,7 +349,8 @@ const DenChat = (() => {
     currentAssistantBubble = null;
     pendingText = '';
 
-    // Send via Channel API
+    // Send via Channel API with double-send guard
+    sendingInFlight = true;
     try {
       const resp = await fetch(`${getApiBase()}/channel/message`, {
         method: 'POST',
@@ -344,6 +363,8 @@ const DenChat = (() => {
       }
     } catch (err) {
       appendSystemMessage(`Network error: ${err.message}`);
+    } finally {
+      sendingInFlight = false;
     }
   }
 
@@ -364,7 +385,7 @@ const DenChat = (() => {
     requestAnimationFrame(() => {
       renderPending = false;
       if (currentAssistantBubble && pendingText) {
-        currentAssistantBubble.innerHTML = DenMarkdown.renderMarkdown(pendingText);
+        currentAssistantBubble.innerHTML = DenMarkdown.sanitize(DenMarkdown.renderMarkdown(pendingText));
         scrollToBottom();
       }
     });
@@ -509,12 +530,15 @@ const DenChat = (() => {
 
   // ── Remote ──
 
-  function setRemote(remoteId, type) {
-    chatRemoteId = remoteId || null;
-    chatRemoteType = type || null;
-    // Refetch sessions from new target + reconnect WS
+  function setRemote(remoteId = null, type = null) {
+    chatRemoteId = remoteId;
+    chatRemoteType = type;
+    // Clear stale state from previous connection
+    activeSessionId = null;
+    disconnectWs();
+    handleClear();
+    // Refetch sessions from new target
     fetchSessions();
-    connectWs();
   }
 
   // ── Notifications ──
