@@ -233,7 +233,7 @@ const DenTerminal = (() => {
   }
 
   async function init(container) {
-    const { TerminalClass, FitAddonClass, needsWebgl } = await TerminalAdapter.ready();
+    const { TerminalClass, FitAddonClass, needsWebgl, isRestty } = await TerminalAdapter.ready();
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
     const fontSize = DenSettings.get('font_size') ?? 15;
     term = new TerminalClass({
@@ -337,6 +337,12 @@ const DenTerminal = (() => {
     });
 
     // キー入力 → WebSocket
+    // restty dedup: restty fires onData multiple times per keystroke
+    // (keydown + beforeinput events, each triggering emitData + ptyTransport).
+    // Allow only the first send per browser task; clear with setTimeout(0)
+    // which fires after all events in the current task are processed.
+    let _resttyDedupActive = false;
+
     term.onData((data) => {
       // Suppress leaked character from keybar modifier combo (iPad soft keyboard workaround)
       if (_suppressLeakedChar !== null && data === _suppressLeakedChar) {
@@ -346,6 +352,11 @@ const DenTerminal = (() => {
       }
       // Do not send input when terminal pane is hidden (e.g. Chat/Files tab active)
       if (document.getElementById('terminal-pane').hidden) return;
+      if (isRestty && _resttyDedupActive) return;
+      if (isRestty) {
+        _resttyDedupActive = true;
+        setTimeout(() => { _resttyDedupActive = false; }, 0);
+      }
       if (ws && ws.readyState === WebSocket.OPEN) {
         const filtered = filterMouseSeqs(data);
         if (filtered) ws.send(textEncoder.encode(filtered));

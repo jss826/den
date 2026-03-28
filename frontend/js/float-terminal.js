@@ -136,7 +136,7 @@ const FloatTerminal = (() => {
   }
   async function _doEnsureTerminal() {
 
-    const { TerminalClass, FitAddonClass, needsWebgl } = await TerminalAdapter.ready();
+    const { TerminalClass, FitAddonClass, needsWebgl, isRestty } = await TerminalAdapter.ready();
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
     const fontSize = DenSettings.get('font_size') ?? 15;
     term = new TerminalClass({
@@ -154,7 +154,15 @@ const FloatTerminal = (() => {
 
     term.open(body);
 
+    // restty dedup: see terminal.js for explanation
+    let _resttyDedupActive = false;
+
     term.onData((data) => {
+      if (isRestty && _resttyDedupActive) return;
+      if (isRestty) {
+        _resttyDedupActive = true;
+        setTimeout(() => { _resttyDedupActive = false; }, 0);
+      }
       if (ws && ws.readyState === WebSocket.OPEN) {
         const filtered = filterMouseSeqs(data);
         if (filtered) ws.send(textEncoder.encode(filtered));
