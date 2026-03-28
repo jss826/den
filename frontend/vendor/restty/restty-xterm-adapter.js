@@ -54,9 +54,26 @@ function fontFamilyToSources(fontFamily) {
   return sources.length > 0 ? sources : undefined;
 }
 
+function applyResttyTheme(restty, theme) {
+  const ghosttyTheme = xtermThemeToGhostty(theme);
+  if (!ghosttyTheme) return;
+  try {
+    const parsed = parseGhosttyTheme(ghosttyTheme);
+    restty.applyTheme(parsed, 'inline');
+  } catch (e) {
+    console.warn('[restty] Failed to apply theme:', e);
+  }
+}
+
 /**
  * DenTerminal adapter — wraps restty's xterm compat Terminal with
  * additional stubs for APIs Den uses but restty doesn't provide.
+ *
+ * WASM buffering: restty's sendInput() silently drops data when WASM is
+ * not yet initialized. Since app.init() is async and not awaited by the
+ * pane manager, early writes (including ConPTY's DSR probe) are lost.
+ * We buffer writes until onBackend fires (GPU init done) and the WASM
+ * promise has resolved, then replay the buffered data.
  */
 class DenResttyTerminal extends ResttyTerminal {
   /** Stub parser with registerOscHandler */
@@ -76,6 +93,10 @@ class DenResttyTerminal extends ResttyTerminal {
   /** Pending theme to apply after open() */
   _pendingTheme = null;
 
+  /** Write buffer for data arriving before WASM is ready */
+  _writeQueue = [];
+  _wasmReady = false;
+
   constructor(options = {}) {
     // Extract theme and fontFamily before passing to restty
     const { theme, fontFamily, ...restOptions } = options;
@@ -90,8 +111,42 @@ class DenResttyTerminal extends ResttyTerminal {
         ...(fontSources ? { fontSources } : {}),
       },
     });
+
+    // Inject onBackend callback into stored appOptions.
+    // onBackend fires during app.init() after GPU renderer is determined.
+    // WASM loading runs in parallel and is awaited right after onBackend,
+    // so we schedule flush after microtasks + one animation frame.
+    const origAppOptions = this.userAppOptions;
+    this.userAppOptions = {
+      ...origAppOptions,
+      callbacks: {
+        ...origAppOptions?.callbacks,
+        onBackend: () => this._onBackendReady(),
+      },
+    };
+
     if (theme) {
       this._pendingTheme = theme;
+    }
+  }
+
+  _onBackendReady() {
+    // onBackend fires, then init() does `await wasmPromise`.
+    // setTimeout(0) runs after microtasks (including the await resolution).
+    // requestAnimationFrame ensures we're past the render loop start.
+    setTimeout(() => {
+      requestAnimationFrame(() => {
+        this._flushWrites();
+      });
+    }, 0);
+  }
+
+  _flushWrites() {
+    this._wasmReady = true;
+    const queue = this._writeQueue;
+    this._writeQueue = [];
+    for (const data of queue) {
+      super.write(data);
     }
   }
 
@@ -99,30 +154,34 @@ class DenResttyTerminal extends ResttyTerminal {
     super.open(parent);
     // Apply theme after restty instance is created
     if (this._pendingTheme && this.restty) {
-      const ghosttyTheme = xtermThemeToGhostty(this._pendingTheme);
-      if (ghosttyTheme) {
-        try {
-          const parsed = parseGhosttyTheme(ghosttyTheme);
-          this.restty.applyTheme(parsed, 'inline');
-        } catch (e) {
-          console.warn('[restty] Failed to apply theme:', e);
-        }
-      }
+      applyResttyTheme(this.restty, this._pendingTheme);
       this._pendingTheme = null;
     }
+
+    // Fallback: if onBackend never fires (shouldn't happen, but be safe),
+    // flush after 3 seconds regardless.
+    setTimeout(() => {
+      if (!this._wasmReady) {
+        console.warn('[restty] WASM ready timeout — flushing write buffer');
+        this._flushWrites();
+      }
+    }, 3000);
   }
 
   /**
-   * Override write to handle Uint8Array (Den sends binary data from WebSocket).
+   * Override write to handle Uint8Array and buffer before WASM is ready.
    * restty's sendInput expects string, so decode if needed.
    */
   write(data, callback) {
     if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
-      const str = textDecoder.decode(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
-      super.write(str, callback);
-    } else {
-      super.write(data, callback);
+      data = textDecoder.decode(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
     }
+    if (!this._wasmReady) {
+      this._writeQueue.push(data);
+      callback?.();
+      return;
+    }
+    super.write(data, callback);
   }
 
   /** Override options setter to intercept theme and font changes */
@@ -132,15 +191,7 @@ class DenResttyTerminal extends ResttyTerminal {
 
   set options(next) {
     if (next && next.theme && this.restty) {
-      const ghosttyTheme = xtermThemeToGhostty(next.theme);
-      if (ghosttyTheme) {
-        try {
-          const parsed = parseGhosttyTheme(ghosttyTheme);
-          this.restty.applyTheme(parsed, 'inline');
-        } catch (e) {
-          console.warn('[restty] Failed to apply theme:', e);
-        }
-      }
+      applyResttyTheme(this.restty, next.theme);
     }
     if (next && next.fontSize && this.restty) {
       try {
