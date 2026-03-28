@@ -150,6 +150,12 @@ const DenChat = (() => {
       }, 200);
     });
 
+    // Chat bar buttons (CSP-compliant — no inline onclick)
+    document.getElementById('chat-collapse-all').addEventListener('click', () => toggleAllDetails(false));
+    document.getElementById('chat-expand-all').addEventListener('click', () => toggleAllDetails(true));
+    document.getElementById('chat-export-md').addEventListener('click', () => exportConversation('md'));
+    document.getElementById('chat-export-json').addEventListener('click', () => exportConversation('json'));
+
     // Desktop sidebar toggle (F011)
     const treeToggle = document.getElementById('chat-tree-toggle');
     const chatSidebar = document.querySelector('.chat-sidebar');
