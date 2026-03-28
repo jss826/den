@@ -74,18 +74,22 @@ impl ChatSessionManager {
             return Err(format!("Invalid permission mode: {permission_mode}"));
         }
 
-        let mut sessions = self.sessions.lock().await;
-
-        // Clean up dead sessions first
-        let dead_ids: Vec<String> = {
-            let mut dead = Vec::new();
-            for (id, session) in sessions.iter() {
-                if !session.is_alive().await {
-                    dead.push(id.clone());
-                }
-            }
-            dead
+        // Clean up dead sessions first (snapshot to avoid holding lock during is_alive)
+        let snapshot: Vec<(String, Arc<ChatSession>)> = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .iter()
+                .map(|(id, s)| (id.clone(), Arc::clone(s)))
+                .collect()
         };
+        let mut dead_ids = Vec::new();
+        for (id, session) in &snapshot {
+            if !session.is_alive().await {
+                dead_ids.push(id.clone());
+            }
+        }
+
+        let mut sessions = self.sessions.lock().await;
         for id in &dead_ids {
             if let Some(session) = sessions.remove(id) {
                 session.cleanup().await;
@@ -109,16 +113,8 @@ impl ChatSessionManager {
         });
 
         // Generate MCP config and start Claude Code
-        match self.start_claude(&id, &token, permission_mode).await {
-            Ok((child, config_path)) => {
-                *session.process.lock().await = Some(ChatProcess { child, config_path });
-            }
-            Err(e) => {
-                tracing::warn!("Failed to start Claude Code for session {id}: {e}");
-                // Session is still usable (manual claude start), but log the error.
-                // Don't fail session creation — the user might start claude externally.
-            }
-        }
+        let (child, config_path) = self.start_claude(&id, &token, permission_mode).await?;
+        *session.process.lock().await = Some(ChatProcess { child, config_path });
 
         sessions.insert(id, Arc::clone(&session));
         tracing::info!(
@@ -144,9 +140,12 @@ impl ChatSessionManager {
 
     /// List all sessions.
     pub async fn list_sessions(&self) -> Vec<ChatSessionInfo> {
-        let sessions = self.sessions.lock().await;
-        let mut result = Vec::with_capacity(sessions.len());
-        for session in sessions.values() {
+        let snapshot: Vec<Arc<ChatSession>> = {
+            let sessions = self.sessions.lock().await;
+            sessions.values().cloned().collect()
+        };
+        let mut result = Vec::with_capacity(snapshot.len());
+        for session in &snapshot {
             result.push(ChatSessionInfo {
                 id: session.id.clone(),
                 permission_mode: session.permission_mode.clone(),
@@ -218,8 +217,8 @@ impl ChatSessionManager {
             .arg(permission_mode)
             .arg("--verbose")
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
 
         // Start in user home directory
