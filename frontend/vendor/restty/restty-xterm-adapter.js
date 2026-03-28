@@ -95,17 +95,51 @@ const CDN_FONT_MAP = {
 };
 
 /**
+ * Detect iPad / iOS Safari (includes iPadOS requesting desktop sites).
+ */
+function isAppleMobile() {
+  const ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  // iPadOS 13+ reports as Mac but has touch
+  if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return true;
+  return false;
+}
+
+/**
+ * Apple system fonts — available locally on iOS / iPadOS / macOS.
+ * Prioritised first on Apple mobile devices so restty uses native fonts
+ * instead of downloading from CDN. Better hinting, no network latency.
+ */
+const APPLE_SYSTEM_FONTS = [
+  // Monospace
+  { type: 'local', matchers: ['menlo', 'menlo regular'], label: 'Menlo (System)' },
+  { type: 'local', matchers: ['menlo bold'], label: 'Menlo Bold (System)' },
+  { type: 'local', matchers: ['menlo italic'], label: 'Menlo Italic (System)' },
+  { type: 'local', matchers: ['menlo bold italic'], label: 'Menlo Bold Italic (System)' },
+  // CJK — Hiragino Sans (iOS/macOS built-in, excellent CJK metrics)
+  { type: 'local', matchers: ['hiragino sans', 'hiragino sans w3', 'hiraginosans-w3', '.hiragino sans interface'], label: 'Hiragino Sans CJK (System)' },
+  // Symbols
+  { type: 'local', matchers: ['apple symbols', 'applesymbols'], label: 'Apple Symbols (System)' },
+  // Emoji
+  { type: 'local', matchers: ['apple color emoji', 'applecoloremoji'], label: 'Apple Color Emoji (System)' },
+];
+
+/**
  * Build fontSources array based on restty_font setting.
  * @param {string|null} resttyFont - Setting value (null = JetBrains Mono default)
  * @param {string} fontFamily - CSS fontFamily from Den settings (for local fallback)
  */
 function buildFontSources(resttyFont, fontFamily) {
   const sources = [];
-  // 1. Selected CDN font (if not default JetBrains Mono)
+  // 1. Apple system fonts first on iPad/iOS (native, no CDN needed)
+  if (isAppleMobile()) {
+    sources.push(...APPLE_SYSTEM_FONTS);
+  }
+  // 2. Selected CDN font (if not default JetBrains Mono)
   if (resttyFont && CDN_FONT_MAP[resttyFont]) {
     sources.push(...CDN_FONT_MAP[resttyFont]);
   }
-  // 2. User-configured CSS fonts from Den settings (local)
+  // 3. User-configured CSS fonts from Den settings (local)
   if (fontFamily) {
     const families = fontFamily.split(',').map(f => f.trim().replace(/^["']|["']$/g, ''));
     for (const family of families) {
@@ -114,7 +148,7 @@ function buildFontSources(resttyFont, fontFamily) {
       sources.push({ type: 'local', matchers: [lower], label: family });
     }
   }
-  // 3. Full restty fallback chain (JetBrains Mono CDN + symbols + emoji + CJK)
+  // 4. Full restty fallback chain (JetBrains Mono CDN + symbols + emoji + CJK)
   sources.push(...RESTTY_FALLBACK_SOURCES);
   return sources;
 }

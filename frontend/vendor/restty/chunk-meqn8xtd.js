@@ -61071,7 +61071,7 @@ function renderWebGLGlyphPipeline(ctx) {
             if (fit > 0 && fit < 1)
               itemScale = scale * fit;
           }
-          if (!symbolLike && fontIndex === 0) {
+          if (!symbolLike) {
             const advancePx = item.shaped.advance * scale;
             if (advancePx > maxWidth && advancePx > 0) {
               itemScale = scale * (maxWidth / advancePx);
@@ -62413,7 +62413,7 @@ function emitWebGPUQueuedGlyphs(params) {
           if (fit > 0 && fit < 1)
             itemScale = scale * fit;
         }
-        if (!symbolLike && fontIndex === 0) {
+        if (!symbolLike) {
           const advancePx = item.shaped.advance * scale;
           if (advancePx > maxWidth && advancePx > 0) {
             itemScale = scale * (maxWidth / advancePx);
