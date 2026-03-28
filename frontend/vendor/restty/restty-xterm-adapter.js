@@ -3,6 +3,7 @@
 // but restty does not implement (OSC handlers, title change, selection, etc.)
 
 import { Terminal as ResttyTerminal } from './xterm.js';
+import { parseGhosttyTheme } from './restty.js';
 
 const textDecoder = new TextDecoder();
 
@@ -101,7 +102,8 @@ class DenResttyTerminal extends ResttyTerminal {
       const ghosttyTheme = xtermThemeToGhostty(this._pendingTheme);
       if (ghosttyTheme) {
         try {
-          this.restty.applyTheme(ghosttyTheme, 'inline');
+          const parsed = parseGhosttyTheme(ghosttyTheme);
+          this.restty.applyTheme(parsed, 'inline');
         } catch (e) {
           console.warn('[restty] Failed to apply theme:', e);
         }
@@ -133,7 +135,8 @@ class DenResttyTerminal extends ResttyTerminal {
       const ghosttyTheme = xtermThemeToGhostty(next.theme);
       if (ghosttyTheme) {
         try {
-          this.restty.applyTheme(ghosttyTheme, 'inline');
+          const parsed = parseGhosttyTheme(ghosttyTheme);
+          this.restty.applyTheme(parsed, 'inline');
         } catch (e) {
           console.warn('[restty] Failed to apply theme:', e);
         }

@@ -344,6 +344,8 @@ const DenTerminal = (() => {
         if (_suppressTimer) { clearTimeout(_suppressTimer); _suppressTimer = null; }
         return;
       }
+      // Do not send input when terminal pane is hidden (e.g. Chat/Files tab active)
+      if (document.getElementById('terminal-pane').hidden) return;
       if (ws && ws.readyState === WebSocket.OPEN) {
         const filtered = filterMouseSeqs(data);
         if (filtered) ws.send(textEncoder.encode(filtered));
@@ -810,6 +812,10 @@ const DenTerminal = (() => {
 
   function focus() {
     if (term) term.focus();
+  }
+
+  function blur() {
+    if (term) term.blur();
   }
 
   function getTerminal() {
@@ -1655,7 +1661,7 @@ const DenTerminal = (() => {
   });
 
   return {
-    init, connect, disconnect, sendInput, sendResize, focus, fitAndRefresh, scheduleFit, getTerminal,
+    init, connect, disconnect, sendInput, sendResize, focus, blur, fitAndRefresh, scheduleFit, getTerminal,
     getCurrentSession, getCurrentRemote, switchSession, refreshSessionList, initSessionBar,
     fetchSessions, fetchAllSessions, createSession, destroySession,
     enterSelectMode, exitSelectMode, isSelectMode,

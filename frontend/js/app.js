@@ -387,6 +387,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tabName === 'terminal') {
       DenTerminal.fitAndRefresh();
       DenTerminal.focus();
+    } else {
+      DenTerminal.blur();
     }
 
     DenSettings.setTitleTab(tabName, tabName === 'terminal' ? DenTerminal.getCurrentSession() : null);
