@@ -37,6 +37,23 @@ function xtermThemeToGhostty(theme) {
 }
 
 /**
+ * Convert CSS fontFamily string to restty fontSources array.
+ * CSS: '"Cascadia Code", "Fira Code", monospace'
+ * restty: [{ type: "local", matchers: ["cascadia code"], label: "Cascadia Code" }, ...]
+ */
+function fontFamilyToSources(fontFamily) {
+  if (!fontFamily) return undefined;
+  const sources = [];
+  const families = fontFamily.split(',').map(f => f.trim().replace(/^["']|["']$/g, ''));
+  for (const family of families) {
+    const lower = family.toLowerCase();
+    if (lower === 'monospace' || lower === 'sans-serif' || lower === 'serif') continue;
+    sources.push({ type: 'local', matchers: [lower], label: family });
+  }
+  return sources.length > 0 ? sources : undefined;
+}
+
+/**
  * DenTerminal adapter — wraps restty's xterm compat Terminal with
  * additional stubs for APIs Den uses but restty doesn't provide.
  */
@@ -59,8 +76,9 @@ class DenResttyTerminal extends ResttyTerminal {
   _pendingTheme = null;
 
   constructor(options = {}) {
-    // Extract theme before passing to restty (restty doesn't understand xterm theme objects)
-    const { theme, ...restOptions } = options;
+    // Extract theme and fontFamily before passing to restty
+    const { theme, fontFamily, ...restOptions } = options;
+    const fontSources = fontFamilyToSources(fontFamily);
     super({
       ...restOptions,
       appOptions: {
@@ -68,6 +86,7 @@ class DenResttyTerminal extends ResttyTerminal {
         autoResize: true,
         fontSize: options.fontSize || 15,
         touchSelectionMode: 'long-press',
+        ...(fontSources ? { fontSources } : {}),
       },
     });
     if (theme) {
@@ -104,7 +123,7 @@ class DenResttyTerminal extends ResttyTerminal {
     }
   }
 
-  /** Override options setter to intercept theme changes */
+  /** Override options setter to intercept theme and font changes */
   get options() {
     return super.options;
   }
@@ -124,6 +143,14 @@ class DenResttyTerminal extends ResttyTerminal {
       try {
         this.restty.setFontSize(next.fontSize);
       } catch (_) { /* may not be supported */ }
+    }
+    if (next && next.fontFamily && this.restty) {
+      const fontSources = fontFamilyToSources(next.fontFamily);
+      if (fontSources) {
+        try {
+          this.restty.setFontSources(fontSources);
+        } catch (_) { /* may not be supported */ }
+      }
     }
     // Store all option values via parent
     super.options = next;

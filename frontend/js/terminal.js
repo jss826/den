@@ -276,6 +276,9 @@ const DenTerminal = (() => {
     const resizeObserver = new ResizeObserver(() => scheduleFit());
     resizeObserver.observe(container);
 
+    // restty auto-resize: onGridSize fires onResize — sync PTY server
+    term.onResize(() => sendResize());
+
     // キーバー修飾キーが ON のとき、物理キーと組み合わせて修飾付きシーケンスを送信
     const PHYSICAL_KEY_MAP = {
       Enter: '\r', Tab: '\t', Escape: '\x1b', Backspace: '\x7f',

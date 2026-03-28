@@ -177,6 +177,9 @@ const FloatTerminal = (() => {
     // ResizeObserver: fit terminal when container size changes (replaces setTimeout polling)
     resizeObserver = new ResizeObserver(() => scheduleFit());
     resizeObserver.observe(body);
+
+    // restty auto-resize: onGridSize fires onResize — sync PTY server
+    term.onResize(() => sendResize());
   }
 
   // --- Fit ---
