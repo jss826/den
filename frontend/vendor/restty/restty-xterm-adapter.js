@@ -144,6 +144,8 @@ class DenResttyTerminal extends ResttyTerminal {
 
 /** No-op FitAddon — restty has built-in auto-resize */
 class NoopFitAddon {
+  activate() {}
+  dispose() {}
   fit() {}
   proposeDimensions() { return null; }
 }
