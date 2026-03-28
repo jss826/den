@@ -28,12 +28,15 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 1. `Cargo.toml` の `version` フィールドを新バージョン番号に更新（`v` prefix なし）
 2. `cargo generate-lockfile` で Cargo.lock を更新（Cargo.toml の version 変更を反映）
 3. バージョン更新をコミット＆プッシュ: `git add Cargo.toml Cargo.lock && git commit -m "chore: bump version to <version>" && git push`
-4. `gh release create <version> --title "<version>" --notes "<リリースノート>"` で GitHub Release を作成（タグも自動作成される）
-5. `git fetch --tags` でリモートタグをローカルに同期（次回リリース時のタグ参照に必要）
-6. CI がトリガーされたことを確認: `gh run list --limit 1`
-7. CI 完了を待つ: `gh run watch <run_id>`
-8. リリースにバイナリが添付されたことを確認: `gh release view <version>`
-9. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + CI ステータス）
+   - SSH 失敗時は HTTPS フォールバック: `GH_TOKEN=$(gh auth token) && git push https://<owner>:${GH_TOKEN}@github.com/<owner>/<repo>.git <branch>`
+   - **push が成功したことを確認してから次のステップへ進む**（失敗した場合、リリース作成でタグが古いコミットを指す）
+4. `gh` のアクティブアカウントがリポジトリオーナーと一致することを確認: `gh auth status` でアクティブアカウントを確認し、不一致なら `gh auth switch -u <owner>` で切り替え
+5. `gh release create <version> --title "<version>" --notes "<リリースノート>"` で GitHub Release を作成（タグも自動作成される）
+6. `git fetch --tags` でリモートタグをローカルに同期（次回リリース時のタグ参照に必要）
+7. CI がトリガーされたことを確認: `gh run list --limit 1`
+8. CI 完了を待つ: `gh run watch <run_id>`
+9. リリースにバイナリが添付されたことを確認: `gh release view <version>`
+10. 結果を報告（タグ名 + リリースURL + 含まれるコミット数 + CI ステータス）
 
 ## ルール
 
