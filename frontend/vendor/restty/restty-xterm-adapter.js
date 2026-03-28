@@ -201,6 +201,7 @@ class DenResttyTerminal {
         autoResize: true,
         fontSize: this._fontSize,
         fontSizeMode: 'em',
+        fontHinting: true,
         touchSelectionMode: 'long-press',
         ptyTransport: {
           connect() {},
