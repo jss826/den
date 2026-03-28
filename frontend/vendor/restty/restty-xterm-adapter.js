@@ -62,8 +62,8 @@ const RESTTY_FALLBACK_SOURCES = [
   { type: 'local', matchers: ['apple color emoji', 'applecoloremoji'], label: 'Apple Color Emoji' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji@main/fonts/NotoColorEmoji.ttf' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/hfg-gmuend/openmoji@master/font/OpenMoji-black-glyf/OpenMoji-black-glyf.ttf' },
-  // CJK
-  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf' },
+  // CJK — Japanese variant for better kana/kanji glyph shapes
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf' },
 ];
 
 /** CDN font entries for selectable fonts (setting: restty_font) */
