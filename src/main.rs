@@ -9,9 +9,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
-    // MCP gate mode: run as MCP stdio server instead of web server
-    if std::env::args().nth(1).as_deref() == Some("--mcp-gate") {
-        den::mcp_gate::run();
+    // Channel server mode: MCP channel server for Claude Code Channels API
+    if std::env::args().nth(1).as_deref() == Some("--channel-server") {
+        den::channel::run();
         return;
     }
     // Load .env: CWD first, then platform-specific config directory as fallback.

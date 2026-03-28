@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal', 'chat-cwd-picker-modal'];
+  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
   const allModals = ['confirm-modal', 'prompt-modal', 'choose-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
@@ -451,7 +451,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function initSidebarToggles() {
     setupSidebarToggle('.filer-sidebar-toggle', '.filer-sidebar', '.filer-layout');
-    setupSidebarToggle('.chat-sidebar-toggle', '.chat-sidebar', '.chat-layout');
   }
 
   function setupSidebarToggle(toggleSel, sidebarSel, layoutSel) {

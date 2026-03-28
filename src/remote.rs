@@ -472,7 +472,7 @@ pub async fn remote_fwd_ws_handler(
         .into_response())
 }
 
-/// GET /api/remote/{id}/chat-ws — WebSocket proxy to remote Den's /api/chat/ws
+/// GET /api/remote/{id}/chat-ws — WebSocket proxy to remote Den's /api/channel/ws
 pub async fn remote_chat_ws_handler(
     ws: WebSocketUpgrade,
     Path(id): Path<String>,
@@ -481,9 +481,9 @@ pub async fn remote_chat_ws_handler(
 ) -> Result<Response, StatusCode> {
     let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let path = if let Some(q) = &query {
-        format!("/api/chat/ws?{q}")
+        format!("/api/channel/ws?{q}")
     } else {
-        "/api/chat/ws".to_string()
+        "/api/channel/ws".to_string()
     };
     Ok(ws
         .on_upgrade(move |socket| handle_remote_ws_path(socket, remote, path))
@@ -513,6 +513,7 @@ pub async fn remote_proxy_catch_all(
     } else if rest.starts_with("terminal/")
         || rest.starts_with("filer/")
         || rest.starts_with("chat/")
+        || rest.starts_with("channel/")
         || rest == "settings"
         || rest == "ports"
     {
@@ -1596,7 +1597,7 @@ pub async fn relay_proxy_catch_all(
     }
 }
 
-/// GET /api/relay/{id}/chat-ws — WebSocket relay to target Den's /api/chat/ws
+/// GET /api/relay/{id}/chat-ws — WebSocket relay to target Den's /api/channel/ws
 pub async fn relay_chat_ws_handler(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
@@ -1609,9 +1610,9 @@ pub async fn relay_chat_ws_handler(
     };
 
     let chat_path = if let Some(q) = &query {
-        format!("/api/chat/ws?{q}")
+        format!("/api/channel/ws?{q}")
     } else {
-        "/api/chat/ws".to_string()
+        "/api/channel/ws".to_string()
     };
 
     match resolved {

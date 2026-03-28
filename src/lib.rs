@@ -2,12 +2,12 @@ use tokio::net::TcpListener;
 
 pub mod assets;
 pub mod auth;
+pub mod channel;
 pub mod chat;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
-pub mod mcp_gate;
 pub mod port_detection;
 pub mod port_forward;
 pub mod port_monitor;
@@ -44,7 +44,7 @@ pub struct AppState {
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
-    pub chat_manager: Arc<chat::manager::ChatManager>,
+    pub chat_sessions: chat::session::ChatSessionManager,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -76,11 +76,7 @@ pub fn create_app_with_secret(
 
     let port_monitor = Arc::new(port_monitor::PortMonitor::new());
     let remote_manager = Arc::new(remote::RemoteManager::default());
-
-    let chat_manager = Arc::new(chat::manager::ChatManager::new(
-        &config.data_dir,
-        config.port,
-    ));
+    let server_port = config.port;
 
     let state = Arc::new(AppState {
         config,
@@ -95,15 +91,18 @@ pub fn create_app_with_secret(
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
-        chat_manager,
+        chat_sessions: chat::session::ChatSessionManager::new(server_port),
     });
 
-    // Gate route — loopback-only + per-session gate token auth
-    let gate_route = Router::new()
+    // Channel server routes — loopback-only, token auth in handler
+    let channel_server_routes = Router::new()
+        .route("/api/channel/poll", get(chat::channel_api::poll_message))
+        .route("/api/channel/reply", post(chat::channel_api::post_reply))
         .route(
-            "/api/chat/sessions/{id}/gate/request",
-            post(chat::api::gate_request),
+            "/api/channel/permission",
+            post(chat::channel_api::post_permission),
         )
+        .route("/api/channel/verdict", get(chat::channel_api::poll_verdict))
         .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
 
     // 認証不要のルート
@@ -112,7 +111,7 @@ pub fn create_app_with_secret(
         .route("/api/logout", post(auth::logout))
         .route("/api/system/tls", get(tls::status))
         .route("/api/system/tls/certificate", get(tls::certificate))
-        .merge(gate_route)
+        .merge(channel_server_routes)
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
@@ -243,26 +242,27 @@ pub fn create_app_with_secret(
         // WebSocket proxy for forwarded ports
         .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
         .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
-        // Chat API
+        // Channel API (Chat v2) — session management
         .route(
-            "/api/chat/sessions",
-            get(chat::api::list_sessions).post(chat::api::create_session),
+            "/api/channel/sessions",
+            get(chat::channel_api::list_sessions).post(chat::channel_api::create_session),
         )
         .route(
-            "/api/chat/sessions/{id}",
-            delete(chat::api::destroy_session).patch(chat::api::rename_session),
+            "/api/channel/sessions/{id}",
+            delete(chat::channel_api::stop_session),
+        )
+        // Channel API (Chat v2) — messaging
+        .route(
+            "/api/channel/message",
+            post(chat::channel_api::send_message),
         )
         .route(
-            "/api/chat/sessions/{id}/stop",
-            post(chat::api::stop_session),
+            "/api/channel/verdict",
+            post(chat::channel_api::send_verdict),
         )
-        .route("/api/chat/ws", get(chat::api::chat_ws_handler))
-        .route("/api/chat/history", get(chat::api::list_history))
         .route(
-            "/api/chat/history/{id}",
-            get(chat::api::get_history)
-                .delete(chat::api::delete_history)
-                .patch(chat::api::rename_history),
+            "/api/channel/ws",
+            get(chat::channel_api::channel_ws_handler),
         )
         // System update API
         .route("/api/system/version", get(update::get_version))

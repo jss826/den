@@ -1,3 +1,3 @@
-pub mod api;
-pub mod manager;
-pub mod permission;
+pub mod channel_api;
+pub mod channel_state;
+pub mod session;

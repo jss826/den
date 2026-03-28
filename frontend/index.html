@@ -109,74 +109,51 @@
       </div>
     </div>
 
-    <!-- チャット -->
+    <!-- チャット (Channel API) -->
     <div id="chat-pane" class="pane" hidden role="tabpanel" aria-label="Chat">
       <div class="chat-layout">
-        <!-- サイドバー: セッション一覧 -->
-        <div class="chat-sidebar">
-          <button class="sidebar-toggle chat-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
+        <!-- Session sidebar -->
+        <div class="chat-sidebar" id="chat-sidebar">
           <div class="chat-sidebar-header">
-            <button id="chat-new-btn" class="chat-bar-btn chat-new-btn" type="button" aria-label="New session" data-tooltip="New Session">+ New</button>
-            <button id="chat-continue-btn" class="chat-bar-btn" type="button" aria-label="Continue last session" data-tooltip="Continue Last">&#9654;</button>
-            <button id="chat-cwd-toggle" class="chat-bar-btn" type="button" aria-label="Set folder" data-tooltip="Set working directory">&#128193;</button>
-            <button id="chat-tools-toggle" class="chat-bar-btn" type="button" aria-label="Allowed tools" data-tooltip="Allowed Tools">&#128295;</button>
+            <span>Sessions</span>
+            <button id="chat-new-session-btn" class="chat-sidebar-btn" type="button" aria-label="New session" data-tooltip="New Session">+</button>
           </div>
-          <div id="chat-cwd-bar" class="chat-cwd-bar" hidden>
-            <input type="text" id="chat-cwd-input" class="chat-cwd-input" placeholder="Working directory..." aria-label="Working directory" />
-          </div>
-          <div id="chat-tools-bar" class="chat-tools-bar" hidden>
-            <select id="chat-tools-select" class="chat-tools-select" aria-label="Allowed tools preset">
-              <option value="">All tools (default)</option>
-              <option value="Read,Glob,Grep,WebSearch,WebFetch">Read only</option>
-              <option value="Read,Glob,Grep,Edit,Write,MultiEdit">Edit (no Bash)</option>
-              <option value="custom">Custom...</option>
-            </select>
-            <input type="text" id="chat-tools-custom" class="chat-tools-custom" placeholder="Tool1,Tool2,..." hidden aria-label="Custom tools" />
-            <label class="chat-gate-label"><input type="checkbox" id="chat-permission-gate" aria-label="Require approval" /> Require approval</label>
-          </div>
-          <div id="chat-search-bar" class="chat-search-bar">
-            <input type="text" id="chat-search-input" class="chat-search-input" placeholder="Search sessions..." aria-label="Search sessions" />
-          </div>
-          <div id="chat-session-list" class="chat-session-list" role="list" aria-label="Chat sessions"></div>
+          <div id="chat-session-list" class="chat-session-list"></div>
         </div>
-        <!-- メインエリア -->
+        <!-- Main chat area -->
         <div class="chat-main">
           <div class="chat-main-header">
-            <button id="chat-tree-toggle" class="chat-bar-btn" type="button" aria-label="Toggle sidebar" data-tooltip="Toggle Sidebar">&#9776;</button>
-            <span id="chat-main-title" class="chat-main-title"></span>
+            <span id="chat-main-title" class="chat-main-title">Chat</span>
             <span class="chat-bar-spacer"></span>
-            <button class="chat-bar-btn" type="button" aria-label="Collapse all" data-tooltip="Collapse all" id="chat-collapse-all">&minus;</button>
-            <button class="chat-bar-btn" type="button" aria-label="Expand all" data-tooltip="Expand all" id="chat-expand-all">+</button>
-            <button class="chat-bar-btn" type="button" aria-label="Export Markdown" data-tooltip="Export MD" id="chat-export-md">MD</button>
-            <button class="chat-bar-btn" type="button" aria-label="Export JSON" data-tooltip="Export JSON" id="chat-export-json">JSON</button>
+            <button class="chat-bar-btn" type="button" aria-label="Stop session" data-tooltip="Stop" id="chat-stop-btn" hidden>Stop</button>
+            <button class="chat-bar-btn" type="button" aria-label="Clear chat" data-tooltip="Clear" id="chat-clear-btn">Clear</button>
           </div>
           <div id="chat-messages" class="chat-messages"></div>
           <div class="chat-input-area" id="chat-input-area">
-            <div id="chat-image-preview" class="chat-image-preview" hidden></div>
-            <div id="chat-attach-chips" class="chat-attach-chips" hidden></div>
             <div class="chat-input-row">
-              <button id="chat-attach-btn" class="chat-attach-btn" type="button" aria-label="Attach file" data-tooltip="Attach file from Filer">&#x1F4CE;</button>
-              <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..."></textarea>
-              <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send">Send</button>
+              <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..." disabled></textarea>
+              <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send" disabled>Send</button>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ディレクトリ選択モーダル -->
-    <div id="chat-cwd-picker-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Select working directory">
-      <div class="modal-content cwd-picker-content">
-        <h3>Select Working Directory</h3>
-        <div id="cwd-picker-drives" class="cwd-picker-drives" hidden></div>
-        <div class="cwd-picker-path-bar">
-          <button id="cwd-picker-up" class="cwd-picker-up-btn" type="button" aria-label="Go up" data-tooltip="Parent directory">&#8679; Up</button>
-          <span id="cwd-picker-current" class="cwd-picker-current"></span>
+    <!-- New Chat Session Modal -->
+    <div id="chat-new-session-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="New Chat Session">
+      <div class="modal-content">
+        <h3>New Chat Session</h3>
+        <div class="modal-section">
+          <label for="chat-permission-mode">Permission Mode</label>
+          <select id="chat-permission-mode" class="settings-input">
+            <option value="default">Default (ask for all)</option>
+            <option value="acceptEdits">Accept Edits (auto-approve file edits)</option>
+            <option value="bypassPermissions">Bypass (auto-approve everything)</option>
+          </select>
         </div>
-        <div id="cwd-picker-list" class="cwd-picker-list" role="listbox" aria-label="Directories"></div>
-        <div class="cwd-picker-actions">
-          <button id="cwd-picker-cancel" class="btn" type="button">Cancel</button>
-          <button id="cwd-picker-select" class="btn btn-primary" type="button">Select</button>
+        <div class="modal-actions">
+          <button id="chat-session-cancel" class="modal-btn">Cancel</button>
+          <button id="chat-session-create" class="modal-btn primary">Create</button>
         </div>
       </div>
     </div>

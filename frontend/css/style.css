@@ -663,6 +663,8 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 }
 .chat-sidebar-header {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border, #333);
@@ -857,6 +859,45 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 .chat-session-action-btn.danger:hover {
   background: var(--error-tint);
   color: var(--error, #f44);
+}
+/* Chat session list — simple items (Phase 3) */
+.chat-session-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--dim, #888);
+  font-size: 12px;
+}
+.chat-session-label {
+  flex: 1;
+  font-family: monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-session-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--hover, rgba(255,255,255,0.05));
+  color: var(--dim, #888);
+  white-space: nowrap;
+}
+.chat-session-item.dead {
+  opacity: 0.5;
+}
+.chat-sidebar-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg, #ccc);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+}
+.chat-sidebar-btn:hover {
+  background: var(--hover, rgba(255,255,255,0.05));
 }
 /* Chat main area */
 .chat-main {
