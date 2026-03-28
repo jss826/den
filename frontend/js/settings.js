@@ -22,6 +22,7 @@ const DenSettings = (() => {
     theme_chat: null,
     theme_files: null,
     mcp_servers: null,
+    terminal_renderer: null,
   };
 
   // All available theme options (value → label)
@@ -305,7 +306,7 @@ const DenSettings = (() => {
 
   const SECTION_KEYS = {
     appearance: ['theme', 'font_size', 'theme_terminal', 'theme_chat', 'theme_files'],
-    terminal: ['terminal_scrollback', 'ssh_agent_forwarding', 'sleep_prevention_mode', 'sleep_prevention_timeout', 'group_remote_sessions'],
+    terminal: ['terminal_scrollback', 'ssh_agent_forwarding', 'sleep_prevention_mode', 'sleep_prevention_timeout', 'group_remote_sessions', 'terminal_renderer'],
     keybar: ['keybar_buttons', 'keybar_secondary_buttons'],
     snippets: ['snippets'],
   };
@@ -870,6 +871,9 @@ const DenSettings = (() => {
     const groupCheck = document.getElementById('setting-group-remote');
     if (groupCheck) groupCheck.checked = current.group_remote_sessions !== false;
 
+    const rendererSelect = document.getElementById('setting-terminal-renderer');
+    if (rendererSelect) rendererSelect.value = current.terminal_renderer || 'xterm';
+
     // キーバー設定の初期化（items を deep clone）
     if (current.keybar_buttons && current.keybar_buttons.length > 0) {
       editingKeybarButtons = current.keybar_buttons.map(k => {
@@ -1002,6 +1006,10 @@ const DenSettings = (() => {
       const chatInputPosEl = document.getElementById('setting-chat-input-position');
       const chatInputPosition = chatInputPosEl ? chatInputPosEl.value : 'bottom';
 
+      const rendererEl = document.getElementById('setting-terminal-renderer');
+      const terminalRenderer = rendererEl ? rendererEl.value : null;
+      const oldRenderer = current.terminal_renderer || 'xterm';
+
       Spinner.button(saveBtn, async () => {
         const ok = await save({
           font_size: Math.max(8, Math.min(32, fontSize)),
@@ -1019,9 +1027,16 @@ const DenSettings = (() => {
           sleep_prevention_timeout: sleepTimeout,
           group_remote_sessions: groupRemote,
           chat_input_position: chatInputPosition === 'bottom' ? null : chatInputPosition,
+          terminal_renderer: terminalRenderer === 'xterm' ? null : terminalRenderer,
         });
         if (!ok) return;
         apply();
+        // Renderer change requires page reload
+        if ((terminalRenderer || 'xterm') !== oldRenderer) {
+          closeModal();
+          location.reload();
+          return;
+        }
 
         // scrollback / fontSize を即時反映（xterm.js は options の動的変更に対応）
         const t = DenTerminal.getTerminal();

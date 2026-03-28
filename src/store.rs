@@ -224,6 +224,8 @@ pub struct Settings {
     pub mcp_servers: Option<Vec<McpServer>>,
     #[serde(default)]
     pub chat_input_position: Option<String>,
+    #[serde(default)]
+    pub terminal_renderer: Option<String>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -264,6 +266,7 @@ impl Default for Settings {
             theme_files: None,
             mcp_servers: None,
             chat_input_position: None,
+            terminal_renderer: None,
             version: String::new(),
             hostname: String::new(),
         }

@@ -448,6 +448,14 @@
             <input type="number" id="setting-scrollback" class="settings-input" min="100" max="50000" value="1000">
           </div>
           <div class="modal-section">
+            <label>Terminal Renderer</label>
+            <select id="setting-terminal-renderer" class="settings-input">
+              <option value="xterm">xterm.js (default)</option>
+              <option value="restty">restty (experimental)</option>
+            </select>
+            <small class="setting-hint">Requires page reload. restty: GPU-accelerated, some features unavailable.</small>
+          </div>
+          <div class="modal-section">
             <label>
               <input type="checkbox" id="setting-ssh-agent-fwd">
               SSH Agent Forwarding
@@ -722,6 +730,7 @@
   <script src="/js/settings-presets.js"></script>
   <script src="/js/tls-trust.js"></script>
   <script src="/js/settings.js"></script>
+  <script src="/js/terminal-adapter.js"></script>
   <script src="/js/terminal.js"></script>
   <script src="/js/text-input.js"></script>
   <script src="/js/snippet.js"></script>

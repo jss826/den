@@ -1,9 +1,9 @@
-/* global Terminal, FitAddon, DenSettings, DenTerminal */
+/* global Terminal, FitAddon, DenSettings, DenTerminal, TerminalAdapter */
 // Den - Floating Terminal module
 const FloatTerminal = (() => {
   // --- State ---
   let initDone = false;
-  let initialized = false;
+  // initialized は _ensurePromise で管理（Promise ガードパターン）
   let visible = false;
   let minimized = false;
   let term = null;
@@ -125,13 +125,17 @@ const FloatTerminal = (() => {
   }
 
   // --- Lazy create xterm ---
+  let _ensurePromise = null;
   function ensureTerminal() {
-    if (initialized) return;
-    initialized = true;
+    if (!_ensurePromise) _ensurePromise = _doEnsureTerminal();
+    return _ensurePromise;
+  }
+  async function _doEnsureTerminal() {
 
+    const { TerminalClass, FitAddonClass, needsWebgl } = await TerminalAdapter.ready();
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
     const fontSize = DenSettings.get('font_size') ?? 15;
-    term = new Terminal({
+    term = new TerminalClass({
       cursorBlink: true,
       fontSize,
       fontFamily: DenTerminal.getFontFamily(),
@@ -139,10 +143,10 @@ const FloatTerminal = (() => {
       theme: DenTerminal.getXtermTheme(DenSettings.getPaneTheme('terminal-pane')),
     });
 
-    fitAddon = new FitAddon.FitAddon();
+    fitAddon = new FitAddonClass();
     term.loadAddon(fitAddon);
 
-    DenTerminal.selectRenderer(term);
+    if (needsWebgl) DenTerminal.selectRenderer(term);
 
     term.open(body);
 
@@ -451,7 +455,7 @@ const FloatTerminal = (() => {
   // --- Show / Hide / Toggle ---
   async function show() {
     if (visible) { term?.focus(); return; }
-    ensureTerminal();
+    await ensureTerminal();
     visible = true;
     minimized = false;
 

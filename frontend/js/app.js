@@ -247,8 +247,10 @@ document.addEventListener('DOMContentLoaded', () => {
     DenFiler.initDenConnectModal();
 
     // ターミナル初期化
+    const renderer = DenSettings.get('terminal_renderer') || 'xterm';
+    TerminalAdapter.init(renderer);
     const container = document.getElementById('terminal-container');
-    DenTerminal.init(container);
+    await DenTerminal.init(container);
     DenTerminal.initSessionBar();
 
     // Fetch existing sessions before connecting

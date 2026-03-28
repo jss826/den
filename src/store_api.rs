@@ -147,6 +147,12 @@ pub async fn put_settings(
     {
         settings.chat_input_position = None;
     }
+    // Validate terminal_renderer: only "restty" allowed (None = xterm default)
+    if let Some(ref r) = settings.terminal_renderer
+        && r != "restty"
+    {
+        settings.terminal_renderer = None;
+    }
     // Validate snippets: limit count, label/command length, reject empty
     if let Some(ref snips) = settings.snippets {
         if snips.len() > 100 {

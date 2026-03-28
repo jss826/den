@@ -225,10 +225,11 @@ const DenTerminal = (() => {
     }
   }
 
-  function init(container) {
+  async function init(container) {
+    const { TerminalClass, FitAddonClass, needsWebgl } = await TerminalAdapter.ready();
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
     const fontSize = DenSettings.get('font_size') ?? 15;
-    term = new Terminal({
+    term = new TerminalClass({
       cursorBlink: true,
       fontSize,
       fontFamily: FONT_FAMILY,
@@ -236,10 +237,10 @@ const DenTerminal = (() => {
       theme: getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane')),
     });
 
-    fitAddon = new FitAddon.FitAddon();
+    fitAddon = new FitAddonClass();
     term.loadAddon(fitAddon);
 
-    selectRenderer(term);
+    if (needsWebgl) selectRenderer(term);
 
     term.open(container);
 

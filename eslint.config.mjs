@@ -22,6 +22,7 @@ export default [
         DenClipboard: 'readonly',
         ClipboardHistory: 'readonly',
         FloatTerminal: 'writable',
+        TerminalAdapter: 'readonly',
         DenSnippet: 'readonly',
         DenDragList: 'readonly',
         DenKeyPresets: 'readonly',
@@ -44,7 +45,7 @@ export default [
       'no-redeclare': ['error', { builtinGlobals: false }],
       'no-unused-vars': ['warn', {
         argsIgnorePattern: '^_',
-        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|FloatTerminal)$',
+        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|FloatTerminal|TerminalAdapter)$',
         caughtErrorsIgnorePattern: '^_',
       }],
       'no-console': 'off',
