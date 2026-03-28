@@ -32,24 +32,80 @@ function xtermThemeToGhostty(theme) {
   return lines.join('\n');
 }
 
-const CDN_FONT_FALLBACKS = [
-  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Regular/JetBrainsMonoNLNerdFontMono-Regular.ttf', label: 'JetBrains Mono NL Nerd Font Regular (CDN)' },
-  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Bold/JetBrainsMonoNLNerdFontMono-Bold.ttf', label: 'JetBrains Mono NL Nerd Font Bold (CDN)' },
-  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Italic/JetBrainsMonoNLNerdFontMono-Italic.ttf', label: 'JetBrains Mono NL Nerd Font Italic (CDN)' },
-  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/BoldItalic/JetBrainsMonoNLNerdFontMono-BoldItalic.ttf', label: 'JetBrains Mono NL Nerd Font Bold Italic (CDN)' },
+/**
+ * Replicate restty's DEFAULT_FONT_SOURCES fallback chain so that custom
+ * user fonts can be prepended WITHOUT losing CJK, symbol, and emoji support.
+ * Source: restty chunk-meqn8xtd.js DEFAULT_FONT_SOURCES
+ */
+const RESTTY_FALLBACK_SOURCES = [
+  // Main monospace — local Nerd Fonts
+  { type: 'local', matchers: ['jetbrainsmono nerd font', 'jetbrains mono nerd font', 'jetbrains mono nl nerd font mono', 'jetbrains mono', 'jetbrainsmono'], label: 'JetBrains Mono Nerd Font Regular (Local)' },
+  { type: 'local', matchers: ['jetbrainsmono nerd font bold', 'jetbrains mono nerd font bold', 'jetbrains mono nl nerd font mono bold', 'jetbrains mono bold', 'jetbrainsmono bold'], label: 'JetBrains Mono Nerd Font Bold (Local)' },
+  { type: 'local', matchers: ['jetbrainsmono nerd font italic', 'jetbrains mono nerd font italic', 'jetbrains mono nl nerd font mono italic', 'jetbrains mono italic', 'jetbrainsmono italic'], label: 'JetBrains Mono Nerd Font Italic (Local)' },
+  { type: 'local', matchers: ['jetbrainsmono nerd font bold italic', 'jetbrains mono nerd font bold italic', 'jetbrains mono nl nerd font mono bold italic', 'jetbrains mono bold italic', 'jetbrainsmono bold italic'], label: 'JetBrains Mono Nerd Font Bold Italic (Local)' },
+  // Main monospace — CDN fallback
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Regular/JetBrainsMonoNLNerdFontMono-Regular.ttf', label: 'JetBrains Mono Nerd Font Regular' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Bold/JetBrainsMonoNLNerdFontMono-Bold.ttf', label: 'JetBrains Mono Nerd Font Bold' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/Italic/JetBrainsMonoNLNerdFontMono-Italic.ttf', label: 'JetBrains Mono Nerd Font Italic' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/JetBrainsMono/NoLigatures/BoldItalic/JetBrainsMonoNLNerdFontMono-BoldItalic.ttf', label: 'JetBrains Mono Nerd Font Bold Italic' },
+  // Symbols — Nerd Font icons
+  { type: 'local', matchers: ['symbols nerd font mono', 'symbols nerd font', 'nerd fonts symbols', 'nerdfontssymbolsonly'], label: 'Symbols Nerd Font (Local)' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/NerdFontsSymbolsOnly/SymbolsNerdFontMono-Regular.ttf' },
+  // Symbols — general
+  { type: 'local', matchers: ['apple symbols', 'applesymbols', 'apple symbols regular'], label: 'Apple Symbols' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@main/unhinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ChiefMikeK/ttf-symbola@master/Symbola.ttf' },
+  // Canadian Aboriginal
+  { type: 'local', matchers: ['noto sans canadian aboriginal', 'notosanscanadianaboriginal', 'euphemia ucas', 'euphemiaucas'], label: 'Noto Sans Canadian Aboriginal / Euphemia UCAS' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@main/unhinted/ttf/NotoSansCanadianAboriginal/NotoSansCanadianAboriginal-Regular.ttf', label: 'Noto Sans Canadian Aboriginal' },
+  // Emoji
+  { type: 'local', matchers: ['apple color emoji', 'applecoloremoji'], label: 'Apple Color Emoji' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji@main/fonts/NotoColorEmoji.ttf' },
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/hfg-gmuend/openmoji@master/font/OpenMoji-black-glyf/OpenMoji-black-glyf.ttf' },
+  // CJK
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf' },
 ];
 
-/** Common Nerd Font local matchers — tried before CDN fallback */
-const NERD_FONT_LOCAL = [
-  { type: 'local', matchers: ['jetbrainsmono nerd font', 'jetbrains mono nerd font', 'jetbrains mono nl nerd font mono'], label: 'JetBrains Mono Nerd Font (Local)' },
-  { type: 'local', matchers: ['fira code nerd font', 'firacode nerd font'], label: 'Fira Code Nerd Font (Local)' },
-  { type: 'local', matchers: ['hack nerd font'], label: 'Hack Nerd Font (Local)' },
-  { type: 'local', matchers: ['meslo lgm nerd font', 'meslo nerd font'], label: 'Meslo Nerd Font (Local)' },
-];
+/** CDN font entries for selectable fonts (setting: restty_font) */
+const CDN_FONT_MAP = {
+  noto: [
+    { type: 'local', matchers: ['noto sans mono', 'notosansmono'], label: 'Noto Sans Mono (Local)' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@main/unhinted/ttf/NotoSansMono/NotoSansMono-Regular.ttf', label: 'Noto Sans Mono Regular' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@main/unhinted/ttf/NotoSansMono/NotoSansMono-Bold.ttf', label: 'Noto Sans Mono Bold' },
+  ],
+  firacode: [
+    { type: 'local', matchers: ['fira code', 'firacode'], label: 'Fira Code (Local)' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/tonsky/FiraCode@6.2/distr/ttf/FiraCode-Regular.ttf', label: 'Fira Code Regular' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/tonsky/FiraCode@6.2/distr/ttf/FiraCode-Bold.ttf', label: 'Fira Code Bold' },
+  ],
+  cascadia: [
+    { type: 'local', matchers: ['cascadia code', 'cascadiacode'], label: 'Cascadia Code (Local)' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/microsoft/cascadia-code@v2404.23/ttf/CascadiaCode.ttf', label: 'Cascadia Code Regular' },
+  ],
+  iosevka: [
+    { type: 'local', matchers: ['iosevka', 'iosevka fixed'], label: 'Iosevka (Local)' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/nicholasgasior/iosevka-font-ttf@main/ttf/iosevka-regular.ttf', label: 'Iosevka Regular' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/nicholasgasior/iosevka-font-ttf@main/ttf/iosevka-bold.ttf', label: 'Iosevka Bold' },
+  ],
+  victor: [
+    { type: 'local', matchers: ['victor mono', 'victormono'], label: 'Victor Mono (Local)' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/rubjo/victor-mono@v1.5.6/public/VictorMono-Regular.ttf', label: 'Victor Mono Regular' },
+    { type: 'url', url: 'https://cdn.jsdelivr.net/gh/rubjo/victor-mono@v1.5.6/public/VictorMono-Bold.ttf', label: 'Victor Mono Bold' },
+  ],
+};
 
-function fontFamilyToSources(fontFamily) {
+/**
+ * Build fontSources array based on restty_font setting.
+ * @param {string|null} resttyFont - Setting value (null = JetBrains Mono default)
+ * @param {string} fontFamily - CSS fontFamily from Den settings (for local fallback)
+ */
+function buildFontSources(resttyFont, fontFamily) {
   const sources = [];
-  // 1. User-configured fonts from Den settings (local)
+  // 1. Selected CDN font (if not default JetBrains Mono)
+  if (resttyFont && CDN_FONT_MAP[resttyFont]) {
+    sources.push(...CDN_FONT_MAP[resttyFont]);
+  }
+  // 2. User-configured CSS fonts from Den settings (local)
   if (fontFamily) {
     const families = fontFamily.split(',').map(f => f.trim().replace(/^["']|["']$/g, ''));
     for (const family of families) {
@@ -58,11 +114,9 @@ function fontFamilyToSources(fontFamily) {
       sources.push({ type: 'local', matchers: [lower], label: family });
     }
   }
-  // 2. Common Nerd Fonts (local)
-  sources.push(...NERD_FONT_LOCAL);
-  // 3. CDN fallback — guaranteed to work even without local fonts
-  sources.push(...CDN_FONT_FALLBACKS);
-  return sources.length > 0 ? sources : undefined;
+  // 3. Full restty fallback chain (JetBrains Mono CDN + symbols + emoji + CJK)
+  sources.push(...RESTTY_FALLBACK_SOURCES);
+  return sources;
 }
 
 /**
@@ -80,7 +134,9 @@ class DenResttyTerminal {
   constructor(options = {}) {
     const { theme, fontFamily, fontSize, scrollback, cursorBlink, ...rest } = options;
     this._fontSize = fontSize || 15;
-    this._fontSources = fontFamilyToSources(fontFamily);
+    // Read restty_font setting (requires DenSettings global)
+    const resttyFont = typeof DenSettings !== 'undefined' ? DenSettings.get('restty_font') : null;
+    this._fontSources = buildFontSources(resttyFont, fontFamily);
     this._theme = theme;
     this._dataListeners = new Set();
     this._resizeListeners = new Set();
@@ -100,15 +156,17 @@ class DenResttyTerminal {
 
     const dataListeners = this._dataListeners;
 
-    // Don't pass custom fontSources. Restty's DEFAULT_FONT_SOURCES includes
-    // JetBrains Mono Nerd Font (CDN), Symbols Nerd Font, Noto Sans CJK (CDN),
-    // Noto Color Emoji, etc. Custom fontSources would replace ALL of these.
+    // Pass fontSources with user's preferred fonts + full restty fallback
+    // chain (monospace CDN, symbols, emoji, CJK). This preserves Den's font
+    // settings while keeping all the unicode coverage from restty's defaults.
     this._restty = new Restty({
       root: parent,
+      fontSources: this._fontSources,
       appOptions: () => ({
         renderer: 'auto',
         autoResize: true,
         fontSize: this._fontSize,
+        fontSizeMode: 'em',
         touchSelectionMode: 'long-press',
         ptyTransport: {
           connect() {},

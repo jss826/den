@@ -23,7 +23,7 @@ const TerminalAdapter = (() => {
 
   async function loadRestty() {
     try {
-      const { DenResttyTerminal, NoopFitAddon } = await import('/vendor/restty/restty-xterm-adapter.js?v=4');
+      const { DenResttyTerminal, NoopFitAddon } = await import('/vendor/restty/restty-xterm-adapter.js?v=9');
       return {
         TerminalClass: DenResttyTerminal,
         FitAddonClass: NoopFitAddon,

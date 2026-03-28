@@ -23,6 +23,7 @@ const DenSettings = (() => {
     theme_files: null,
     mcp_servers: null,
     terminal_renderer: null,
+    restty_font: null,
   };
 
   // All available theme options (value → label)
@@ -306,7 +307,7 @@ const DenSettings = (() => {
 
   const SECTION_KEYS = {
     appearance: ['theme', 'font_size', 'theme_terminal', 'theme_chat', 'theme_files'],
-    terminal: ['terminal_scrollback', 'ssh_agent_forwarding', 'sleep_prevention_mode', 'sleep_prevention_timeout', 'group_remote_sessions', 'terminal_renderer'],
+    terminal: ['terminal_scrollback', 'ssh_agent_forwarding', 'sleep_prevention_mode', 'sleep_prevention_timeout', 'group_remote_sessions', 'terminal_renderer', 'restty_font'],
     keybar: ['keybar_buttons', 'keybar_secondary_buttons'],
     snippets: ['snippets'],
   };
@@ -874,6 +875,20 @@ const DenSettings = (() => {
     const rendererSelect = document.getElementById('setting-terminal-renderer');
     if (rendererSelect) rendererSelect.value = current.terminal_renderer || 'xterm';
 
+    // Show/hide restty font section based on renderer
+    const resttyFontSection = document.getElementById('restty-font-section');
+    const resttyFontSelect = document.getElementById('setting-restty-font');
+    if (resttyFontSection) {
+      resttyFontSection.hidden = (current.terminal_renderer || 'xterm') !== 'restty';
+    }
+    if (resttyFontSelect) resttyFontSelect.value = current.restty_font || '';
+    // Toggle restty font visibility when renderer changes
+    if (rendererSelect && resttyFontSection) {
+      rendererSelect.addEventListener('change', () => {
+        resttyFontSection.hidden = rendererSelect.value !== 'restty';
+      });
+    }
+
     // キーバー設定の初期化（items を deep clone）
     if (current.keybar_buttons && current.keybar_buttons.length > 0) {
       editingKeybarButtons = current.keybar_buttons.map(k => {
@@ -1028,11 +1043,14 @@ const DenSettings = (() => {
           group_remote_sessions: groupRemote,
           chat_input_position: chatInputPosition === 'bottom' ? null : chatInputPosition,
           terminal_renderer: terminalRenderer === 'xterm' ? null : terminalRenderer,
+          restty_font: document.getElementById('setting-restty-font')?.value || null,
         });
         if (!ok) return;
         apply();
-        // Renderer change requires page reload
-        if ((terminalRenderer || 'xterm') !== oldRenderer) {
+        // Renderer or restty font change requires page reload
+        const resttyFont = document.getElementById('setting-restty-font')?.value || null;
+        const oldResttyFont = current.restty_font || null;
+        if ((terminalRenderer || 'xterm') !== oldRenderer || resttyFont !== oldResttyFont) {
           closeModal();
           location.reload();
           return;

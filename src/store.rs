@@ -226,6 +226,8 @@ pub struct Settings {
     pub chat_input_position: Option<String>,
     #[serde(default)]
     pub terminal_renderer: Option<String>,
+    #[serde(default)]
+    pub restty_font: Option<String>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -267,6 +269,7 @@ impl Default for Settings {
             mcp_servers: None,
             chat_input_position: None,
             terminal_renderer: None,
+            restty_font: None,
             version: String::new(),
             hostname: String::new(),
         }

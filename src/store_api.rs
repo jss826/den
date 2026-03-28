@@ -153,6 +153,15 @@ pub async fn put_settings(
     {
         settings.terminal_renderer = None;
     }
+    // Validate restty_font: only known font keys allowed
+    if let Some(ref f) = settings.restty_font
+        && !matches!(
+            f.as_str(),
+            "noto" | "firacode" | "cascadia" | "iosevka" | "victor"
+        )
+    {
+        settings.restty_font = None;
+    }
     // Validate snippets: limit count, label/command length, reject empty
     if let Some(ref snips) = settings.snippets {
         if snips.len() > 100 {
