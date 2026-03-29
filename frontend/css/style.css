@@ -4149,26 +4149,7 @@ pre:hover .code-copy-btn {
   font-size: 0.7rem;
 }
 
-/* モバイル対応 */
-@media (max-width: 640px) {
-  .filer-sidebar {
-    width: 50px;
-    min-width: 50px;
-  }
-  .filer-toolbar {
-    flex-direction: column;
-    padding: 4px;
-  }
-  .filer-search {
-    display: none;
-  }
-  .tree-name {
-    display: none;
-  }
-  .filer-tree-toggle {
-    display: none;
-  }
-}
+/* モバイル対応 — filer sidebar rules are in the 768px block below */
 
 /* === Toast 通知 === */
 
@@ -4425,6 +4406,24 @@ pre:hover .code-copy-btn {
 }
 
 @media (max-width: 768px) {
+  .filer-sidebar {
+    width: 50px;
+    min-width: 50px;
+  }
+  .filer-toolbar {
+    flex-direction: column;
+    padding: 4px;
+  }
+  .filer-search {
+    display: none;
+  }
+  .tree-name {
+    display: none;
+  }
+  .filer-tree-toggle {
+    display: none;
+  }
+
   .sidebar-toggle {
     display: flex;
     align-items: center;
