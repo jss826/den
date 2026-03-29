@@ -2985,6 +2985,7 @@ pre:hover .code-copy-btn {
 
 .tab-icon-btn:hover {
   color: var(--fg);
+  background: var(--hover);
 }
 
 .tab-icon-btn.active {
