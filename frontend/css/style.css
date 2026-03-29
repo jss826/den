@@ -1717,6 +1717,21 @@ pre:hover .code-copy-btn {
   }
 }
 
+/* Touch targets for main tab bar (#89) */
+@media (hover: none) and (pointer: coarse) {
+  .tab {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .tab-icon-btn {
+    min-height: 44px;
+    min-width: 44px;
+    justify-content: center;
+  }
+}
+
 .session-select {
   background: var(--bg);
   border: 1px solid var(--border);
