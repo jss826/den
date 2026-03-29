@@ -1304,10 +1304,13 @@ impl SharedSession {
     /// 強制的に再描画させるためのリサイズ通知（nudge）
     pub async fn nudge_resize(&self, client_id: u64) {
         let mut inner = self.inner.lock().await;
-        if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+        // Use the requesting client's size if found, otherwise fall back to session last_size
+        let (cols, rows) = if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
             client.last_active = std::time::Instant::now();
-        }
-        let (cols, rows) = inner.last_size;
+            (client.cols, client.rows)
+        } else {
+            inner.last_size
+        };
         if cols > 0 && rows > 0 {
             let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
             if let Some(ref tx) = inner.resize_tx {
