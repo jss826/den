@@ -1311,8 +1311,12 @@ impl SharedSession {
         if cols > 0 && rows > 0 {
             let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
             if let Some(ref tx) = inner.resize_tx {
-                let _ = tx.send((nudge_cols, rows));
-                let _ = tx.send((cols, rows));
+                if tx.send((nudge_cols, rows)).is_err() {
+                    tracing::warn!("nudge_resize: failed to send shrink resize ({nudge_cols}x{rows})");
+                }
+                if tx.send((cols, rows)).is_err() {
+                    tracing::warn!("nudge_resize: failed to send restore resize ({cols}x{rows})");
+                }
             }
         }
     }
