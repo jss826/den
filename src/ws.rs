@@ -42,6 +42,8 @@ enum WsCommand {
     Input { data: String },
     #[serde(rename = "ping")]
     Ping,
+    #[serde(rename = "nudge")]
+    Nudge,
 }
 
 /// WebSocket エンドポイント
@@ -197,6 +199,9 @@ async fn handle_socket(
                                     );
                                     break;
                                 }
+                            }
+                            WsCommand::Nudge => {
+                                session.nudge_resize(client_id).await;
                             }
                             WsCommand::Ping => {
                                 // Keepalive — no response needed; the message

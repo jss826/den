@@ -1461,6 +1461,15 @@ const DenTerminal = (() => {
       });
     }
 
+    const redrawBtn = document.getElementById('session-redraw-btn');
+    if (redrawBtn) {
+      redrawBtn.addEventListener('click', () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'nudge' }));
+        }
+      });
+    }
+
     // F016: Guard against timer double-start on visibilitychange
     let sessionRefreshTimer = setInterval(refreshSessionList, 5000);
     document.addEventListener('visibilitychange', () => {

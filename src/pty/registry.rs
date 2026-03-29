@@ -1276,6 +1276,11 @@ impl SharedSession {
     }
 
     /// クライアントのリサイズ通知
+    ///
+    /// リサイズだけではアクティブクライアントを奪わない。
+    /// アクティブ切替は入力（`write_input_from`）でのみ行う。
+    /// これにより、restty のフォント読み込み等で発火するリサイズが
+    /// SSH クライアントからアクティブを奪い、PTY サイズを上書きする問題を防ぐ。
     pub async fn resize(&self, client_id: u64, cols: u16, rows: u16) {
         let mut inner = self.inner.lock().await;
         if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
@@ -1285,7 +1290,10 @@ impl SharedSession {
             client.cols = cols;
             client.rows = rows;
             client.last_active = std::time::Instant::now();
-            inner.active_client_id = Some(client_id);
+            // Only claim active if no one else is active (single client or first resize)
+            if inner.active_client_id.is_none() || inner.active_client_id == Some(client_id) {
+                inner.active_client_id = Some(client_id);
+            }
             // Update activity only on actual size change
             self.last_activity
                 .store(now_epoch_secs(), Ordering::Relaxed);
