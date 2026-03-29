@@ -226,6 +226,11 @@ impl ChatSessionManager {
             cmd.current_dir(home);
         }
 
+        // stdin is piped intentionally to prevent Claude Code from receiving EOF,
+        // which would cause it to exit immediately. The ChildStdin handle is held
+        // by the Child struct (not taken or dropped), keeping the pipe open for the
+        // lifetime of the process. kill_on_drop(true) ensures the child process and
+        // its stdin pipe are cleaned up when the Child is dropped.
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn claude: {e}"))?;
