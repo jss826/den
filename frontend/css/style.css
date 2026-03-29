@@ -31,7 +31,7 @@
   --spinner-track: rgba(255,255,255,0.15);
   --diff-add-bg: rgba(158,206,106,0.15);
   --diff-del-bg: rgba(247,118,142,0.15);
-  --keybar-vertical-top: 80px; /* tab-bar(40px) + session-bar(40px) */
+  --keybar-vertical-top: 40px; /* tab-bar(40px) — pane と同じ高さから開始 */
 }
 
 [data-theme="light"],
@@ -1715,7 +1715,7 @@ pre:hover .code-copy-btn {
   .session-tab-close { opacity: 0.65; }
 
   :root {
-    --keybar-vertical-top: 84px; /* tab-bar(40px) + session-bar(44px) */
+    --keybar-vertical-top: 40px; /* tab-bar(40px) — pane と同じ高さから開始 */
   }
 }
 
@@ -1828,6 +1828,7 @@ pre:hover .code-copy-btn {
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: hidden;
 }
 
 .terminal-empty-state {

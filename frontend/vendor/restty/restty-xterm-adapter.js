@@ -319,6 +319,19 @@ class DenResttyTerminal {
   reset() {
     this.clear();
     this._restty?.sendInput('\x1bc', 'pty');
+    // RIS (\x1bc) resets ghostty/restty theme to default — re-apply
+    this._reapplyTheme();
+  }
+
+  _reapplyTheme() {
+    if (!this._theme) return;
+    const ghosttyTheme = xtermThemeToGhostty(this._theme);
+    if (ghosttyTheme) {
+      try {
+        const parsed = parseGhosttyTheme(ghosttyTheme);
+        this._restty?.applyTheme(parsed, 'inline');
+      } catch (_) {}
+    }
   }
 
   resize(cols, rows) {
@@ -335,6 +348,7 @@ class DenResttyTerminal {
     return new Proxy({ fontSize: this._fontSize }, {
       set(_target, prop, value) {
         if (prop === 'theme') {
+          self._theme = value;
           const ghosttyTheme = xtermThemeToGhostty(value);
           if (ghosttyTheme) {
             try {
@@ -356,6 +370,7 @@ class DenResttyTerminal {
   set options(next) {
     if (!next) return;
     if (next.theme) {
+      this._theme = next.theme;
       const ghosttyTheme = xtermThemeToGhostty(next.theme);
       if (ghosttyTheme) {
         try {
