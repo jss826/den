@@ -60249,13 +60249,15 @@ function createLifecycleCanvasHandlers(deps) {
   }
   function focusTypingInput() {
     const canvas = deps.getCanvas();
-    canvas.focus({ preventScroll: true });
-    if (!deps.imeInput)
+    if (!deps.imeInput) {
+      canvas.focus({ preventScroll: true });
       return;
+    }
     const focusImeInput = () => {
       deps.imeInput?.focus({ preventScroll: true });
     };
     focusImeInput();
+    deps.setIsFocused(true);
     if (typeof document !== "undefined" && document.activeElement !== deps.imeInput) {
       requestAnimationFrame(() => {
         focusImeInput();

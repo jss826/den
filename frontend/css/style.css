@@ -2307,6 +2307,23 @@ pre:hover .code-copy-btn {
   min-width: 32px;
   border-radius: 4px;
 }
+/* Touch-friendly vertical keybar buttons */
+@media (pointer: coarse) {
+  #keybar[data-orientation="vertical"] .key-btn {
+    min-height: 44px;
+    padding: 6px 10px;
+    font-size: 0.82rem;
+    min-width: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #keybar[data-orientation="vertical"] .keybar-secondary-toggle,
+  #keybar[data-orientation="vertical"] .keybar-orientation-btn,
+  #keybar[data-orientation="vertical"] .keybar-collapse-btn {
+    height: 36px;
+  }
+}
 
 .key-btn {
   flex-shrink: 0;
