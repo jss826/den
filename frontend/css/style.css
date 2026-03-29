@@ -885,6 +885,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 }
 .chat-session-item.dead {
   opacity: 0.5;
+  color: var(--muted);
 }
 .chat-sidebar-btn {
   padding: 2px 8px;
@@ -1446,6 +1447,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 }
 .chat-send-btn:disabled {
   opacity: 0.5;
+  color: var(--muted);
   cursor: not-allowed;
 }
 
@@ -1653,7 +1655,7 @@ pre:hover .code-copy-btn {
   background: var(--bg);
   border-color: var(--border);
 }
-.session-tab.dead { opacity: 0.5; }
+.session-tab.dead { opacity: 0.5; color: var(--muted); }
 .session-tab.dragging { opacity: 0.4; }
 .session-tab.drag-over-left { box-shadow: -2px 0 0 0 var(--accent); }
 .session-tab.drag-over-right { box-shadow: 2px 0 0 0 var(--accent); }
