@@ -51,6 +51,8 @@ const RESTTY_FALLBACK_SOURCES = [
   // Symbols — Nerd Font icons
   { type: 'local', matchers: ['symbols nerd font mono', 'symbols nerd font', 'nerd fonts symbols', 'nerdfontssymbolsonly'], label: 'Symbols Nerd Font (Local)' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/NerdFontsSymbolsOnly/SymbolsNerdFontMono-Regular.ttf' },
+  // CJK — Japanese variant BEFORE symbols to prevent Symbola from hijacking hiragana
+  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf' },
   // Symbols — general
   { type: 'local', matchers: ['apple symbols', 'applesymbols', 'apple symbols regular'], label: 'Apple Symbols' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@main/unhinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf' },
@@ -62,8 +64,6 @@ const RESTTY_FALLBACK_SOURCES = [
   { type: 'local', matchers: ['apple color emoji', 'applecoloremoji'], label: 'Apple Color Emoji' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/googlefonts/noto-emoji@main/fonts/NotoColorEmoji.ttf' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/hfg-gmuend/openmoji@master/font/OpenMoji-black-glyf/OpenMoji-black-glyf.ttf' },
-  // CJK — Japanese variant for better kana/kanji glyph shapes
-  { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf' },
 ];
 
 /** CDN font entries for selectable fonts (setting: restty_font) */
@@ -202,6 +202,7 @@ class DenResttyTerminal {
         fontSize: this._fontSize,
         fontSizeMode: 'em',
         fontHinting: true,
+        fontHintTarget: 'normal',
         touchSelectionMode: 'long-press',
         ptyTransport: {
           connect() {},

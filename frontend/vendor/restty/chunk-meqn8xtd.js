@@ -1719,7 +1719,7 @@ function createProgram(gl, vertSrc, fragSrc) {
   return program;
 }
 function initWebGL(canvas) {
-  const gl = canvas.getContext("webgl2", { antialias: false, alpha: false });
+  const gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
   if (!gl)
     return null;
   const rectProgram = createProgram(gl, RECT_SHADER_GL_VERT, RECT_SHADER_GL_FRAG);
