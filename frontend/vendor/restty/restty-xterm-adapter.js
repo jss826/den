@@ -411,11 +411,15 @@ class DenResttyTerminal {
   }
 }
 
-/** No-op FitAddon — restty has built-in auto-resize */
+/** FitAddon for restty — delegates to restty's built-in updateSize */
 class NoopFitAddon {
-  activate() {}
-  dispose() {}
-  fit() {}
+  _term = null;
+  activate(term) { this._term = term; }
+  dispose() { this._term = null; }
+  fit() {
+    // Force restty to recalculate grid from current container size
+    this._term?.restty?.updateSize(true);
+  }
   proposeDimensions() { return null; }
 }
 

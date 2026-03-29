@@ -1830,6 +1830,13 @@ pre:hover .code-copy-btn {
   position: relative;
   overflow: hidden;
 }
+/* Force restty root to exactly match container via absolute positioning.
+   height:100% in flex context can over-report, causing bottom rows to be
+   clipped by overflow:hidden while restty still counts them in its grid. */
+#terminal-container > .restty-pane-root {
+  position: absolute;
+  inset: 0;
+}
 
 .terminal-empty-state {
   display: flex;
