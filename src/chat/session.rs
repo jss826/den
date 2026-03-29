@@ -216,7 +216,7 @@ impl ChatSessionManager {
             .arg("--permission-mode")
             .arg(permission_mode)
             .arg("--verbose")
-            .stdin(std::process::Stdio::null())
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
