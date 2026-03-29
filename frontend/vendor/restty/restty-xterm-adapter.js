@@ -172,6 +172,7 @@ class DenResttyTerminal {
     const resttyFont = typeof DenSettings !== 'undefined' ? DenSettings.get('restty_font') : null;
     this._fontSources = buildFontSources(resttyFont, fontFamily);
     this._theme = theme;
+    this._parsedTheme = null;
     this._dataListeners = new Set();
     this._resizeListeners = new Set();
     this._restty = null;
@@ -231,17 +232,10 @@ class DenResttyTerminal {
       }),
     });
 
-    // Apply initial theme
+    // Apply initial theme (parse + cache + apply)
     if (this._theme) {
-      const ghosttyTheme = xtermThemeToGhostty(this._theme);
-      if (ghosttyTheme) {
-        try {
-          const parsed = parseGhosttyTheme(ghosttyTheme);
-          this._restty.applyTheme(parsed, 'inline');
-        } catch (e) {
-          console.warn('[restty] Failed to apply theme:', e);
-        }
-      }
+      this._updateParsedTheme(this._theme);
+      this._applyCurrentTheme();
     }
 
     // Fallback: flush writes after 3s if onBackend never fires
@@ -319,18 +313,33 @@ class DenResttyTerminal {
   reset() {
     this.clear();
     this._restty?.sendInput('\x1bc', 'pty');
-    // RIS (\x1bc) resets ghostty/restty theme to default — re-apply
-    this._reapplyTheme();
+    // RIS (\x1bc) resets ghostty/restty theme to default — delay re-apply
+    // to avoid race with WASM processing the RIS sequence
+    setTimeout(() => this._applyCurrentTheme(), 50);
   }
 
-  _reapplyTheme() {
-    if (!this._theme) return;
-    const ghosttyTheme = xtermThemeToGhostty(this._theme);
+  /** Cache and apply parsed theme. Reused by reset(), options setter, and open(). */
+  _updateParsedTheme(theme) {
+    this._theme = theme;
+    const ghosttyTheme = xtermThemeToGhostty(theme);
     if (ghosttyTheme) {
       try {
-        const parsed = parseGhosttyTheme(ghosttyTheme);
-        this._restty?.applyTheme(parsed, 'inline');
-      } catch (_) {}
+        this._parsedTheme = parseGhosttyTheme(ghosttyTheme);
+      } catch (e) {
+        console.warn('[restty] Failed to parse theme:', e);
+        this._parsedTheme = null;
+      }
+    } else {
+      this._parsedTheme = null;
+    }
+  }
+
+  _applyCurrentTheme() {
+    if (!this._parsedTheme) return;
+    try {
+      this._restty?.applyTheme(this._parsedTheme, 'inline');
+    } catch (e) {
+      console.warn('[restty] Failed to apply theme:', e);
     }
   }
 
@@ -348,14 +357,8 @@ class DenResttyTerminal {
     return new Proxy({ fontSize: this._fontSize }, {
       set(_target, prop, value) {
         if (prop === 'theme') {
-          self._theme = value;
-          const ghosttyTheme = xtermThemeToGhostty(value);
-          if (ghosttyTheme) {
-            try {
-              const parsed = parseGhosttyTheme(ghosttyTheme);
-              self._restty?.applyTheme(parsed, 'inline');
-            } catch (_) {}
-          }
+          self._updateParsedTheme(value);
+          self._applyCurrentTheme();
         } else if (prop === 'fontSize') {
           self._fontSize = value;
           try { self._restty?.setFontSize(value); } catch (_) {}
@@ -370,14 +373,8 @@ class DenResttyTerminal {
   set options(next) {
     if (!next) return;
     if (next.theme) {
-      this._theme = next.theme;
-      const ghosttyTheme = xtermThemeToGhostty(next.theme);
-      if (ghosttyTheme) {
-        try {
-          const parsed = parseGhosttyTheme(ghosttyTheme);
-          this._restty?.applyTheme(parsed, 'inline');
-        } catch (_) {}
-      }
+      this._updateParsedTheme(next.theme);
+      this._applyCurrentTheme();
     }
     if (next.fontSize) {
       this._fontSize = next.fontSize;
