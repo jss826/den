@@ -2226,8 +2226,9 @@ pre:hover .code-copy-btn {
 
 #keybar[data-orientation="vertical"] .keybar-drag-handle {
   width: auto;
-  height: 28px;
+  height: 20px;
   cursor: ew-resize;
+  font-size: 0.9rem;
 }
 
 #keybar[data-orientation="vertical"] .keybar-drag-handle:active {
@@ -2247,8 +2248,9 @@ pre:hover .code-copy-btn {
 #keybar[data-orientation="vertical"] .keybar-row {
   flex-direction: column;
   width: auto;
-  padding: 0 4px 4px 4px;
+  padding: 0 3px 3px 3px;
   min-height: 0;
+  gap: 2px;
 }
 
 #keybar[data-orientation="vertical"] .keybar-buttons,
@@ -2257,32 +2259,45 @@ pre:hover .code-copy-btn {
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
+  gap: 2px;
 }
 
 #keybar[data-orientation="vertical"] .keybar-secondary {
-  padding: 0 4px 4px 4px;
+  padding: 0 3px 3px 3px;
 }
 
 #keybar[data-orientation="vertical"] .keybar-controls {
   flex-direction: column;
   margin-left: 0;
-  margin-top: 4px;
+  margin-top: 2px;
   padding-left: 0;
-  padding-top: 8px;
+  padding-top: 4px;
   border-left: none;
   border-top: 1px solid var(--border);
+  gap: 1px;
 }
 
 #keybar[data-orientation="vertical"] .keybar-secondary-toggle {
   width: 100%;
+  height: 28px;
 }
 
 #keybar[data-orientation="vertical"] .keybar-orientation-btn {
   width: 100%;
+  height: 28px;
 }
 
 #keybar[data-orientation="vertical"] .keybar-collapse-btn {
   width: 100%;
+  height: 28px;
+}
+
+/* Compact buttons in vertical mode */
+#keybar[data-orientation="vertical"] .key-btn {
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  min-width: 32px;
+  border-radius: 4px;
 }
 
 .key-btn {
