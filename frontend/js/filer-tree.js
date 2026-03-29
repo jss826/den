@@ -107,6 +107,7 @@ const FilerTree = (() => {
       const name = document.createElement('span');
       name.className = `tree-name${entry.is_dir ? ' dir' : ''}`;
       name.textContent = entry.name;
+      name.title = entry.name;
       row.appendChild(name);
 
       // Drag support for files (used by Chat attach)
