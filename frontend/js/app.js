@@ -451,6 +451,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function initSidebarToggles() {
     setupSidebarToggle('.filer-sidebar-toggle', '.filer-sidebar', '.filer-layout');
+    setupSidebarToggle('.chat-sidebar-toggle', '.chat-sidebar', '.chat-layout');
   }
 
   function setupSidebarToggle(toggleSel, sidebarSel, layoutSel) {
