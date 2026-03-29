@@ -2427,6 +2427,13 @@ pre:hover .code-copy-btn {
   overflow-y: auto;
 }
 
+@media (max-width: 600px) {
+  .modal-content {
+    max-width: 95%;
+    padding: 16px;
+  }
+}
+
 .modal-content h3 {
   color: var(--fg);
   margin-bottom: 16px;
