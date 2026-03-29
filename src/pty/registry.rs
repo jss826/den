@@ -1297,8 +1297,8 @@ impl SharedSession {
             // Update activity only on actual size change
             self.last_activity
                 .store(now_epoch_secs(), Ordering::Relaxed);
+            SessionRegistry::recalculate_size(&mut inner);
         }
-        SessionRegistry::recalculate_size(&mut inner);
     }
 
     /// 強制的に再描画させるためのリサイズ通知（nudge）
