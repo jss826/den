@@ -38,6 +38,10 @@ pub struct ChatSession {
 struct ChatProcess {
     child: tokio::process::Child,
     config_path: PathBuf,
+    /// Background tasks that read stdout/stderr and forward lines to tracing.
+    /// Held so cleanup can abort them if the pipes haven't closed yet.
+    stdout_task: Option<tokio::task::JoinHandle<()>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Request to create a new chat session.
@@ -113,8 +117,8 @@ impl ChatSessionManager {
         });
 
         // Generate MCP config and start Claude Code
-        let (child, config_path) = self.start_claude(&id, &token, permission_mode).await?;
-        *session.process.lock().await = Some(ChatProcess { child, config_path });
+        let process = self.start_claude(&id, &token, permission_mode).await?;
+        *session.process.lock().await = Some(process);
 
         sessions.insert(id, Arc::clone(&session));
         tracing::info!(
@@ -178,7 +182,7 @@ impl ChatSessionManager {
         session_id: &str,
         token: &str,
         permission_mode: &str,
-    ) -> Result<(tokio::process::Child, PathBuf), String> {
+    ) -> Result<ChatProcess, String> {
         let den_binary =
             std::env::current_exe().map_err(|e| format!("Failed to get current exe path: {e}"))?;
 
@@ -217,8 +221,8 @@ impl ChatSessionManager {
             .arg(permission_mode)
             .arg("--verbose")
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
         // Start in user home directory
@@ -231,7 +235,11 @@ impl ChatSessionManager {
         // by the Child struct (not taken or dropped), keeping the pipe open for the
         // lifetime of the process. kill_on_drop(true) ensures the child process and
         // its stdin pipe are cleaned up when the Child is dropped.
-        let child = cmd
+        //
+        // stdout/stderr are piped so diagnostic output from Claude Code is visible
+        // through tracing. Previously they were Stdio::null(), which made it
+        // impossible to debug why sessions became unresponsive (#101).
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn claude: {e}"))?;
 
@@ -240,8 +248,76 @@ impl ChatSessionManager {
             child.id()
         );
 
-        Ok((child, config_path))
+        let stdout_task = child
+            .stdout
+            .take()
+            .map(|stdout| spawn_log_task(session_id, "stdout", stdout, false));
+        let stderr_task = child
+            .stderr
+            .take()
+            .map(|stderr| spawn_log_task(session_id, "stderr", stderr, true));
+
+        Ok(ChatProcess {
+            child,
+            config_path,
+            stdout_task,
+            stderr_task,
+        })
     }
+}
+
+/// Spawn a task that reads lines from a child pipe and forwards them to tracing.
+///
+/// `is_err` selects WARN (stderr) vs INFO (stdout) severity. The task exits
+/// naturally when the pipe closes (child exits) or when aborted via
+/// `JoinHandle::abort` during cleanup.
+fn spawn_log_task<R>(
+    session_id: &str,
+    stream_name: &'static str,
+    pipe: R,
+    is_err: bool,
+) -> tokio::task::JoinHandle<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let session = session_id.to_string();
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(pipe).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if is_err {
+                        tracing::warn!(
+                            chat_session = %session,
+                            stream = stream_name,
+                            "[claude] {line}"
+                        );
+                    } else {
+                        tracing::info!(
+                            chat_session = %session,
+                            stream = stream_name,
+                            "[claude] {line}"
+                        );
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(
+                        chat_session = %session,
+                        stream = stream_name,
+                        "claude pipe read error: {e}"
+                    );
+                    break;
+                }
+            }
+        }
+        tracing::debug!(
+            chat_session = %session,
+            stream = stream_name,
+            "claude log stream closed"
+        );
+    })
 }
 
 impl ChatSession {
@@ -264,6 +340,14 @@ impl ChatSession {
         if let Some(mut p) = proc.take() {
             let _ = p.child.kill().await;
             let _ = p.child.wait().await;
+            // Log tasks should exit naturally once the pipes close after kill,
+            // but abort them defensively to avoid leaking tasks on unusual exits.
+            if let Some(task) = p.stdout_task.take() {
+                task.abort();
+            }
+            if let Some(task) = p.stderr_task.take() {
+                task.abort();
+            }
             // Clean up temp config file
             let _ = tokio::fs::remove_file(&p.config_path).await;
             tracing::debug!(
