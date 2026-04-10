@@ -262,6 +262,19 @@ const DenChat = (() => {
 
     // Re-render session list to update active state
     renderSessionList();
+
+    // On mobile, collapse the sidebar after choosing a session
+    closeMobileSidebar();
+  }
+
+  function closeMobileSidebar() {
+    if (window.innerWidth > 768) return;
+    const sidebar = document.getElementById('chat-sidebar');
+    if (!sidebar || !sidebar.classList.contains('sidebar-expanded')) return;
+    sidebar.classList.remove('sidebar-expanded');
+    const layout = sidebar.closest('.chat-layout');
+    const overlay = layout && layout.querySelector('.sidebar-overlay');
+    if (overlay) overlay.classList.remove('visible');
   }
 
   function updateInputState(enabled) {

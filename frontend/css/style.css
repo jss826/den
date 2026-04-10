@@ -1531,36 +1531,51 @@ pre:hover .code-copy-btn {
     min-width: 44px;
   }
   .chat-sidebar {
-    width: 0;
-    min-width: 0;
-    border-right: none;
-    overflow: visible;
-    position: relative;
-    z-index: 51;
+    width: 50px;
+    min-width: 50px;
   }
-  .chat-sidebar > *:not(.chat-sidebar-toggle) {
+  .chat-sidebar-header {
+    padding: 1px;
+    justify-content: center;
+  }
+  .chat-sidebar-header > span {
     display: none;
   }
-  .chat-sidebar > .chat-sidebar-toggle {
-    position: absolute;
-    left: 0;
-    top: 0;
-    z-index: 52;
+  .chat-session-list {
+    display: none;
+  }
+  .chat-sidebar-btn {
+    box-sizing: border-box;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .chat-sidebar.sidebar-expanded {
+    width: 260px;
+    min-width: 260px;
     position: absolute;
-    z-index: 50;
-    width: 280px;
-    min-width: 280px;
-    height: 100%;
-    overflow: hidden;
-    border-right: 1px solid var(--border, #333);
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 150;
   }
-  .chat-sidebar.sidebar-expanded > * {
-    display: flex;
+  .chat-sidebar.sidebar-expanded .chat-sidebar-header {
+    padding: 6px 8px;
+    justify-content: space-between;
   }
-  .chat-sidebar.sidebar-expanded > .chat-session-list {
+  .chat-sidebar.sidebar-expanded .chat-sidebar-header > span {
+    display: inline;
+  }
+  .chat-sidebar.sidebar-expanded .chat-session-list {
     display: block;
+  }
+  .chat-sidebar.sidebar-expanded .chat-sidebar-btn {
+    width: auto;
+    height: auto;
+    padding: 2px 8px;
   }
   .chat-bar-btn {
     min-height: 44px;
@@ -4469,6 +4484,7 @@ pre:hover .code-copy-btn {
     align-items: center;
     justify-content: center;
     width: 100%;
+    min-height: 48px;
     background: var(--hover);
     border: none;
     border-bottom: 1px solid var(--border);
