@@ -1305,17 +1305,20 @@ impl SharedSession {
     pub async fn nudge_resize(&self, client_id: u64) {
         let mut inner = self.inner.lock().await;
         // Use the requesting client's size if found, otherwise fall back to session last_size
-        let (cols, rows) = if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
-            client.last_active = std::time::Instant::now();
-            (client.cols, client.rows)
-        } else {
-            inner.last_size
-        };
+        let (cols, rows) =
+            if let Some(client) = inner.clients.iter_mut().find(|c| c.id == client_id) {
+                client.last_active = std::time::Instant::now();
+                (client.cols, client.rows)
+            } else {
+                inner.last_size
+            };
         if cols > 0 && rows > 0 {
             let nudge_cols = if cols > 1 { cols - 1 } else { cols + 1 };
             if let Some(ref tx) = inner.resize_tx {
                 if tx.send((nudge_cols, rows)).is_err() {
-                    tracing::warn!("nudge_resize: failed to send shrink resize ({nudge_cols}x{rows})");
+                    tracing::warn!(
+                        "nudge_resize: failed to send shrink resize ({nudge_cols}x{rows})"
+                    );
                 }
                 if tx.send((cols, rows)).is_err() {
                     tracing::warn!("nudge_resize: failed to send restore resize ({cols}x{rows})");
