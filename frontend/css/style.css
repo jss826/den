@@ -883,6 +883,30 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   color: var(--dim, #888);
   white-space: nowrap;
 }
+.chat-session-cwd {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--muted, #888);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.chat-cwd-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+.chat-cwd-row .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+.chat-cwd-row .modal-btn {
+  white-space: nowrap;
+  font-size: 12px;
+}
 .chat-session-item.dead {
   opacity: 0.5;
   color: var(--muted);

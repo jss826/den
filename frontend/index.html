@@ -153,6 +153,14 @@
             <option value="bypassPermissions">Bypass (auto-approve everything)</option>
           </select>
         </div>
+        <div class="modal-section">
+          <label for="chat-cwd-input">Working Directory</label>
+          <div class="chat-cwd-row">
+            <input type="text" id="chat-cwd-input" class="settings-input" placeholder="Leave empty for home directory" autocomplete="off" spellcheck="false" />
+            <button type="button" id="chat-cwd-use-filer" class="modal-btn" title="Use the folder currently open in the Files tab">Use current folder</button>
+          </div>
+          <span class="setting-hint">Absolute path where Claude Code will run. Leave empty to start in the user home directory.</span>
+        </div>
         <div class="modal-actions">
           <button id="chat-session-cancel" class="modal-btn">Cancel</button>
           <button id="chat-session-create" class="modal-btn primary">Create</button>

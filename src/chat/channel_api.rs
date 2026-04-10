@@ -27,7 +27,7 @@ pub async fn create_session(
 ) -> Response {
     match state
         .chat_sessions
-        .create_session(&req.permission_mode)
+        .create_session(&req.permission_mode, req.cwd.as_deref())
         .await
     {
         Ok(session) => {
@@ -36,6 +36,7 @@ pub async fn create_session(
                 permission_mode: session.permission_mode.clone(),
                 created_at: session.created_at,
                 alive: session.is_alive().await,
+                cwd: session.cwd.clone(),
             };
             (StatusCode::CREATED, Json(info)).into_response()
         }

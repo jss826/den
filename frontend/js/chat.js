@@ -12,7 +12,7 @@
  * - POST /api/channel/verdict     — approve/deny permission request
  * - WS   /api/channel/ws?session= — receive replies + permission requests
  */
-/* global DenMarkdown */
+/* global DenMarkdown, DenFiler */
 const DenChat = (() => {
   // ── DOM refs ──
   let messagesEl = null;
@@ -24,6 +24,8 @@ const DenChat = (() => {
   let newSessionBtn = null;
   let newSessionModal = null;
   let permissionModeSelect = null;
+  let cwdInput = null;
+  let cwdUseFilerBtn = null;
 
   // ── State ──
   let ws = null;
@@ -78,6 +80,8 @@ const DenChat = (() => {
     newSessionBtn = document.getElementById('chat-new-session-btn');
     newSessionModal = document.getElementById('chat-new-session-modal');
     permissionModeSelect = document.getElementById('chat-permission-mode');
+    cwdInput = document.getElementById('chat-cwd-input');
+    cwdUseFilerBtn = document.getElementById('chat-cwd-use-filer');
 
     sendBtn.addEventListener('click', handleSend);
     inputEl.addEventListener('keydown', (e) => {
@@ -102,6 +106,22 @@ const DenChat = (() => {
     const createBtn = document.getElementById('chat-session-create');
     if (cancelBtn) cancelBtn.addEventListener('click', () => { newSessionModal.hidden = true; });
     if (createBtn) createBtn.addEventListener('click', handleCreateSession);
+
+    if (cwdUseFilerBtn) {
+      cwdUseFilerBtn.addEventListener('click', () => {
+        // Pull the directory currently open in the Files tab, if the filer
+        // module exposes it. Falls back gracefully when Files hasn't resolved
+        // a real path yet (e.g. still showing "~").
+        const dir = typeof DenFiler !== 'undefined' && DenFiler.getCurrentDir
+          ? DenFiler.getCurrentDir()
+          : null;
+        if (!dir || dir === '~' || dir === '/') {
+          appendSystemMessage('Open a folder in the Files tab first to use it here.');
+          return;
+        }
+        if (cwdInput) cwdInput.value = dir;
+      });
+    }
 
     // Remote connection awareness
     document.addEventListener('den:remote-changed', (e) => {
@@ -153,6 +173,19 @@ const DenChat = (() => {
     }
   }
 
+  /**
+   * Return the last path segment (trailing directory name) of an absolute
+   * path. Handles both POSIX (`/`) and Windows (`\`) separators, and strips a
+   * single trailing separator. Falls back to the full path if no segment
+   * can be extracted (e.g. a bare drive letter like `C:\`).
+   */
+  function lastPathSegment(path) {
+    if (!path) return '';
+    const cleaned = path.replace(/[\\/]+$/, '');
+    const match = cleaned.match(/[^\\/]+$/);
+    return match ? match[0] : path;
+  }
+
   function renderSessionList() {
     if (!sessionListEl) return;
     sessionListEl.innerHTML = '';
@@ -174,13 +207,21 @@ const DenChat = (() => {
       const label = document.createElement('span');
       label.className = 'chat-session-label';
       label.textContent = s.id.slice(0, 8);
-      label.title = `${s.permission_mode} — ${s.id}`;
+      const cwdFull = s.cwd || '';
+      label.title = `${s.permission_mode}${cwdFull ? ` — ${cwdFull}` : ''} — ${s.id}`;
 
       const badge = document.createElement('span');
       badge.className = 'chat-session-badge';
       badge.textContent = s.alive ? s.permission_mode : 'stopped';
 
       item.appendChild(label);
+      if (cwdFull) {
+        const cwdBadge = document.createElement('span');
+        cwdBadge.className = 'chat-session-cwd';
+        cwdBadge.textContent = lastPathSegment(cwdFull);
+        cwdBadge.title = cwdFull;
+        item.appendChild(cwdBadge);
+      }
       item.appendChild(badge);
       if (s.alive) {
         item.addEventListener('click', () => switchSession(s.id));
@@ -198,16 +239,20 @@ const DenChat = (() => {
 
   async function handleCreateSession() {
     const mode = permissionModeSelect ? permissionModeSelect.value : 'default';
+    const cwd = cwdInput ? cwdInput.value.trim() : '';
     newSessionModal.hidden = true;
 
-    appendSystemMessage(`Creating session (${mode})...`);
+    appendSystemMessage(`Creating session (${mode})${cwd ? ` in ${cwd}` : ''}...`);
+
+    const body = { permission_mode: mode };
+    if (cwd) body.cwd = cwd;
 
     try {
       const resp = await fetch(`${getApiBase()}/channel/sessions`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ permission_mode: mode }),
+        body: JSON.stringify(body),
       });
 
       if (!resp.ok) {
@@ -217,7 +262,8 @@ const DenChat = (() => {
       }
 
       const session = await resp.json();
-      appendSystemMessage(`Session created: ${session.id.slice(0, 8)}`);
+      appendSystemMessage(`Session created: ${session.id.slice(0, 8)} (${session.cwd})`);
+      if (cwdInput) cwdInput.value = '';
       await fetchSessions();
       switchSession(session.id);
     } catch (err) {

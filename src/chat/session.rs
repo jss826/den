@@ -8,7 +8,7 @@ use super::channel_state::ChannelState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -31,6 +31,9 @@ pub struct ChatSession {
     pub channel_state: ChannelState,
     pub permission_mode: String,
     pub created_at: DateTime<Utc>,
+    /// Resolved working directory for the Claude Code process.
+    /// Displayed to the UI so users can tell sessions apart by project.
+    pub cwd: String,
     /// Claude Code process (None if not yet started or already stopped).
     process: Mutex<Option<ChatProcess>>,
 }
@@ -49,6 +52,10 @@ struct ChatProcess {
 pub struct CreateSessionRequest {
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    /// Optional working directory for the Claude Code process.
+    /// If None or empty, falls back to the user's home directory.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 fn default_permission_mode() -> String {
@@ -62,6 +69,7 @@ pub struct ChatSessionInfo {
     pub permission_mode: String,
     pub created_at: DateTime<Utc>,
     pub alive: bool,
+    pub cwd: String,
 }
 
 impl ChatSessionManager {
@@ -73,10 +81,20 @@ impl ChatSessionManager {
     }
 
     /// Create a new chat session and start Claude Code.
-    pub async fn create_session(&self, permission_mode: &str) -> Result<Arc<ChatSession>, String> {
+    ///
+    /// `cwd` is an optional working directory. If `None` or empty, the Claude
+    /// Code process is started in the user's home directory.
+    pub async fn create_session(
+        &self,
+        permission_mode: &str,
+        cwd: Option<&str>,
+    ) -> Result<Arc<ChatSession>, String> {
         if !VALID_PERMISSION_MODES.contains(&permission_mode) {
             return Err(format!("Invalid permission mode: {permission_mode}"));
         }
+
+        // Resolve cwd before taking any locks so validation errors fail fast.
+        let resolved_cwd = resolve_cwd(cwd)?;
 
         // Clean up dead sessions first (snapshot to avoid holding lock during is_alive)
         let snapshot: Vec<(String, Arc<ChatSession>)> = {
@@ -108,23 +126,28 @@ impl ChatSessionManager {
         let channel_state = ChannelState::new();
         let token = channel_state.token().to_string();
 
+        let cwd_display = resolved_cwd.to_string_lossy().into_owned();
         let session = Arc::new(ChatSession {
             id: id.clone(),
             channel_state,
             permission_mode: permission_mode.to_string(),
             created_at: Utc::now(),
+            cwd: cwd_display.clone(),
             process: Mutex::new(None),
         });
 
         // Generate MCP config and start Claude Code
-        let process = self.start_claude(&id, &token, permission_mode).await?;
+        let process = self
+            .start_claude(&id, &token, permission_mode, &resolved_cwd)
+            .await?;
         *session.process.lock().await = Some(process);
 
         sessions.insert(id, Arc::clone(&session));
         tracing::info!(
-            "Chat session created: {} (permission_mode={})",
-            session.id,
-            permission_mode
+            chat_session = %session.id,
+            permission_mode = permission_mode,
+            cwd = %cwd_display,
+            "Chat session created"
         );
         Ok(session)
     }
@@ -155,6 +178,7 @@ impl ChatSessionManager {
                 permission_mode: session.permission_mode.clone(),
                 created_at: session.created_at,
                 alive: session.is_alive().await,
+                cwd: session.cwd.clone(),
             });
         }
         result
@@ -182,6 +206,7 @@ impl ChatSessionManager {
         session_id: &str,
         token: &str,
         permission_mode: &str,
+        cwd: &Path,
     ) -> Result<ChatProcess, String> {
         let den_binary =
             std::env::current_exe().map_err(|e| format!("Failed to get current exe path: {e}"))?;
@@ -225,10 +250,9 @@ impl ChatSessionManager {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        // Start in user home directory
-        if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-            cmd.current_dir(home);
-        }
+        // Working directory is resolved and validated by resolve_cwd() before we
+        // get here, so it is always an absolute, existing directory.
+        cmd.current_dir(cwd);
 
         // stdin is piped intentionally to prevent Claude Code from receiving EOF,
         // which would cause it to exit immediately. The ChildStdin handle is held
@@ -263,6 +287,52 @@ impl ChatSessionManager {
             stdout_task,
             stderr_task,
         })
+    }
+}
+
+/// Resolve the working directory for a new chat session.
+///
+/// - If `input` is `None`, empty, or whitespace-only, falls back to the user's
+///   home directory (`USERPROFILE` on Windows, `HOME` elsewhere).
+/// - Otherwise the path must be absolute, must exist, and must be a directory.
+///   It is canonicalized to catch symlinks / case differences, with the
+///   Windows `\\?\` verbatim prefix stripped so downstream display / logging
+///   stay readable.
+fn resolve_cwd(input: Option<&str>) -> Result<PathBuf, String> {
+    let trimmed = input.map(str::trim).filter(|s| !s.is_empty());
+
+    if let Some(raw) = trimmed {
+        let candidate = PathBuf::from(raw);
+        if !candidate.is_absolute() {
+            return Err(format!("cwd must be an absolute path: {raw}"));
+        }
+        let metadata = std::fs::metadata(&candidate)
+            .map_err(|e| format!("cwd does not exist or is not accessible: {raw} ({e})"))?;
+        if !metadata.is_dir() {
+            return Err(format!("cwd is not a directory: {raw}"));
+        }
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|e| format!("failed to canonicalize cwd: {raw} ({e})"))?;
+        return Ok(strip_verbatim_prefix(&canonical));
+    }
+
+    // Fall back to HOME.
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "no cwd provided and neither USERPROFILE nor HOME is set".to_string())?;
+    Ok(PathBuf::from(home))
+}
+
+/// Remove the Windows `\\?\` verbatim prefix from a canonicalized path.
+/// On non-Windows this is a no-op, but the prefix check is cheap and keeps the
+/// function cross-platform.
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -355,5 +425,116 @@ impl ChatSession {
                 p.config_path.display()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    /// Override USERPROFILE and HOME for the duration of the closure, then
+    /// restore the previous values. Callers MUST mark the test `#[serial]`
+    /// because env var mutation is process-global and races with any other
+    /// test touching the same vars.
+    fn with_home<F: FnOnce()>(home: &str, f: F) {
+        let prev_userprofile = std::env::var("USERPROFILE").ok();
+        let prev_home = std::env::var("HOME").ok();
+        // SAFETY: #[serial] prevents other threads in this binary from racing
+        // on the env here; this wrapper always restores the previous values
+        // via catch_unwind even if `f` panics.
+        unsafe {
+            std::env::set_var("USERPROFILE", home);
+            std::env::set_var("HOME", home);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe {
+            match prev_userprofile {
+                Some(v) => std::env::set_var("USERPROFILE", v),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_cwd_none_falls_back_to_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        with_home(tmp.path().to_str().unwrap(), || {
+            let resolved = resolve_cwd(None).expect("should fall back to HOME");
+            assert_eq!(resolved, tmp.path());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_cwd_empty_falls_back_to_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        with_home(tmp.path().to_str().unwrap(), || {
+            let resolved = resolve_cwd(Some("")).expect("empty should fall back");
+            assert_eq!(resolved, tmp.path());
+            let resolved = resolve_cwd(Some("   ")).expect("whitespace should fall back");
+            assert_eq!(resolved, tmp.path());
+        });
+    }
+
+    #[test]
+    fn resolve_cwd_relative_path_is_rejected() {
+        let err = resolve_cwd(Some("relative/path")).expect_err("relative should error");
+        assert!(err.contains("absolute"), "error was: {err}");
+    }
+
+    #[test]
+    fn resolve_cwd_nonexistent_absolute_is_rejected() {
+        // A path that almost certainly does not exist on any test machine.
+        let bogus = if cfg!(windows) {
+            r"C:\__den_test_path_that_does_not_exist__\nope"
+        } else {
+            "/__den_test_path_that_does_not_exist__/nope"
+        };
+        let err = resolve_cwd(Some(bogus)).expect_err("bogus should error");
+        assert!(
+            err.contains("does not exist") || err.contains("not accessible"),
+            "error was: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_cwd_file_is_rejected() {
+        // Create a real file and point cwd at it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("not_a_dir.txt");
+        std::fs::write(&file_path, b"content").expect("write file");
+        let err = resolve_cwd(Some(file_path.to_str().unwrap())).expect_err("file should error");
+        assert!(err.contains("not a directory"), "error was: {err}");
+    }
+
+    #[test]
+    fn resolve_cwd_valid_directory_is_canonicalized() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let resolved = resolve_cwd(Some(dir.path().to_str().unwrap())).expect("valid dir");
+        let expected = strip_verbatim_prefix(&dir.path().canonicalize().unwrap());
+        assert_eq!(resolved, expected);
+        // Canonicalized path should never carry the Windows verbatim prefix.
+        assert!(!resolved.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn strip_verbatim_prefix_removes_prefix() {
+        let path = PathBuf::from(r"\\?\C:\Users");
+        assert_eq!(strip_verbatim_prefix(&path), PathBuf::from(r"C:\Users"));
+    }
+
+    #[test]
+    fn strip_verbatim_prefix_noop_without_prefix() {
+        let path = PathBuf::from("/usr/local");
+        assert_eq!(strip_verbatim_prefix(&path), PathBuf::from("/usr/local"));
     }
 }
