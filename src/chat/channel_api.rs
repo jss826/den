@@ -145,7 +145,14 @@ async fn handle_channel_ws(mut socket: WebSocket, session: Arc<super::session::C
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("channel ws lagged by {n} events");
+                        // A lagged subscriber has already lost events and would
+                        // remain desynced indefinitely if we kept polling. Drop
+                        // the connection so the UI reconnects and rebuilds state
+                        // from a clean subscribe().
+                        tracing::warn!(
+                            "channel ws lagged by {n} events; disconnecting subscriber"
+                        );
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }

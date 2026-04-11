@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 
 /// Maximum concurrent chat sessions.
@@ -272,14 +272,17 @@ impl ChatSessionManager {
             child.id()
         );
 
+        // Optional JSONL log file. None when DEN_CHAT_LOG is unset or the log
+        // file cannot be opened — the chat session must keep working either way.
+        let log_file = open_chat_log(session_id);
         let stdout_task = child
             .stdout
             .take()
-            .map(|stdout| spawn_log_task(session_id, "stdout", stdout, false));
+            .map(|stdout| spawn_log_task(session_id, "stdout", stdout, false, log_file.clone()));
         let stderr_task = child
             .stderr
             .take()
-            .map(|stderr| spawn_log_task(session_id, "stderr", stderr, true));
+            .map(|stderr| spawn_log_task(session_id, "stderr", stderr, true, log_file));
 
         Ok(ChatProcess {
             child,
@@ -341,11 +344,17 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
 /// `is_err` selects WARN (stderr) vs INFO (stdout) severity. The task exits
 /// naturally when the pipe closes (child exits) or when aborted via
 /// `JoinHandle::abort` during cleanup.
+///
+/// When `log_file` is `Some`, each line is also appended as a JSONL entry
+/// `{"ts","kind","line"}` to the shared per-session log file. Write failures
+/// are logged via tracing but never propagated — diagnostic logging must not
+/// break the chat session.
 fn spawn_log_task<R>(
     session_id: &str,
     stream_name: &'static str,
     pipe: R,
     is_err: bool,
+    log_file: Option<Arc<StdMutex<std::fs::File>>>,
 ) -> tokio::task::JoinHandle<()>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -370,6 +379,9 @@ where
                             "[claude] {line}"
                         );
                     }
+                    if let Some(ref file) = log_file {
+                        write_chat_log_line(file, stream_name, &line);
+                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -388,6 +400,89 @@ where
             "claude log stream closed"
         );
     })
+}
+
+/// Return the chat log directory if `DEN_CHAT_LOG` is enabled.
+///
+/// Uses `DEN_DATA_DIR` when set, otherwise falls back to `./data`. This is a
+/// deliberately minimal slice of `Config::data_dir` logic: the per-session
+/// JSONL log is a development diagnostic, not a user-facing artifact, so the
+/// Windows / XDG fallbacks aren't worth replicating here.
+fn chat_log_dir() -> Option<PathBuf> {
+    let raw = std::env::var("DEN_CHAT_LOG").ok()?;
+    let enabled = matches!(raw.as_str(), "1" | "true" | "TRUE" | "yes" | "YES" | "on");
+    if !enabled {
+        return None;
+    }
+    let data_dir = std::env::var("DEN_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+    Some(PathBuf::from(data_dir).join("chat-logs"))
+}
+
+/// Open the per-session JSONL log file if chat logging is enabled.
+///
+/// Returns `None` when `DEN_CHAT_LOG` is unset, the log directory cannot be
+/// created, or the file cannot be opened. All failure paths log via
+/// `tracing::warn!` and swallow the error — chat session startup must never
+/// be blocked by a diagnostic log side-channel.
+fn open_chat_log(session_id: &str) -> Option<Arc<StdMutex<std::fs::File>>> {
+    let log_dir = chat_log_dir()?;
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        tracing::warn!(
+            chat_session = %session_id,
+            dir = %log_dir.display(),
+            "chat log dir create failed: {e}"
+        );
+        return None;
+    }
+    let log_path = log_dir.join(format!("{session_id}.log"));
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(file) => {
+            tracing::info!(
+                chat_session = %session_id,
+                path = %log_path.display(),
+                "chat log opened"
+            );
+            Some(Arc::new(StdMutex::new(file)))
+        }
+        Err(e) => {
+            tracing::warn!(
+                chat_session = %session_id,
+                path = %log_path.display(),
+                "chat log open failed: {e}"
+            );
+            None
+        }
+    }
+}
+
+/// Append a single JSONL entry to the chat log file.
+///
+/// Both `stdout_task` and `stderr_task` share one file handle behind the
+/// mutex, so writes are serialized to prevent interleaved lines. Lock
+/// poisoning and write failures are logged but never propagated.
+fn write_chat_log_line(file: &StdMutex<std::fs::File>, stream_name: &str, line: &str) {
+    use std::io::Write;
+    let entry = serde_json::json!({
+        "ts": Utc::now().to_rfc3339(),
+        "kind": stream_name,
+        "line": line,
+    });
+    let mut guard = match file.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            // Recover from poisoning by taking the inner value — one panicked
+            // writer shouldn't silently disable logging for the remaining run.
+            tracing::warn!("chat log mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
+    if let Err(e) = writeln!(&mut *guard, "{entry}") {
+        tracing::warn!("chat log write failed: {e}");
+    }
 }
 
 impl ChatSession {
@@ -536,5 +631,157 @@ mod tests {
     fn strip_verbatim_prefix_noop_without_prefix() {
         let path = PathBuf::from("/usr/local");
         assert_eq!(strip_verbatim_prefix(&path), PathBuf::from("/usr/local"));
+    }
+
+    /// Run `f` with `DEN_CHAT_LOG` and `DEN_DATA_DIR` temporarily overridden,
+    /// then restore whatever was set before. Mirrors `with_home`: all callers
+    /// must be `#[serial]` because env vars are process-global.
+    fn with_chat_log_env<F: FnOnce()>(chat_log: Option<&str>, data_dir: Option<&str>, f: F) {
+        let prev_chat_log = std::env::var("DEN_CHAT_LOG").ok();
+        let prev_data_dir = std::env::var("DEN_DATA_DIR").ok();
+        // SAFETY: #[serial] prevents other threads in this binary from racing
+        // on the env here; this wrapper restores previous values via
+        // catch_unwind even if `f` panics.
+        unsafe {
+            match chat_log {
+                Some(v) => std::env::set_var("DEN_CHAT_LOG", v),
+                None => std::env::remove_var("DEN_CHAT_LOG"),
+            }
+            match data_dir {
+                Some(v) => std::env::set_var("DEN_DATA_DIR", v),
+                None => std::env::remove_var("DEN_DATA_DIR"),
+            }
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        unsafe {
+            match prev_chat_log {
+                Some(v) => std::env::set_var("DEN_CHAT_LOG", v),
+                None => std::env::remove_var("DEN_CHAT_LOG"),
+            }
+            match prev_data_dir {
+                Some(v) => std::env::set_var("DEN_DATA_DIR", v),
+                None => std::env::remove_var("DEN_DATA_DIR"),
+            }
+        }
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn chat_log_disabled_returns_none() {
+        // DEN_CHAT_LOG unset — feature off.
+        with_chat_log_env(None, Some("/tmp/den-test"), || {
+            assert!(chat_log_dir().is_none());
+            assert!(open_chat_log("session-x").is_none());
+        });
+        // DEN_CHAT_LOG=0 — also off.
+        with_chat_log_env(Some("0"), Some("/tmp/den-test"), || {
+            assert!(chat_log_dir().is_none());
+            assert!(open_chat_log("session-x").is_none());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn chat_log_dir_respects_den_data_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_string_lossy().into_owned();
+        with_chat_log_env(Some("1"), Some(&data_dir), || {
+            let resolved = chat_log_dir().expect("should be Some when enabled");
+            assert_eq!(resolved, PathBuf::from(&data_dir).join("chat-logs"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn chat_log_writes_jsonl_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_string_lossy().into_owned();
+        with_chat_log_env(Some("1"), Some(&data_dir), || {
+            let session_id = "abc-123";
+            {
+                let file = open_chat_log(session_id).expect("should open");
+                write_chat_log_line(&file, "stdout", "hello world");
+                write_chat_log_line(&file, "stderr", "oops something");
+                write_chat_log_line(&file, "stdout", "line with \"quotes\" and \\backslash");
+                // Dropping `file` releases the Arc; the OpenOptions handle is
+                // append-only so the content is flushed on write.
+            }
+
+            let log_path = PathBuf::from(&data_dir)
+                .join("chat-logs")
+                .join(format!("{session_id}.log"));
+            assert!(log_path.exists(), "log file should be created");
+
+            let content = std::fs::read_to_string(&log_path).expect("read log");
+            let lines: Vec<&str> = content.lines().collect();
+            assert_eq!(lines.len(), 3, "expected 3 JSONL entries, got: {content}");
+
+            let entry0: serde_json::Value =
+                serde_json::from_str(lines[0]).expect("line 0 must be JSON");
+            assert_eq!(entry0["kind"], "stdout");
+            assert_eq!(entry0["line"], "hello world");
+            assert!(
+                entry0["ts"].is_string(),
+                "ts must be present as an RFC3339 string"
+            );
+
+            let entry1: serde_json::Value =
+                serde_json::from_str(lines[1]).expect("line 1 must be JSON");
+            assert_eq!(entry1["kind"], "stderr");
+            assert_eq!(entry1["line"], "oops something");
+
+            let entry2: serde_json::Value =
+                serde_json::from_str(lines[2]).expect("line 2 must be JSON");
+            assert_eq!(entry2["kind"], "stdout");
+            assert_eq!(entry2["line"], "line with \"quotes\" and \\backslash");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn chat_log_mkdir_failure_returns_none() {
+        // Point DEN_DATA_DIR at a *file*, not a directory. Attempting to
+        // `mkdir -p {file}/chat-logs` must fail, and open_chat_log must
+        // swallow the error and return None rather than panic or propagate.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("not_a_dir");
+        std::fs::write(&blocker, b"x").expect("write blocker file");
+
+        let blocker_str = blocker.to_string_lossy().into_owned();
+        with_chat_log_env(Some("1"), Some(&blocker_str), || {
+            let result = open_chat_log("session-err");
+            assert!(result.is_none(), "mkdir failure must yield None gracefully");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn chat_log_appends_across_opens() {
+        // Repeated open_chat_log calls for the same session_id must append,
+        // not truncate — this is what lets us reopen after a restart.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_string_lossy().into_owned();
+        with_chat_log_env(Some("1"), Some(&data_dir), || {
+            let session_id = "append-test";
+
+            {
+                let file = open_chat_log(session_id).expect("first open");
+                write_chat_log_line(&file, "stdout", "first");
+            }
+            {
+                let file = open_chat_log(session_id).expect("second open");
+                write_chat_log_line(&file, "stdout", "second");
+            }
+
+            let log_path = PathBuf::from(&data_dir)
+                .join("chat-logs")
+                .join(format!("{session_id}.log"));
+            let content = std::fs::read_to_string(&log_path).expect("read log");
+            let lines: Vec<&str> = content.lines().collect();
+            assert_eq!(lines.len(), 2, "append-open should preserve prior entries");
+        });
     }
 }

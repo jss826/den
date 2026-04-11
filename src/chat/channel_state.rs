@@ -173,3 +173,54 @@ impl ChannelState {
             == 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::broadcast::error::RecvError;
+
+    /// A slow subscriber that never drains its queue must observe `Lagged`
+    /// once more than `BROADCAST_CAPACITY` events have been published. The
+    /// WebSocket handler in `channel_api.rs` relies on this to trigger the
+    /// disconnect-on-lag path — if this invariant regresses, the
+    /// subscriber-never-catches-up bug from #101 comes back.
+    #[tokio::test]
+    async fn broadcast_lags_after_capacity_overflow() {
+        let state = ChannelState::new();
+        let mut rx = state.subscribe();
+
+        // Push well past the 256-slot capacity without ever calling recv.
+        for i in 0..(BROADCAST_CAPACITY + 50) {
+            state.broadcast_reply("chat".into(), format!("msg-{i}"));
+        }
+
+        // The first recv after overflow must surface Lagged, not a stale Ok.
+        match rx.recv().await {
+            Err(RecvError::Lagged(n)) => {
+                assert!(n > 0, "Lagged must report a nonzero skip count");
+            }
+            other => panic!("expected RecvError::Lagged, got {other:?}"),
+        }
+    }
+
+    /// Under the capacity limit the receiver must deliver events in order.
+    /// Sanity check so the Lagged test above doesn't accidentally pass by
+    /// always returning Lagged regardless of load.
+    #[tokio::test]
+    async fn broadcast_delivers_events_under_capacity() {
+        let state = ChannelState::new();
+        let mut rx = state.subscribe();
+
+        state.broadcast_reply("chat".into(), "a".into());
+        state.broadcast_reply("chat".into(), "b".into());
+
+        match rx.recv().await {
+            Ok(ChannelEvent::Reply { text, .. }) => assert_eq!(text, "a"),
+            other => panic!("expected Reply(a), got {other:?}"),
+        }
+        match rx.recv().await {
+            Ok(ChannelEvent::Reply { text, .. }) => assert_eq!(text, "b"),
+            other => panic!("expected Reply(b), got {other:?}"),
+        }
+    }
+}
