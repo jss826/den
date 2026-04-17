@@ -147,9 +147,10 @@ pub async fn put_settings(
     {
         settings.chat_input_position = None;
     }
-    // Validate terminal_renderer: only "restty" allowed (None = xterm default)
+    // Validate terminal_renderer: only "restty" or "wterm" allowed (None = xterm default)
     if let Some(ref r) = settings.terminal_renderer
         && r != "restty"
+        && r != "wterm"
     {
         settings.terminal_renderer = None;
     }
