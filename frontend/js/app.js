@@ -165,6 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let showTimer = null;
 
     document.addEventListener('pointerenter', (e) => {
+      if (!(e.target instanceof Element)) return;
       const target = e.target.closest('[data-tooltip]');
       if (!target) return;
       // タッチデバイスではツールチップ不要
@@ -193,6 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, true);
 
     document.addEventListener('pointerleave', (e) => {
+      if (!(e.target instanceof Element)) return;
       const target = e.target.closest('[data-tooltip]');
       if (!target) return;
       clearTimeout(showTimer);
