@@ -4536,6 +4536,20 @@ pre:hover .code-copy-btn {
     z-index: 150;
   }
 
+  .filer-sidebar.sidebar-expanded .filer-toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 6px 8px;
+  }
+
+  .filer-sidebar.sidebar-expanded .filer-search {
+    display: block;
+  }
+
+  .filer-sidebar.sidebar-expanded .tree-name {
+    display: inline;
+  }
+
   .sidebar-overlay {
     display: none;
     position: absolute;
