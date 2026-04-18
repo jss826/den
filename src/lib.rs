@@ -45,6 +45,7 @@ pub struct AppState {
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
     pub chat_sessions: chat::session::ChatSessionManager,
+    pub preview_store: filer::preview::PreviewStore,
 }
 
 /// アプリケーション Router を構築（テストからも利用可能）
@@ -92,6 +93,7 @@ pub fn create_app_with_secret(
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
         chat_sessions: chat::session::ChatSessionManager::new(server_port),
+        preview_store: filer::preview::PreviewStore::new(),
     });
 
     // Channel server routes — loopback-only, token auth in handler
@@ -111,6 +113,13 @@ pub fn create_app_with_secret(
         .route("/api/logout", post(auth::logout))
         .route("/api/system/tls", get(tls::status))
         .route("/api/system/tls/certificate", get(tls::certificate))
+        // Filer HTML preview — token in URL path is the sole authorization,
+        // so the parent den_token cookie never reaches this endpoint. The
+        // iframe uses sandbox="allow-scripts" with a null origin.
+        .route(
+            "/api/filer/preview/{token}/{*path}",
+            get(filer::preview::serve),
+        )
         .merge(channel_server_routes)
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
@@ -201,6 +210,16 @@ pub fn create_app_with_secret(
         .route("/api/filer/download", get(filer::api::download))
         .route("/api/filer/upload", post(filer::api::upload))
         .route("/api/filer/search", get(filer::api::search))
+        // Filer HTML preview — session management (issuing and revoking tokens
+        // require the normal user auth; the actual asset serve is token-only).
+        .route(
+            "/api/filer/preview-session",
+            post(filer::preview::create_session),
+        )
+        .route(
+            "/api/filer/preview-session/{token}",
+            delete(filer::preview::revoke_session),
+        )
         // SFTP API
         .route("/api/sftp/connect", post(sftp::api::connect))
         .route("/api/sftp/status", get(sftp::api::status))

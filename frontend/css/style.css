@@ -4067,6 +4067,35 @@ pre:hover .code-copy-btn {
   color: var(--fg);
 }
 
+/* HTML プレビュー (sandboxed iframe) */
+.filer-html-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+.filer-html-preview-hint {
+  padding: 6px 12px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.filer-html-preview-error {
+  padding: 12px;
+  color: var(--error);
+  font-size: 0.85rem;
+}
+
+.filer-html-preview-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
 .filer-md-preview h1, .filer-md-preview h2, .filer-md-preview h3,
 .filer-md-preview h4, .filer-md-preview h5, .filer-md-preview h6 {
   margin: 1em 0 0.5em;

@@ -52,9 +52,9 @@ const FilerEditor = (() => {
       }
     });
 
-    // Markdown プレビュートグル
+    // プレビュートグル（Markdown / HTML 共用）
     const mdBtn = document.getElementById('filer-md-preview-toggle');
-    if (mdBtn) mdBtn.addEventListener('click', toggleMdPreview);
+    if (mdBtn) mdBtn.addEventListener('click', togglePreview);
   }
 
   const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp'];
@@ -245,6 +245,15 @@ const FilerEditor = (() => {
     return ext === 'md' || ext === 'mdx';
   }
 
+  function isHtmlFile(filePath) {
+    const ext = getExtension(filePath);
+    return ext === 'html' || ext === 'htm';
+  }
+
+  function isPreviewable(filePath) {
+    return isMarkdownFile(filePath) || isHtmlFile(filePath);
+  }
+
   function setActive(filePath) {
     if (!openFiles.has(filePath)) return;
 
@@ -266,16 +275,17 @@ const FilerEditor = (() => {
     const welcome = editorContainer.querySelector('.filer-welcome');
     if (welcome) welcome.remove();
 
-    // Markdown プレビューモード判定
+    // プレビューモード判定（Markdown / HTML）
     const mdBtn = document.getElementById('filer-md-preview-toggle');
-    if (isMarkdownFile(filePath) && !file.isImage) {
+    const previewing = file.previewMode === 'md' || file.previewMode === 'html';
+    if (isPreviewable(filePath) && !file.isImage) {
       if (mdBtn) {
         mdBtn.hidden = false;
-        mdBtn.innerHTML = file.mdPreview ? '\u270E' : '\u25B6';
-        mdBtn.title = file.mdPreview ? 'Edit' : 'Preview';
+        mdBtn.innerHTML = previewing ? '\u270E' : '\u25B6';
+        mdBtn.title = previewing ? 'Edit' : 'Preview';
       }
 
-      if (file.mdPreview) {
+      if (file.previewMode === 'md') {
         if (!file.previewDom) {
           file.previewDom = document.createElement('div');
           file.previewDom.className = 'filer-md-preview';
@@ -295,6 +305,14 @@ const FilerEditor = (() => {
           }
         }
         editorContainer.appendChild(file.previewDom);
+      } else if (file.previewMode === 'html') {
+        if (!file.previewDom) {
+          file.previewDom = document.createElement('div');
+          file.previewDom.className = 'filer-html-preview';
+        }
+        // iframe は毎回作り直す（token が期限切れ・再保存時のリフレッシュ兼用）
+        renderHtmlPreview(file, filePath);
+        editorContainer.appendChild(file.previewDom);
       } else {
         editorContainer.appendChild(file.view.dom);
         file.view.focus();
@@ -309,11 +327,78 @@ const FilerEditor = (() => {
     updateStatusBar(filePath);
   }
 
-  function toggleMdPreview() {
+  function revokePreviewToken(file) {
+    if (!file || !file.previewToken) return;
+    const token = file.previewToken;
+    file.previewToken = null;
+    fetch(`${FilerRemote.getApiBase()}/preview-session/${encodeURIComponent(token)}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      // Keep alive so revocation still fires if the tab is being closed.
+      keepalive: true,
+    }).catch(() => {});
+  }
+
+  async function renderHtmlPreview(file, filePath) {
+    file.previewDom.innerHTML = '';
+
+    const hint = document.createElement('div');
+    hint.className = 'filer-html-preview-hint';
+    if (file.dirty) {
+      hint.textContent = 'Unsaved changes not shown — save (Ctrl+S) to refresh preview.';
+    } else {
+      hint.textContent = 'Preview of saved file (relative paths resolved from file directory).';
+    }
+    file.previewDom.appendChild(hint);
+
+    // 既存トークンが無効化されている場合に備え毎回再発行
+    revokePreviewToken(file);
+
+    let session;
+    try {
+      const resp = await fetch(`${FilerRemote.getApiBase()}/preview-session`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath }),
+      });
+      if (!resp.ok) throw new Error('Preview session failed');
+      session = await resp.json();
+    } catch (e) {
+      const err = document.createElement('div');
+      err.className = 'filer-html-preview-error';
+      err.textContent = 'Failed to start preview: ' + (e.message || 'unknown error');
+      file.previewDom.appendChild(err);
+      return;
+    }
+
+    file.previewToken = session.token;
+
+    const iframe = document.createElement('iframe');
+    iframe.className = 'filer-html-preview-frame';
+    // allow-same-origin を付けない → iframe は null origin、親 Cookie / DOM に触れない。
+    // allow-popups / allow-forms / allow-top-navigation も付けない:
+    //   popup や top ナビゲーションで location に機密データを載せて外部へ送信されるのを防ぐため。
+    //   レンダリング確認目的のプレビューではリンク遷移は不要。
+    iframe.setAttribute('sandbox', 'allow-scripts');
+    iframe.setAttribute(
+      'src',
+      `${FilerRemote.getApiBase()}/preview/${encodeURIComponent(session.token)}/${encodeURIComponent(session.entry)}`
+    );
+    file.previewDom.appendChild(iframe);
+  }
+
+  function togglePreview() {
     if (!activePath) return;
     const file = openFiles.get(activePath);
     if (!file || file.isImage) return;
-    file.mdPreview = !file.mdPreview;
+    if (file.previewMode === 'md' || file.previewMode === 'html') {
+      file.previewMode = null;
+    } else if (isHtmlFile(activePath)) {
+      file.previewMode = 'html';
+    } else if (isMarkdownFile(activePath)) {
+      file.previewMode = 'md';
+    }
     setActive(activePath);
   }
 
@@ -347,6 +432,7 @@ const FilerEditor = (() => {
     if (file.previewDom && file.previewDom.parentElement) {
       file.previewDom.remove();
     }
+    revokePreviewToken(file);
     openFiles.delete(filePath);
 
     // アクティブファイルが閉じられた場合
@@ -395,6 +481,10 @@ const FilerEditor = (() => {
           file.dirty = false;
           renderTabs();
           Toast.success('Saved');
+          // HTML プレビュー表示中なら保存後に iframe をリフレッシュ
+          if (file.previewMode === 'html' && activePath === path) {
+            renderHtmlPreview(file, path);
+          }
         } else {
           const err = await resp.json().catch(() => ({ error: 'Save failed' }));
           Toast.error(err.error || 'Save failed');
@@ -523,6 +613,7 @@ const FilerEditor = (() => {
     if (openFiles.has(path)) {
       const file = openFiles.get(path);
       file.view.destroy();
+      revokePreviewToken(file);
       openFiles.delete(path);
       if (activePath === path) {
         activePath = null;
@@ -608,6 +699,7 @@ const FilerEditor = (() => {
       if (file.previewDom && file.previewDom.parentElement) {
         file.previewDom.remove();
       }
+      revokePreviewToken(file);
     }
     openFiles.clear();
     activePath = null;

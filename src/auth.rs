@@ -320,14 +320,18 @@ pub async fn loopback_only_middleware(req: Request<axum::body::Body>, next: Next
 
 /// Content-Security-Policy ミドルウェア
 /// script-src 'self' で外部スクリプト注入を防止し、XSS リスクを軽減する。
+///
+/// ハンドラが独自に CSP を設定済みの場合（例: filer preview）は上書きしない。
 pub async fn csp_middleware(req: Request<axum::body::Body>, next: Next) -> Response {
     let mut resp = next.run(req).await;
-    resp.headers_mut().insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: https://cdn.jsdelivr.net; img-src 'self' data: blob:",
-        ),
-    );
+    if !resp.headers().contains_key(header::CONTENT_SECURITY_POLICY) {
+        resp.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: https://cdn.jsdelivr.net; img-src 'self' data: blob:",
+            ),
+        );
+    }
     resp
 }
 
