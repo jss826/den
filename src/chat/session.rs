@@ -41,8 +41,13 @@ pub struct ChatSession {
 struct ChatProcess {
     child: tokio::process::Child,
     config_path: PathBuf,
-    /// Background tasks that read stdout/stderr and forward lines to tracing.
-    /// Held so cleanup can abort them if the pipes haven't closed yet.
+    /// stdin for writing stream-json user messages to Claude Code.
+    /// Taken from `Child::stdin` during spawn, kept behind a Mutex so concurrent
+    /// `send_input` callers serialize writes (JSONL requires one-message-per-line).
+    stdin: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// Background tasks that read stdout/stderr, parse stream-json, and forward
+    /// assistant text to the channel broadcast. Held so cleanup can abort them
+    /// if the pipes haven't closed yet.
     stdout_task: Option<tokio::task::JoinHandle<()>>,
     stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -124,7 +129,6 @@ impl ChatSessionManager {
 
         let id = hex::encode(rand::random::<[u8; 8]>());
         let channel_state = ChannelState::new();
-        let token = channel_state.token().to_string();
 
         let cwd_display = resolved_cwd.to_string_lossy().into_owned();
         let session = Arc::new(ChatSession {
@@ -136,9 +140,11 @@ impl ChatSessionManager {
             process: Mutex::new(None),
         });
 
-        // Generate MCP config and start Claude Code
+        // Generate MCP config and start Claude Code. start_claude needs
+        // Arc<ChatSession> so the stdout parse task can call
+        // session.channel_state.broadcast_reply() when assistant text arrives.
         let process = self
-            .start_claude(&id, &token, permission_mode, &resolved_cwd)
+            .start_claude(Arc::clone(&session), permission_mode, &resolved_cwd)
             .await?;
         *session.process.lock().await = Some(process);
 
@@ -203,11 +209,12 @@ impl ChatSessionManager {
     /// Write MCP config for den-channel and spawn Claude Code.
     async fn start_claude(
         &self,
-        session_id: &str,
-        token: &str,
+        session: Arc<ChatSession>,
         permission_mode: &str,
         cwd: &Path,
     ) -> Result<ChatProcess, String> {
+        let session_id = session.id.as_str();
+        let token = session.channel_state.token();
         let den_binary =
             std::env::current_exe().map_err(|e| format!("Failed to get current exe path: {e}"))?;
 
@@ -244,6 +251,10 @@ impl ChatSessionManager {
             .arg(&config_path)
             .arg("--permission-mode")
             .arg(permission_mode)
+            .arg("--input-format")
+            .arg("stream-json")
+            .arg("--output-format")
+            .arg("stream-json")
             .arg("--verbose")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -254,15 +265,12 @@ impl ChatSessionManager {
         // get here, so it is always an absolute, existing directory.
         cmd.current_dir(cwd);
 
-        // stdin is piped intentionally to prevent Claude Code from receiving EOF,
-        // which would cause it to exit immediately. The ChildStdin handle is held
-        // by the Child struct (not taken or dropped), keeping the pipe open for the
-        // lifetime of the process. kill_on_drop(true) ensures the child process and
-        // its stdin pipe are cleaned up when the Child is dropped.
-        //
-        // stdout/stderr are piped so diagnostic output from Claude Code is visible
-        // through tracing. Previously they were Stdio::null(), which made it
-        // impossible to debug why sessions became unresponsive (#101).
+        // stream-json I/O: the UI writes line-delimited user messages to stdin
+        // via `send_input`, and Claude Code emits line-delimited assistant/tool
+        // events to stdout which `spawn_stdout_parse_task` forwards to the
+        // reply broadcast. This replaces the former "piped stdin held open to
+        // prevent EOF" hack which left the child hanging on a --print-mode
+        // fallback because it never received a prompt.
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn claude: {e}"))?;
@@ -272,13 +280,15 @@ impl ChatSessionManager {
             child.id()
         );
 
+        let stdin = Arc::new(Mutex::new(child.stdin.take()));
+
         // Optional JSONL log file. None when DEN_CHAT_LOG is unset or the log
         // file cannot be opened — the chat session must keep working either way.
         let log_file = open_chat_log(session_id);
         let stdout_task = child
             .stdout
             .take()
-            .map(|stdout| spawn_log_task(session_id, "stdout", stdout, false, log_file.clone()));
+            .map(|stdout| spawn_stdout_parse_task(Arc::clone(&session), stdout, log_file.clone()));
         let stderr_task = child
             .stderr
             .take()
@@ -287,6 +297,7 @@ impl ChatSessionManager {
         Ok(ChatProcess {
             child,
             config_path,
+            stdin,
             stdout_task,
             stderr_task,
         })
@@ -402,6 +413,101 @@ where
     })
 }
 
+/// Read Claude Code's stream-json stdout and forward assistant text to the UI.
+///
+/// Each stdout line is a stream-json event. This task:
+/// 1. Writes the raw line to tracing + the optional JSONL log (diagnostic parity
+///    with `spawn_log_task`).
+/// 2. Parses the line as JSON. On parse failure the line is logged but not
+///    forwarded — Claude Code occasionally prints non-JSON startup output.
+/// 3. If the event is an `assistant` message carrying text blocks, concatenates
+///    them and calls `channel_state.broadcast_reply` so WebSocket subscribers
+///    see it as a new reply. Other event types (system init, tool_use,
+///    tool_result, result, rate_limit_event) are intentionally ignored here —
+///    permission flow still runs through the den-channel MCP server.
+fn spawn_stdout_parse_task(
+    session: Arc<ChatSession>,
+    pipe: tokio::process::ChildStdout,
+    log_file: Option<Arc<StdMutex<std::fs::File>>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(pipe).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    tracing::info!(
+                        chat_session = %session.id,
+                        stream = "stdout",
+                        "[claude] {line}"
+                    );
+                    if let Some(ref file) = log_file {
+                        write_chat_log_line(file, "stdout", &line);
+                    }
+                    match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(event) => {
+                            if let Some(text) = extract_assistant_text(&event) {
+                                session
+                                    .channel_state
+                                    .broadcast_reply(session.id.clone(), text);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                chat_session = %session.id,
+                                "stdout line not JSON ({e}): {line}"
+                            );
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(
+                        chat_session = %session.id,
+                        stream = "stdout",
+                        "claude pipe read error: {e}"
+                    );
+                    break;
+                }
+            }
+        }
+        tracing::debug!(
+            chat_session = %session.id,
+            stream = "stdout",
+            "claude log stream closed"
+        );
+    })
+}
+
+/// Pull all `text`-typed content blocks out of a stream-json `assistant` event
+/// and join them with newlines. Returns `None` for any other event shape so the
+/// caller can cheaply skip non-assistant events.
+///
+/// Event shape emitted by Claude Code's stream-json output mode:
+/// ```json
+/// {"type":"assistant","message":{"content":[{"type":"text","text":"..."}, ...]}}
+/// ```
+fn extract_assistant_text(event: &serde_json::Value) -> Option<String> {
+    if event.get("type")?.as_str()? != "assistant" {
+        return None;
+    }
+    let content = event.get("message")?.get("content")?.as_array()?;
+    let mut out = String::new();
+    for block in content {
+        let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if block_type != "text" {
+            continue;
+        }
+        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
 /// Return the chat log directory if `DEN_CHAT_LOG` is enabled.
 ///
 /// Uses `DEN_DATA_DIR` when set, otherwise falls back to `./data`. This is a
@@ -499,10 +605,58 @@ impl ChatSession {
         }
     }
 
+    /// Forward a user message to Claude Code via stream-json on stdin.
+    ///
+    /// The line format matches claude-code-sdk's expected shape:
+    /// `{"type":"user","message":{"role":"user","content":"..."},"session_id":"default","parent_tool_use_id":null}\n`.
+    ///
+    /// Errors out when the session has no live process, stdin has already been
+    /// closed, or the write itself fails. The caller (channel_api) maps this to
+    /// HTTP 500 so the UI knows the message did not reach Claude Code.
+    pub async fn send_input(&self, text: &str) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        let proc = self.process.lock().await;
+        let Some(p) = proc.as_ref() else {
+            return Err("Chat session is not active".to_string());
+        };
+        let payload = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": text,
+            },
+            "session_id": "default",
+            "parent_tool_use_id": null,
+        });
+        let mut line = serde_json::to_string(&payload)
+            .map_err(|e| format!("failed to serialize user message: {e}"))?;
+        line.push('\n');
+        let mut stdin_guard = p.stdin.lock().await;
+        let Some(stdin) = stdin_guard.as_mut() else {
+            return Err("Chat session stdin is closed".to_string());
+        };
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| format!("stdin write failed: {e}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("stdin flush failed: {e}"))?;
+        Ok(())
+    }
+
     /// Stop the Claude Code process and clean up.
     async fn cleanup(&self) {
         let mut proc = self.process.lock().await;
         if let Some(mut p) = proc.take() {
+            // Dropping stdin closes the pipe, which signals Claude Code to
+            // flush and exit gracefully. kill() below covers the case where
+            // it ignores EOF.
+            {
+                let mut stdin_guard = p.stdin.lock().await;
+                stdin_guard.take();
+            }
             let _ = p.child.kill().await;
             let _ = p.child.wait().await;
             // Log tasks should exit naturally once the pipes close after kill,
@@ -755,6 +909,100 @@ mod tests {
             let result = open_chat_log("session-err");
             assert!(result.is_none(), "mkdir failure must yield None gracefully");
         });
+    }
+
+    #[test]
+    fn extract_assistant_text_extracts_single_text_block() {
+        let event = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    { "type": "text", "text": "Hello, world!" }
+                ]
+            }
+        });
+        assert_eq!(
+            extract_assistant_text(&event),
+            Some("Hello, world!".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_assistant_text_joins_multiple_text_blocks_with_newline() {
+        let event = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    { "type": "text", "text": "first" },
+                    { "type": "text", "text": "second" }
+                ]
+            }
+        });
+        assert_eq!(
+            extract_assistant_text(&event),
+            Some("first\nsecond".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_assistant_text_skips_non_text_blocks() {
+        // A mixed content array with a tool_use between two text blocks must
+        // yield only the text — tool_use / tool_result events are handled by
+        // the permission flow, not by the reply broadcast.
+        let event = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    { "type": "text", "text": "before" },
+                    { "type": "tool_use", "id": "x", "name": "reply", "input": {} },
+                    { "type": "text", "text": "after" }
+                ]
+            }
+        });
+        assert_eq!(
+            extract_assistant_text(&event),
+            Some("before\nafter".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_assistant_text_ignores_non_assistant_events() {
+        for kind in ["system", "user", "result", "rate_limit_event", "tool_use"] {
+            let event = serde_json::json!({
+                "type": kind,
+                "message": { "content": [ { "type": "text", "text": "x" } ] }
+            });
+            assert!(
+                extract_assistant_text(&event).is_none(),
+                "event kind {kind} should be ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_assistant_text_returns_none_for_empty_or_missing_content() {
+        let no_message = serde_json::json!({ "type": "assistant" });
+        assert!(extract_assistant_text(&no_message).is_none());
+
+        let no_content = serde_json::json!({
+            "type": "assistant",
+            "message": {}
+        });
+        assert!(extract_assistant_text(&no_content).is_none());
+
+        let empty_content = serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [] }
+        });
+        assert!(extract_assistant_text(&empty_content).is_none());
+
+        let only_tool_use = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [ { "type": "tool_use", "id": "x", "name": "r", "input": {} } ]
+            }
+        });
+        assert!(extract_assistant_text(&only_tool_use).is_none());
     }
 
     #[test]

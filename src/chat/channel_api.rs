@@ -7,7 +7,7 @@
 //! All endpoints are session-aware. User endpoints use a `session` field in the
 //! request body or query. Den-channel endpoints identify sessions by token.
 
-use super::channel_state::{ChannelMessage, PermissionRequest, PermissionVerdict};
+use super::channel_state::{PermissionRequest, PermissionVerdict};
 use super::session::{ChatSessionInfo, CreateSessionRequest};
 use crate::AppState;
 use axum::Json;
@@ -63,11 +63,19 @@ pub async fn stop_session(State(state): State<Arc<AppState>>, Path(id): Path<Str
 pub struct SendMessageRequest {
     pub session: String,
     pub text: String,
+    /// Retained for API compatibility with earlier clients; no longer used now
+    /// that messages go directly to Claude Code over stdin stream-json.
     #[serde(default)]
+    #[allow(dead_code)]
     pub meta: std::collections::HashMap<String, String>,
 }
 
 /// POST /api/channel/message — UI sends a user message.
+///
+/// The message is serialized as a stream-json `user` event and written directly
+/// to Claude Code's stdin. Claude Code's assistant reply arrives on stdout and
+/// is forwarded to the UI via the reply WebSocket broadcast (see
+/// `spawn_stdout_parse_task` in `session.rs`).
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SendMessageRequest>,
@@ -76,11 +84,16 @@ pub async fn send_message(
         Some(s) => s,
         None => return (StatusCode::NOT_FOUND, "Session not found").into_response(),
     };
-    session.channel_state.push_message(ChannelMessage {
-        text: req.text,
-        meta: req.meta,
-    });
-    StatusCode::OK.into_response()
+    match session.send_input(&req.text).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => {
+            tracing::warn!(
+                chat_session = %req.session,
+                "send_message: stdin forward failed: {e}"
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
