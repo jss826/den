@@ -760,7 +760,9 @@ const DenTerminal = (() => {
 
   /** Convert tap coordinates to buffer (col, row) */
   function tapToBufferPos(e) {
-    const screen = selectModeScreen || term.element?.querySelector('.xterm-screen');
+    const screen = selectModeScreen
+      || term.element?.querySelector('.xterm-screen')
+      || term.element?.querySelector('.wterm');
     if (!screen) return null;
     const rect = screen.getBoundingClientRect();
     if (rect.height === 0 || rect.width === 0 || term.rows === 0 || term.cols === 0) return null;

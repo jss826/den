@@ -1,3 +1,4 @@
+/* === upstream: @wterm/dom/src/terminal.css === */
 .wterm {
   --term-fg: #d4d4d4;
   --term-bg: #1e1e1e;
@@ -160,3 +161,12 @@
   --term-color-14: #0184bc;
   --term-color-15: #ffffff;
 }
+
+
+/* === Den overrides (edit frontend/vendor/wterm/wterm.den.css, not this file) === */
+/*
+ * Den-specific overrides for wterm. Append rules here instead of editing the
+ * upstream-derived `wterm.css`. The build script (scripts/build-wterm.js)
+ * concatenates upstream + this file into `wterm.css`, so overrides survive
+ * `npm run build:wterm`.
+ */

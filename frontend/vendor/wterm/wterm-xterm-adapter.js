@@ -1,9 +1,13 @@
 // wterm adapter for Den — wraps WTerm with xterm.js-compatible API surface.
 // Runs alongside xterm.js and restty; selected via DenSettings.terminal_renderer.
 
+/* global Toast */
+
 import { WTerm } from './wterm.bundle.js';
 
-const textDecoder = new TextDecoder('utf-8', { fatal: false });
+// Single source of truth for cache-busting the vendored bundle, CSS, and the
+// adapter's own dynamic import URL in terminal-adapter.js.
+const WTERM_VERSION = '14';
 
 let _cssInjected = false;
 function ensureCss() {
@@ -11,7 +15,7 @@ function ensureCss() {
   _cssInjected = true;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = '/vendor/wterm/wterm.css?v=13';
+  link.href = `/vendor/wterm/wterm.css?v=${WTERM_VERSION}`;
   document.head.appendChild(link);
 }
 
@@ -55,7 +59,6 @@ function applyFontToElement(el, fontFamily, fontSize) {
  */
 class DenWtermTerminal {
   parser = { registerOscHandler(_id, _handler) { return noopDisposable(); } };
-  buffer = { active: { get viewportY() { return 0; } } };
 
   cols = 80;
   rows = 24;
@@ -74,6 +77,11 @@ class DenWtermTerminal {
     this._inner = null;
     this._parentObserver = null;
     this._externalTextarea = null;
+    this._customKeyHandler = null;
+    this._charW = null;
+    this._charH = null;
+    this._relayoutRaf = null;
+    this._scrollRaf = null;
     this._ready = false;
     this._writeQueue = [];
     this._disposed = false;
@@ -82,16 +90,25 @@ class DenWtermTerminal {
   get element() { return this._element; }
   get wterm() { return this._wterm; }
 
+  // xterm.js-compatible buffer facade; viewportY is derived from actual scroll.
+  get buffer() {
+    const self = this;
+    return {
+      active: {
+        get viewportY() {
+          const rh = self._rowHeight();
+          if (!rh || !self._inner) return 0;
+          return Math.max(0, Math.floor(self._inner.scrollTop / rh));
+        },
+      },
+    };
+  }
+
   open(parent) {
     if (this._wterm) throw new Error('Already opened');
     ensureCss();
     this._element = parent;
 
-    // `.wterm` must be viewport-sized so `has-scrollback { overflow-y: auto }`
-    // scrolls when scrollback piles up. Use an inner wrapper that follows
-    // the parent's layout-assigned height via CSS (100%). This keeps Den's
-    // dynamic height management — including iOS virtual keyboard — intact,
-    // because we never pin `parent.style.height`.
     if (!parent.style.position || parent.style.position === 'static') {
       parent.style.position = 'relative';
     }
@@ -105,8 +122,6 @@ class DenWtermTerminal {
     applyFontToElement(inner, this._fontFamily, this._fontSize);
     if (this._theme) applyThemeToElement(inner, this._theme);
 
-    // autoResize: false — we drive resizes from the parent's ResizeObserver
-    // so scrollback growth inside `.wterm` doesn't retrigger cols/rows.
     const wterm = new WTerm(inner, {
       cols: this.cols,
       rows: this.rows,
@@ -114,7 +129,7 @@ class DenWtermTerminal {
       cursorBlink: this._cursorBlink,
       onData: (data) => {
         for (const cb of this._dataListeners) {
-          try { cb(data); } catch (e) { /* ignore */ }
+          try { cb(data); } catch (_) { /* ignore */ }
         }
       },
       onResize: (cols, rows) => {
@@ -122,13 +137,13 @@ class DenWtermTerminal {
           this.cols = cols;
           this.rows = rows;
           for (const cb of this._resizeListeners) {
-            try { cb({ cols, rows }); } catch (e) { /* ignore */ }
+            try { cb({ cols, rows }); } catch (_) { /* ignore */ }
           }
         }
       },
       onTitle: (title) => {
         for (const cb of this._titleListeners) {
-          try { cb(title); } catch (e) { /* ignore */ }
+          try { cb(title); } catch (_) { /* ignore */ }
         }
       },
     });
@@ -137,9 +152,8 @@ class DenWtermTerminal {
 
     wterm.init().then(() => {
       if (this._disposed) return;
-      // WTerm's `_lockHeight()` (called when autoResize is off) hard-codes
-      // element.style.height to `rows * rowHeight + padding`, which overrides
-      // our `inset: 0`. Clear it so the wrapper stays parent-sized.
+      // WTerm's `_lockHeight()` fixes element.style.height when autoResize is
+      // off. Clear it so the wrapper keeps `inset: 0` sizing.
       inner.style.height = '';
       this._ready = true;
       this.cols = wterm.cols;
@@ -150,25 +164,23 @@ class DenWtermTerminal {
       const queue = this._writeQueue;
       this._writeQueue = [];
       for (const data of queue) {
-        try { wterm.write(data); } catch (e) { /* ignore */ }
+        try { wterm.write(data); } catch (_) { /* ignore */ }
       }
     }).catch((e) => {
       console.error('[wterm] init failed:', e);
+      try {
+        if (typeof Toast !== 'undefined') {
+          Toast.error('wterm failed to initialize. Switch renderer to xterm.js in Settings and reload.');
+        }
+      } catch (_) { /* ignore */ }
+      this.dispose();
     });
   }
 
-  /** Move the hidden input textarea out of the scroll container.
-   *  iOS Safari scrolls its ancestor to reveal the focused field, which
-   *  yanks `.wterm` to scrollTop=0 (or bottom) on every focus. Reparenting to
-   *  `document.body` decouples focus from the terminal's scroll position.
-   *  Also bumps font-size past the iOS auto-zoom threshold (16px). */
   _relocateTextarea() {
     const ta = this._wterm?.input?.textarea;
     if (!ta) return;
     document.body.appendChild(ta);
-    // Place just above the software keyboard position (bottom: 0). A textarea
-    // pinned at `top: 0` invites iOS Safari to scroll the page up on focus,
-    // making the terminal content shift off-screen.
     ta.style.position = 'fixed';
     ta.style.left = '0';
     ta.style.bottom = '0';
@@ -179,12 +191,9 @@ class DenWtermTerminal {
     ta.style.pointerEvents = 'none';
     ta.style.zIndex = '-1';
     ta.style.fontSize = '16px';
-    // Prevent scrollIntoView from scrolling the page on focus.
     ta.style.scrollMargin = '0';
     this._externalTextarea = ta;
 
-    // Belt-and-suspenders: reset window scroll when the textarea gains focus,
-    // in case iOS Safari still scrolls html despite the positioning above.
     this._onTextareaFocus = () => {
       requestAnimationFrame(() => {
         if (window.scrollY !== 0) window.scrollTo(0, 0);
@@ -192,8 +201,19 @@ class DenWtermTerminal {
       });
     };
     ta.addEventListener('focus', this._onTextareaFocus);
-    // Intercept Shift+PageUp/PageDown/Home/End for scrollback, matching xterm.js.
-    // Capture phase so we run before wterm's keydown handler sends to PTY.
+
+    // Custom key event handler (xterm.js compat). Runs first in the capture
+    // phase; if it returns false, the event is suppressed before wterm's
+    // keydown handler sends it to PTY.
+    this._onCustomKey = (e) => {
+      if (this._customKeyHandler && this._customKeyHandler(e) === false) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    };
+    ta.addEventListener('keydown', this._onCustomKey, true);
+
+    // Shift+PageUp/PageDown/Home/End scrollback keys (xterm.js parity).
     this._onScrollKey = (e) => {
       if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
       const inner = this._inner;
@@ -212,14 +232,54 @@ class DenWtermTerminal {
 
   _setupParentObserver(parent) {
     if (this._parentObserver) return;
+    // Debounced — see _relayoutFromParent. Coalesces with NoopFitAddon.fit()
+    // bursts driven by DenTerminal.scheduleFit().
     this._parentObserver = new ResizeObserver(() => this._relayoutFromParent());
     this._parentObserver.observe(parent);
   }
 
-  /** Measure the inner box, resize WTerm's grid to fit. `.wterm` height
-   *  inherits from the inner wrapper (100% of parent), which Den manages
-   *  dynamically — so iOS keyboard / window resize propagate for free. */
+  /** Measure char size once; invalidate on font changes via `_invalidateCharCache`. */
+  _measureCharSize() {
+    if (this._charW && this._charH) return { charW: this._charW, charH: this._charH };
+    const inner = this._inner;
+    if (!inner) return { charW: 0, charH: 0 };
+    const probe = document.createElement('span');
+    probe.textContent = 'W';
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+    inner.appendChild(probe);
+    const pr = probe.getBoundingClientRect();
+    probe.remove();
+    if (!pr.width || !pr.height) return { charW: 0, charH: 0 };
+    this._charW = pr.width;
+    this._charH = pr.height;
+    return { charW: this._charW, charH: this._charH };
+  }
+
+  _invalidateCharCache() {
+    this._charW = null;
+    this._charH = null;
+  }
+
+  _rowHeight() {
+    if (this._charH) return this._charH;
+    if (this._inner) {
+      const v = parseFloat(getComputedStyle(this._inner).getPropertyValue('--term-row-height'));
+      if (v) return v;
+    }
+    return 17;
+  }
+
+  /** Coalesce multiple relayout requests (parent ResizeObserver + scheduleFit
+   *  + font/option changes) into a single rAF-scheduled reconciliation. */
   _relayoutFromParent() {
+    if (this._relayoutRaf != null || this._disposed) return;
+    this._relayoutRaf = requestAnimationFrame(() => {
+      this._relayoutRaf = null;
+      this._doRelayout();
+    });
+  }
+
+  _doRelayout() {
     const inner = this._inner;
     const wterm = this._wterm;
     if (!inner || !wterm) return;
@@ -230,34 +290,26 @@ class DenWtermTerminal {
     const height = inner.clientHeight - padY;
     if (width <= 0 || height <= 0) return;
 
-    const probe = document.createElement('span');
-    probe.textContent = 'W';
-    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
-    inner.appendChild(probe);
-    const pr = probe.getBoundingClientRect();
-    const charW = pr.width;
-    const charH = pr.height;
-    probe.remove();
+    const { charW, charH } = this._measureCharSize();
     if (!charW || !charH) return;
 
     const cols = Math.max(1, Math.floor(width / charW));
     const rows = Math.max(1, Math.floor(height / charH));
-    // Capture scroll state before any resize so we can restore or stick to
-    // bottom afterwards. The viewport may have shrunk (soft keyboard) even
-    // if cols/rows didn't change, so always reconcile below.
     const prevScrollTop = inner.scrollTop;
     const atBottom = inner.scrollTop + inner.clientHeight >= inner.scrollHeight - 5;
     if (cols !== this.cols || rows !== this.rows) {
-      try { wterm.resize(cols, rows); } catch (_) {}
+      try { wterm.resize(cols, rows); } catch (_) { /* ignore */ }
     }
-    requestAnimationFrame(() => {
-      if (atBottom) {
-        inner.scrollTop = inner.scrollHeight;
-      } else if (prevScrollTop > 0 && inner.scrollTop !== prevScrollTop) {
-        inner.scrollTop = prevScrollTop;
-      }
-    });
-    // Force overflow so Den's container CSS doesn't win on ID specificity.
+    if (this._scrollRaf == null) {
+      this._scrollRaf = requestAnimationFrame(() => {
+        this._scrollRaf = null;
+        if (atBottom) {
+          inner.scrollTop = inner.scrollHeight;
+        } else if (prevScrollTop > 0 && inner.scrollTop !== prevScrollTop) {
+          inner.scrollTop = prevScrollTop;
+        }
+      });
+    }
     if (inner.style.overflowY !== 'auto') inner.style.overflowY = 'auto';
     if (inner.style.overflowX !== 'hidden') inner.style.overflowX = 'hidden';
   }
@@ -267,13 +319,11 @@ class DenWtermTerminal {
     if (typeof data === 'string' && data.includes('\x1b[6n')) {
       const cpr = '\x1b[1;1R';
       for (const cb of this._dataListeners) {
-        try { cb(cpr); } catch (e) { /* ignore */ }
+        try { cb(cpr); } catch (_) { /* ignore */ }
       }
     }
     if (data instanceof ArrayBuffer) data = new Uint8Array(data);
     if (data instanceof Uint8Array) {
-      // Strip BEL (0x07) to avoid OS audio beep on shell completion failures,
-      // matching xterm.js default (`bellStyle: 'none'`).
       if (data.includes(7)) data = data.filter((b) => b !== 7);
     } else if (typeof data === 'string') {
       if (data.includes('\x07')) data = data.replace(/\x07/g, '');
@@ -291,9 +341,11 @@ class DenWtermTerminal {
   }
 
   writeln(data = '', callback) {
-    // wterm.write accepts string only for writeln's concatenation path.
     if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
-      data = textDecoder.decode(data instanceof ArrayBuffer ? new Uint8Array(data) : data, { stream: true });
+      // Fresh decoder per call: writeln delivers complete lines, so partial
+      // UTF-8 state must not leak across calls.
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+      data = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
     }
     this.write(`${data}\r\n`, callback);
   }
@@ -345,21 +397,36 @@ class DenWtermTerminal {
 
   get options() {
     const self = this;
-    return new Proxy({ fontSize: this._fontSize }, {
-      set(_target, prop, value) {
-        if (prop === 'theme') {
-          self._theme = value;
-          applyThemeToElement(self._inner, value);
-        } else if (prop === 'fontSize') {
-          self._fontSize = value;
-          applyFontToElement(self._inner, null, value);
-          self._relayoutFromParent();
-        } else if (prop === 'scrollback') {
-          // wterm manages scrollback internally and exposes no API
-        }
-        return true;
-      },
-    });
+    if (!this._optionsProxy) {
+      this._optionsProxy = new Proxy({}, {
+        get(_t, prop) {
+          if (prop === 'fontSize') return self._fontSize;
+          if (prop === 'fontFamily') return self._fontFamily;
+          if (prop === 'theme') return self._theme;
+          return undefined;
+        },
+        set(_t, prop, value) {
+          if (prop === 'theme') {
+            self._theme = value;
+            applyThemeToElement(self._inner, value);
+          } else if (prop === 'fontSize') {
+            self._fontSize = value;
+            applyFontToElement(self._inner, null, value);
+            self._invalidateCharCache();
+            self._relayoutFromParent();
+          } else if (prop === 'fontFamily') {
+            self._fontFamily = value;
+            applyFontToElement(self._inner, value, null);
+            self._invalidateCharCache();
+            self._relayoutFromParent();
+          } else if (prop === 'scrollback') {
+            // wterm manages scrollback internally and exposes no API
+          }
+          return true;
+        },
+      });
+    }
+    return this._optionsProxy;
   }
 
   set options(next) {
@@ -371,24 +438,59 @@ class DenWtermTerminal {
     if (next.fontSize) {
       this._fontSize = next.fontSize;
       applyFontToElement(this._inner, null, next.fontSize);
+      this._invalidateCharCache();
       this._relayoutFromParent();
     }
     if (next.fontFamily) {
       this._fontFamily = next.fontFamily;
       applyFontToElement(this._inner, next.fontFamily, null);
+      this._invalidateCharCache();
       this._relayoutFromParent();
     }
   }
 
-  // --- Stubs matching xterm.js API consumed by Den ---
+  // --- Addon / key / selection APIs consumed by Den ---
 
   loadAddon(addon) { addon?.activate?.(this); }
-  attachCustomKeyEventHandler(_handler) {}
-  getSelection() {
-    try { return document.getSelection()?.toString() ?? ''; } catch (_) { return ''; }
+
+  /** xterm.js-compatible handler: return false to suppress the key. */
+  attachCustomKeyEventHandler(handler) {
+    this._customKeyHandler = typeof handler === 'function' ? handler : null;
   }
-  select(_col, _row, _length) {}
-  clearSelection() { try { document.getSelection()?.removeAllRanges(); } catch (_) {} }
+
+  /** Select a range starting at (col, row) spanning `length` chars.
+   *  `row` is an absolute buffer row (scrollback included). Implemented at
+   *  row granularity: selection extends from the start row to the row that
+   *  contains the `length`-th character, giving copy-to-clipboard users a
+   *  useful approximation even when per-char DOM traversal is not feasible. */
+  select(col, row, length) {
+    const inner = this._inner;
+    if (!inner) return;
+    const grid = inner.querySelector('.term-grid');
+    if (!grid) return;
+    const rowEls = grid.children;
+    if (row < 0 || row >= rowEls.length || !length) return;
+    const cols = Math.max(1, this.cols || 80);
+    const lastRow = Math.min(rowEls.length - 1, row + Math.floor((col + length - 1) / cols));
+    try {
+      const range = document.createRange();
+      range.setStartBefore(rowEls[row]);
+      range.setEndAfter(rowEls[lastRow]);
+      const sel = window.getSelection();
+      if (!sel) return;
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) { /* ignore */ }
+  }
+
+  clearSelection() {
+    try { window.getSelection()?.removeAllRanges(); } catch (_) { /* ignore */ }
+  }
+
+  getSelection() {
+    try { return window.getSelection()?.toString() ?? ''; } catch (_) { return ''; }
+  }
+
   refresh(_start, _end) {}
   setOption(_key, _value) {}
   getOption(key) {
@@ -400,20 +502,25 @@ class DenWtermTerminal {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    if (this._relayoutRaf != null) { cancelAnimationFrame(this._relayoutRaf); this._relayoutRaf = null; }
+    if (this._scrollRaf != null) { cancelAnimationFrame(this._scrollRaf); this._scrollRaf = null; }
     this._writeQueue.length = 0;
     this._dataListeners.clear();
     this._resizeListeners.clear();
     this._titleListeners.clear();
-    try { this._parentObserver?.disconnect(); } catch (_) {}
+    this._customKeyHandler = null;
+    try { this._parentObserver?.disconnect(); } catch (_) { /* ignore */ }
     try {
-      if (this._externalTextarea) {
-        if (this._onScrollKey) this._externalTextarea.removeEventListener('keydown', this._onScrollKey, true);
-        if (this._onTextareaFocus) this._externalTextarea.removeEventListener('focus', this._onTextareaFocus);
+      const ta = this._externalTextarea;
+      if (ta) {
+        if (this._onScrollKey) ta.removeEventListener('keydown', this._onScrollKey, true);
+        if (this._onCustomKey) ta.removeEventListener('keydown', this._onCustomKey, true);
+        if (this._onTextareaFocus) ta.removeEventListener('focus', this._onTextareaFocus);
       }
       this._externalTextarea?.remove();
-    } catch (_) {}
-    try { this._wterm?.destroy(); } catch (_) {}
-    try { this._inner?.remove(); } catch (_) {}
+    } catch (_) { /* ignore */ }
+    try { this._wterm?.destroy(); } catch (_) { /* ignore */ }
+    try { this._inner?.remove(); } catch (_) { /* ignore */ }
     this._wterm = null;
     this._element = null;
     this._inner = null;
@@ -424,7 +531,8 @@ class DenWtermTerminal {
 
 /** FitAddon stub — delegates to DenWtermTerminal._relayoutFromParent so that
  *  Den's visualViewport handler (app.js → DenTerminal.scheduleFit) can drive
- *  wterm resize when the iOS soft keyboard appears/disappears. */
+ *  wterm resize when the iOS soft keyboard appears/disappears. Coalesces with
+ *  the parent ResizeObserver via the shared rAF scheduler. */
 class NoopFitAddon {
   _term = null;
   activate(term) { this._term = term; }
@@ -437,4 +545,4 @@ class NoopFitAddon {
   }
 }
 
-export { DenWtermTerminal, NoopFitAddon, applyThemeToElement, applyFontToElement };
+export { DenWtermTerminal, NoopFitAddon, WTERM_VERSION, applyThemeToElement, applyFontToElement };
