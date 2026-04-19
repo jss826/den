@@ -13,3 +13,12 @@ playwright-report/
 /.claude/tmp
 /.claude/*.local.md
 .ai-review/
+.orch-review/
+
+# orch / loop generated tasks + hub artifacts
+chat-orch-tasks.json
+chat-orch-tasks.json.*
+den-loop-tasks.json
+
+# DEN_DATA_DIR=./data-dev artifacts can land anywhere relative to cwd
+data-dev/
