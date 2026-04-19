@@ -14,6 +14,13 @@ async fn main() {
         den::channel::run();
         return;
     }
+    // Chat hook relay: forwards Claude Code hook payloads to the den backend.
+    // Takes an event name as the second arg, reads the hook JSON on stdin.
+    if std::env::args().nth(1).as_deref() == Some("--chat-hook") {
+        let event = std::env::args().nth(2).unwrap_or_default();
+        den::chat_hook::run(&event);
+        return;
+    }
     // Load .env: CWD first, then platform-specific config directory as fallback.
     // Later values do NOT override earlier ones, so CWD takes precedence.
     let _ = dotenvy::dotenv();

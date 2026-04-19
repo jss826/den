@@ -268,6 +268,74 @@ pub async fn post_permission(
     StatusCode::OK
 }
 
+/// Payload shape for `/api/channel/status` and `/api/channel/notification`.
+///
+/// Both endpoints are targets of the Claude Code hook runner (`den --chat-hook`).
+/// The hook relays the raw hook JSON untouched so future UI surfaces can
+/// inspect tool names, file paths, etc. without a server-side schema pin.
+#[derive(Deserialize)]
+pub struct StatusPayload {
+    /// Hook name: `session-start` / `stop` / `post-tool-use`.
+    pub event: String,
+    /// Raw JSON payload the hook received on stdin.
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+pub struct NotificationPayload {
+    /// Raw JSON payload from the Notification hook.
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+/// POST /api/channel/status — den-chat-hook posts a session lifecycle event.
+pub async fn post_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<StatusPayload>,
+) -> StatusCode {
+    let token = match extract_channel_token(&headers) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+    let session = match state.chat_sessions.find_by_token(token).await {
+        Some(s) => s,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+    tracing::info!(
+        chat_session = %session.id,
+        hook_event = %req.event,
+        "chat hook status"
+    );
+    session
+        .channel_state
+        .broadcast_status(req.event, req.payload);
+    StatusCode::OK
+}
+
+/// POST /api/channel/notification — den-chat-hook posts a Notification hook payload.
+pub async fn post_notification(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<NotificationPayload>,
+) -> StatusCode {
+    let token = match extract_channel_token(&headers) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+    let session = match state.chat_sessions.find_by_token(token).await {
+        Some(s) => s,
+        None => return StatusCode::UNAUTHORIZED,
+    };
+    tracing::info!(
+        chat_session = %session.id,
+        "chat hook notification"
+    );
+    session.channel_state.broadcast_notification(req.payload);
+    StatusCode::OK
+}
+
 #[derive(Deserialize)]
 pub struct VerdictQuery {
     pub token: String,

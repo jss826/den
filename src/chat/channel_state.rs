@@ -4,6 +4,7 @@
 //! and a broadcast channel for replies (channel server -> UI via WebSocket).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use tokio::sync::broadcast;
@@ -64,6 +65,15 @@ pub enum ChannelEvent {
         description: String,
         input_preview: String,
     },
+    /// Session lifecycle / tool-use state update from a Claude Code hook.
+    /// `event` is the hook name (`session-start` / `stop` / `post-tool-use`)
+    /// and `payload` is the raw hook JSON so the UI can surface tool details.
+    #[serde(rename = "status")]
+    Status { event: String, payload: Value },
+    /// Notification hook payload — passed through so the UI can display
+    /// claude-originated notifications without interpreting them here.
+    #[serde(rename = "notification")]
+    Notification { payload: Value },
 }
 
 impl Default for ChannelState {
@@ -119,6 +129,17 @@ impl ChannelState {
     /// Broadcast a reply from Claude (via channel server) to UI WebSocket.
     pub fn broadcast_reply(&self, chat_id: String, text: String) {
         let _ = self.reply_tx.send(ChannelEvent::Reply { chat_id, text });
+    }
+
+    /// Broadcast a hook-driven status update (session-start / stop / post-tool-use)
+    /// to UI WebSocket subscribers. The raw hook JSON is preserved in `payload`.
+    pub fn broadcast_status(&self, event: String, payload: Value) {
+        let _ = self.reply_tx.send(ChannelEvent::Status { event, payload });
+    }
+
+    /// Broadcast a Notification hook payload straight through to the UI.
+    pub fn broadcast_notification(&self, payload: Value) {
+        let _ = self.reply_tx.send(ChannelEvent::Notification { payload });
     }
 
     // ── Permission flow ────────────────────────────────────────

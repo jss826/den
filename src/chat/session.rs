@@ -57,6 +57,9 @@ pub struct ChatSession {
 struct ChatProcess {
     child: tokio::process::Child,
     config_path: PathBuf,
+    /// Temporary hooks settings.json passed via `--settings`. Cleaned up in
+    /// `cleanup` alongside the MCP config.
+    settings_path: PathBuf,
     /// stdin for writing stream-json user messages to Claude Code.
     /// Taken from `Child::stdin` during spawn, kept behind a Mutex so concurrent
     /// `send_input` callers serialize writes (JSONL requires one-message-per-line).
@@ -262,9 +265,28 @@ impl ChatSessionManager {
 
         tracing::debug!("MCP config written to {}", config_path.display());
 
-        let claude_args = build_claude_args(&config_path, permission_mode);
+        // Hook settings: den binary forwards SessionStart / Stop / PostToolUse /
+        // Notification payloads to /api/channel/status and /api/channel/notification.
+        let settings_path = config_dir.join(format!("{session_id}.hub-settings.json"));
+        let settings_json = serde_json::to_string_pretty(&build_hook_settings(&den_binary))
+            .map_err(|e| format!("Failed to serialize hook settings: {e}"))?;
+        tokio::fs::write(&settings_path, &settings_json)
+            .await
+            .map_err(|e| format!("Failed to write hook settings: {e}"))?;
+        tracing::debug!("hook settings written to {}", settings_path.display());
+
+        let claude_args = build_claude_args(&config_path, &settings_path, permission_mode);
         let mut cmd = tokio::process::Command::new("claude");
         cmd.args(&claude_args)
+            // Hook commands are spawned by Claude Code and inherit its env, so
+            // set the channel identity here (mirrors the MCP config's env block)
+            // so `den --chat-hook` can locate the backend and authenticate.
+            .env(
+                "DEN_CHANNEL_API_URL",
+                format!("http://127.0.0.1:{}", self.port),
+            )
+            .env("DEN_CHANNEL_TOKEN", token)
+            .env("DEN_CHANNEL_SESSION_ID", session_id)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -306,6 +328,7 @@ impl ChatSessionManager {
         Ok(ChatProcess {
             child,
             config_path,
+            settings_path,
             stdin,
             stdout_task,
             stderr_task,
@@ -359,11 +382,17 @@ fn resolve_cwd(input: Option<&str>) -> Result<PathBuf, String> {
 ///   den-channel MCP tool so the UI's permission modal is the single source
 ///   of truth. Harmless under `bypassPermissions` (never invoked), so we set
 ///   it unconditionally rather than branching on permission_mode.
+/// - `--settings` injects the hook relay (SessionStart / Stop / PostToolUse /
+///   Notification) so lifecycle + tool-use events stream into the UI.
 /// - `--no-session-persistence` keeps Claude from writing to the shared
 ///   ~/.claude history. Den stores its own per-session transcript.
 /// - `--max-turns` caps agentic iterations so a stuck loop can't chew up
 ///   tokens forever.
-fn build_claude_args(config_path: &Path, permission_mode: &str) -> Vec<String> {
+fn build_claude_args(
+    config_path: &Path,
+    settings_path: &Path,
+    permission_mode: &str,
+) -> Vec<String> {
     let allowed_tools: Vec<&str> = ALLOWED_BUILTIN_TOOLS
         .iter()
         .chain(ALLOWED_CHANNEL_TOOLS.iter())
@@ -373,6 +402,8 @@ fn build_claude_args(config_path: &Path, permission_mode: &str) -> Vec<String> {
     vec![
         "--mcp-config".into(),
         config_path.to_string_lossy().into_owned(),
+        "--settings".into(),
+        settings_path.to_string_lossy().into_owned(),
         "--permission-mode".into(),
         permission_mode.to_string(),
         "--allowedTools".into(),
@@ -388,6 +419,51 @@ fn build_claude_args(config_path: &Path, permission_mode: &str) -> Vec<String> {
         "stream-json".into(),
         "--verbose".into(),
     ]
+}
+
+/// Build the hooks settings JSON passed to Claude Code via `--settings`.
+///
+/// All four hooks resolve to `<den_binary> --chat-hook <event>`, which reads
+/// the Claude-supplied stdin JSON and relays it to `/api/channel/status` or
+/// `/api/channel/notification`. The binary path is resolved by the caller
+/// (`std::env::current_exe`) rather than probing `PATH` so the relay always
+/// points at the exact `den` executable that spawned the session — crucial
+/// during development when multiple builds may be on PATH.
+///
+/// `PostToolUse` is scoped to `Edit|Write|Bash` because those are the tools
+/// with user-visible side effects; pure reads (Glob / Grep / Read) would
+/// flood the status stream without adding diagnostic value.
+fn build_hook_settings(den_binary: &Path) -> serde_json::Value {
+    let cmd = |event: &str| -> String {
+        // Quote the binary path so embedded spaces survive shell parsing on
+        // Claude Code's `type: command` hook runner.
+        format!("\"{}\" --chat-hook {event}", den_binary.display())
+    };
+
+    let mk_hook = |event: &'static str| -> serde_json::Value {
+        serde_json::json!({
+            "hooks": [
+                { "type": "command", "command": cmd(event), "timeout": 5 }
+            ]
+        })
+    };
+    let mk_matched_hook = |event: &'static str, matcher: &'static str| -> serde_json::Value {
+        serde_json::json!({
+            "matcher": matcher,
+            "hooks": [
+                { "type": "command", "command": cmd(event), "timeout": 5 }
+            ]
+        })
+    };
+
+    serde_json::json!({
+        "hooks": {
+            "SessionStart": [mk_hook("session-start")],
+            "Stop": [mk_hook("stop")],
+            "PostToolUse": [mk_matched_hook("post-tool-use", "Edit|Write|Bash")],
+            "Notification": [mk_hook("notification")],
+        }
+    })
 }
 
 /// Remove the Windows `\\?\` verbatim prefix from a canonicalized path.
@@ -719,11 +795,13 @@ impl ChatSession {
             if let Some(task) = p.stderr_task.take() {
                 task.abort();
             }
-            // Clean up temp config file
+            // Clean up temp config + hook settings files
             let _ = tokio::fs::remove_file(&p.config_path).await;
+            let _ = tokio::fs::remove_file(&p.settings_path).await;
             tracing::debug!(
-                "Cleaned up chat process and config: {}",
-                p.config_path.display()
+                "Cleaned up chat process, config ({}) and hook settings ({})",
+                p.config_path.display(),
+                p.settings_path.display(),
             );
         }
     }
@@ -1057,18 +1135,19 @@ mod tests {
         assert!(extract_assistant_text(&only_tool_use).is_none());
     }
 
+    fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
+        args.windows(2)
+            .any(|w| w[0].as_str() == flag && w[1].as_str() == value)
+    }
+
     #[test]
     fn build_claude_args_contains_core_flags() {
         let config = PathBuf::from("/tmp/x.mcp.json");
-        let args = build_claude_args(&config, "default");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(&config, &settings, "default");
 
         // Flag/value pairs must appear as consecutive argv entries — checking
         // membership isn't enough because Claude CLI parses positionally.
-        fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
-            args.windows(2)
-                .any(|w| w[0].as_str() == flag && w[1].as_str() == value)
-        }
-
         assert!(
             has_pair(&args, "--mcp-config", "/tmp/x.mcp.json"),
             "args: {args:?}"
@@ -1085,7 +1164,8 @@ mod tests {
     #[test]
     fn build_claude_args_pins_allowed_tools_and_prompt_tool() {
         let config = PathBuf::from("/tmp/x.mcp.json");
-        let args = build_claude_args(&config, "default");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(&config, &settings, "default");
 
         let allowed_idx = args
             .iter()
@@ -1122,7 +1202,8 @@ mod tests {
     #[test]
     fn build_claude_args_enforces_safety_defaults() {
         let config = PathBuf::from("/tmp/x.mcp.json");
-        let args = build_claude_args(&config, "default");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(&config, &settings, "default");
 
         assert!(
             args.iter().any(|a| a == "--no-session-persistence"),
@@ -1142,14 +1223,102 @@ mod tests {
     #[test]
     fn build_claude_args_passes_permission_mode_through() {
         let config = PathBuf::from("/tmp/x.mcp.json");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
         for mode in ["default", "acceptEdits", "bypassPermissions"] {
-            let args = build_claude_args(&config, mode);
+            let args = build_claude_args(&config, &settings, mode);
             let idx = args
                 .iter()
                 .position(|a| a == "--permission-mode")
                 .expect("--permission-mode flag must be present");
             assert_eq!(args.get(idx + 1).map(String::as_str), Some(mode));
         }
+    }
+
+    #[test]
+    fn build_claude_args_includes_settings_path() {
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(&config, &settings, "default");
+        // The hook relay is only active when --settings points at our
+        // generated file; the flag must be present with the exact path.
+        assert!(
+            has_pair(&args, "--settings", "/tmp/x.hub-settings.json"),
+            "args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_hook_settings_defines_all_four_events() {
+        let binary = PathBuf::from("/opt/den/den");
+        let settings = build_hook_settings(&binary);
+        let hooks = settings
+            .get("hooks")
+            .and_then(|v| v.as_object())
+            .expect("top-level hooks object");
+
+        for required in ["SessionStart", "Stop", "PostToolUse", "Notification"] {
+            let hook_group = hooks
+                .get(required)
+                .and_then(|v| v.as_array())
+                .unwrap_or_else(|| panic!("missing hook group: {required}"));
+            assert_eq!(
+                hook_group.len(),
+                1,
+                "each hook group should register exactly one command"
+            );
+            // Each entry must have a `hooks` array with at least one command.
+            let inner = hook_group[0]
+                .get("hooks")
+                .and_then(|v| v.as_array())
+                .expect("inner hooks array");
+            assert!(!inner.is_empty(), "hooks list for {required} is empty");
+            let entry = &inner[0];
+            assert_eq!(entry.get("type").and_then(|v| v.as_str()), Some("command"));
+            let command = entry.get("command").and_then(|v| v.as_str()).unwrap();
+            assert!(
+                command.contains("--chat-hook"),
+                "command must invoke the chat-hook relay: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_hook_settings_scopes_posttooluse_to_mutation_tools() {
+        let binary = PathBuf::from("/opt/den/den");
+        let settings = build_hook_settings(&binary);
+        let group = settings
+            .get("hooks")
+            .and_then(|v| v.get("PostToolUse"))
+            .and_then(|v| v.as_array())
+            .expect("PostToolUse group");
+        let matcher = group[0]
+            .get("matcher")
+            .and_then(|v| v.as_str())
+            .expect("PostToolUse entries must carry a matcher");
+        // Pure-read tools (Glob/Grep/Read) are intentionally excluded to keep
+        // the status feed focused on mutations.
+        assert_eq!(matcher, "Edit|Write|Bash");
+    }
+
+    #[test]
+    fn build_hook_settings_quotes_binary_path_with_spaces() {
+        // Windows dev installs often sit under "Program Files" — a literal
+        // space in the path must not break the hook command line.
+        let binary = PathBuf::from(r"C:\Program Files\den\den.exe");
+        let settings = build_hook_settings(&binary);
+        let cmd = settings
+            .get("hooks")
+            .and_then(|v| v.get("SessionStart"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr[0].get("hooks"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr[0].get("command"))
+            .and_then(|v| v.as_str())
+            .expect("command string");
+        assert!(
+            cmd.starts_with('"'),
+            "hook command must quote the binary path: {cmd}"
+        );
     }
 
     #[test]

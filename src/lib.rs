@@ -4,6 +4,7 @@ pub mod assets;
 pub mod auth;
 pub mod channel;
 pub mod chat;
+pub mod chat_hook;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
@@ -105,6 +106,11 @@ pub fn create_app_with_secret(
             post(chat::channel_api::post_permission),
         )
         .route("/api/channel/verdict", get(chat::channel_api::poll_verdict))
+        .route("/api/channel/status", post(chat::channel_api::post_status))
+        .route(
+            "/api/channel/notification",
+            post(chat::channel_api::post_notification),
+        )
         .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
 
     // 認証不要のルート
