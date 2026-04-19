@@ -24,8 +24,18 @@ const DenChat = (() => {
   let newSessionBtn = null;
   let newSessionModal = null;
   let permissionModeSelect = null;
-  let cwdInput = null;
+  let cwdDisplayText = null;
+  let cwdBrowseBtn = null;
   let cwdUseFilerBtn = null;
+
+  // ── Working directory picker state ──
+  // selectedCwd is the value that will be sent on session creation.
+  // Empty string means "home directory (default)".
+  let selectedCwd = '';
+  let cwdPickerModal = null;
+  let cwdPickerPath = '';
+  let cwdPickerAbort = null;
+  let cwdPickerDrivesLoaded = false;
 
   // ── State ──
   let ws = null;
@@ -80,8 +90,10 @@ const DenChat = (() => {
     newSessionBtn = document.getElementById('chat-new-session-btn');
     newSessionModal = document.getElementById('chat-new-session-modal');
     permissionModeSelect = document.getElementById('chat-permission-mode');
-    cwdInput = document.getElementById('chat-cwd-input');
+    cwdDisplayText = document.getElementById('chat-cwd-display-text');
+    cwdBrowseBtn = document.getElementById('chat-cwd-browse');
     cwdUseFilerBtn = document.getElementById('chat-cwd-use-filer');
+    cwdPickerModal = document.getElementById('chat-cwd-picker-modal');
 
     sendBtn.addEventListener('click', handleSend);
     inputEl.addEventListener('keydown', (e) => {
@@ -99,6 +111,8 @@ const DenChat = (() => {
     // New session modal
     if (newSessionBtn) {
       newSessionBtn.addEventListener('click', () => {
+        selectedCwd = '';
+        updateCwdDisplay();
         newSessionModal.hidden = false;
       });
     }
@@ -106,6 +120,10 @@ const DenChat = (() => {
     const createBtn = document.getElementById('chat-session-create');
     if (cancelBtn) cancelBtn.addEventListener('click', () => { newSessionModal.hidden = true; });
     if (createBtn) createBtn.addEventListener('click', handleCreateSession);
+
+    if (cwdBrowseBtn) {
+      cwdBrowseBtn.addEventListener('click', openCwdPicker);
+    }
 
     if (cwdUseFilerBtn) {
       cwdUseFilerBtn.addEventListener('click', () => {
@@ -119,9 +137,13 @@ const DenChat = (() => {
           appendSystemMessage('Open a folder in the Files tab first to use it here.');
           return;
         }
-        if (cwdInput) cwdInput.value = dir;
+        selectedCwd = dir;
+        updateCwdDisplay();
       });
     }
+
+    // Initialize directory picker (registers listeners once)
+    initCwdPicker();
 
     // Remote connection awareness
     document.addEventListener('den:remote-changed', (e) => {
@@ -239,7 +261,7 @@ const DenChat = (() => {
 
   async function handleCreateSession() {
     const mode = permissionModeSelect ? permissionModeSelect.value : 'default';
-    const cwd = cwdInput ? cwdInput.value.trim() : '';
+    const cwd = selectedCwd.trim();
     newSessionModal.hidden = true;
 
     appendSystemMessage(`Creating session (${mode})${cwd ? ` in ${cwd}` : ''}...`);
@@ -263,11 +285,25 @@ const DenChat = (() => {
 
       const session = await resp.json();
       appendSystemMessage(`Session created: ${session.id.slice(0, 8)} (${session.cwd})`);
-      if (cwdInput) cwdInput.value = '';
+      selectedCwd = '';
+      updateCwdDisplay();
       await fetchSessions();
       switchSession(session.id);
     } catch (err) {
       appendSystemMessage(`Error: ${err.message}`);
+    }
+  }
+
+  function updateCwdDisplay() {
+    if (!cwdDisplayText) return;
+    if (selectedCwd) {
+      cwdDisplayText.textContent = selectedCwd;
+      cwdDisplayText.classList.remove('is-placeholder');
+      if (cwdBrowseBtn) cwdBrowseBtn.title = selectedCwd;
+    } else {
+      cwdDisplayText.textContent = 'Home directory (default)';
+      cwdDisplayText.classList.add('is-placeholder');
+      if (cwdBrowseBtn) cwdBrowseBtn.title = 'Click to browse';
     }
   }
 
@@ -623,6 +659,189 @@ const DenChat = (() => {
     inputEl.value += prefill;
     inputEl.focus();
     inputEl.scrollTop = inputEl.scrollHeight;
+  }
+
+  // ── Directory picker modal ──
+
+  // Filer API base mirrors getApiBase() but points at the filer subtree.
+  // Uses the chat tab's remote state so picking runs against the same host
+  // where the session will be created.
+  function getFilerApiBase() {
+    if (!chatRemoteId) return '/api/filer';
+    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}/filer`;
+    return `/api/remote/${chatRemoteId}/filer`;
+  }
+
+  function initCwdPicker() {
+    if (!cwdPickerModal) return;
+    const cancelBtn = document.getElementById('cwd-picker-cancel');
+    const selectBtn = document.getElementById('cwd-picker-select');
+    const clearBtn = document.getElementById('cwd-picker-clear');
+    const upBtn = document.getElementById('cwd-picker-up');
+    const listEl = document.getElementById('cwd-picker-list');
+    if (!cancelBtn || !selectBtn || !clearBtn || !upBtn || !listEl) return;
+
+    cancelBtn.addEventListener('click', closeCwdPicker);
+
+    selectBtn.addEventListener('click', () => {
+      if (cwdPickerPath) {
+        selectedCwd = cwdPickerPath;
+        updateCwdDisplay();
+      }
+      closeCwdPicker();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      selectedCwd = '';
+      updateCwdDisplay();
+      closeCwdPicker();
+    });
+
+    upBtn.addEventListener('click', () => {
+      const parent = getParentDir(cwdPickerPath);
+      if (parent && parent !== cwdPickerPath) loadCwdPickerDir(parent);
+    });
+
+    // Single click enters a folder; double click enters and picks immediately.
+    listEl.addEventListener('click', (e) => {
+      const item = e.target.closest('.cwd-picker-item');
+      if (!item) return;
+      loadCwdPickerDir(item.dataset.path);
+    });
+    listEl.addEventListener('dblclick', (e) => {
+      const item = e.target.closest('.cwd-picker-item');
+      if (!item) return;
+      selectedCwd = item.dataset.path;
+      updateCwdDisplay();
+      closeCwdPicker();
+    });
+  }
+
+  function openCwdPicker() {
+    if (!cwdPickerModal) return;
+    cwdPickerModal.hidden = false;
+    cwdPickerDrivesLoaded = false;
+    const drivesEl = document.getElementById('cwd-picker-drives');
+    if (drivesEl) drivesEl.hidden = true;
+    const startPath = selectedCwd || '~';
+    loadCwdPickerDir(startPath);
+  }
+
+  function closeCwdPicker() {
+    if (cwdPickerModal) cwdPickerModal.hidden = true;
+    if (cwdPickerAbort) { cwdPickerAbort.abort(); cwdPickerAbort = null; }
+  }
+
+  async function loadCwdPickerDir(dirPath) {
+    const listEl = document.getElementById('cwd-picker-list');
+    const currentEl = document.getElementById('cwd-picker-current');
+    if (!listEl || !currentEl) return;
+
+    if (cwdPickerAbort) cwdPickerAbort.abort();
+    const controller = new AbortController();
+    cwdPickerAbort = controller;
+
+    listEl.innerHTML = '<div class="cwd-picker-empty">Loading...</div>';
+    try {
+      const resp = await fetch(
+        `${getFilerApiBase()}/list?path=${encodeURIComponent(dirPath)}&show_hidden=false`,
+        { credentials: 'same-origin', signal: controller.signal }
+      );
+      if (!resp.ok) {
+        listEl.innerHTML = '<div class="cwd-picker-empty">Failed to load directory</div>';
+        return;
+      }
+      const data = await resp.json();
+      cwdPickerPath = data.path;
+      currentEl.textContent = data.path;
+      currentEl.title = data.path;
+
+      if (!cwdPickerDrivesLoaded && data.drives && data.drives.length > 0) {
+        cwdPickerDrivesLoaded = true;
+        renderCwdPickerDrives(data.drives);
+      } else if (!cwdPickerDrivesLoaded) {
+        fetchCwdPickerDrives(data.path);
+      }
+
+      const dirs = (data.entries || []).filter((e) => e.is_dir);
+      if (dirs.length === 0) {
+        listEl.innerHTML = '<div class="cwd-picker-empty">No subdirectories</div>';
+      } else {
+        listEl.innerHTML = '';
+        const sep = data.path.includes('/') ? '/' : '\\';
+        const base = data.path.replace(/[\\/]$/, '');
+        for (const d of dirs) {
+          listEl.appendChild(createPickerItem(d.name, base + sep + d.name));
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      listEl.innerHTML = '<div class="cwd-picker-empty">Error loading directory</div>';
+    }
+  }
+
+  function createPickerItem(label, path) {
+    const item = document.createElement('div');
+    item.className = 'cwd-picker-item';
+    item.setAttribute('role', 'option');
+    item.dataset.path = path;
+
+    const icon = document.createElement('span');
+    icon.className = 'cwd-picker-item-icon';
+    icon.textContent = '\uD83D\uDCC1';
+
+    const name = document.createElement('span');
+    name.textContent = label;
+
+    item.appendChild(icon);
+    item.appendChild(name);
+    return item;
+  }
+
+  function renderCwdPickerDrives(drives) {
+    const container = document.getElementById('cwd-picker-drives');
+    if (!container) return;
+    container.innerHTML = '';
+    container.hidden = !drives || drives.length === 0;
+    for (const d of drives) {
+      const btn = document.createElement('button');
+      btn.className = 'cwd-picker-drive-btn';
+      btn.textContent = d;
+      btn.type = 'button';
+      btn.addEventListener('click', () => loadCwdPickerDir(d));
+      container.appendChild(btn);
+    }
+  }
+
+  async function fetchCwdPickerDrives(resolvedPath) {
+    if (cwdPickerDrivesLoaded) return;
+    const match = resolvedPath.match(/^([A-Za-z]:\\)/);
+    if (!match) return;
+    try {
+      const resp = await fetch(
+        `${getFilerApiBase()}/list?path=${encodeURIComponent(match[1])}&show_hidden=false`,
+        { credentials: 'same-origin' }
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.drives && data.drives.length > 0) {
+        cwdPickerDrivesLoaded = true;
+        renderCwdPickerDrives(data.drives);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Handle drive/root boundaries so "Up" stops instead of looping.
+  function getParentDir(p) {
+    if (!p) return p;
+    const normalized = p.replace(/[\\/]+$/, '');
+    const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+    if (lastSep < 0) return p;
+    if (lastSep === 0) return normalized.substring(0, 1);
+    if (normalized.length >= 2 && normalized[1] === ':' && lastSep === 2) {
+      return normalized.substring(0, 3);
+    }
+    return normalized.substring(0, lastSep);
   }
 
   // ── Public API ──

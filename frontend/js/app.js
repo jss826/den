@@ -56,7 +56,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
+  // Order matters: when multiple are open, Esc closes the first match — list
+  // nested pickers (chat-cwd-picker-modal) before their parent modal
+  // (chat-new-session-modal).
+  const escModals = ['chat-cwd-picker-modal', 'chat-new-session-modal', 'settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
   const allModals = ['confirm-modal', 'prompt-modal', 'choose-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];

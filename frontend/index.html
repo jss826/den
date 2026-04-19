@@ -154,16 +154,37 @@
           </select>
         </div>
         <div class="modal-section">
-          <label for="chat-cwd-input">Working Directory</label>
+          <label>Working Directory</label>
           <div class="chat-cwd-row">
-            <input type="text" id="chat-cwd-input" class="settings-input" placeholder="Leave empty for home directory" autocomplete="off" spellcheck="false" />
+            <button type="button" id="chat-cwd-browse" class="chat-cwd-display" aria-label="Choose working directory">
+              <span class="chat-cwd-display-icon" aria-hidden="true">&#128193;</span>
+              <span id="chat-cwd-display-text" class="chat-cwd-display-text">Home directory (default)</span>
+            </button>
             <button type="button" id="chat-cwd-use-filer" class="modal-btn" title="Use the folder currently open in the Files tab">Use current folder</button>
           </div>
-          <span class="setting-hint">Absolute path where Claude Code will run. Leave empty to start in the user home directory.</span>
+          <span class="setting-hint">Click the folder above to browse. Leave empty to start in the user home directory.</span>
         </div>
         <div class="modal-actions">
           <button id="chat-session-cancel" class="modal-btn">Cancel</button>
           <button id="chat-session-create" class="modal-btn primary">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Working Directory picker (used by chat-new-session-modal) -->
+    <div id="chat-cwd-picker-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Select working directory">
+      <div class="modal-content cwd-picker-content">
+        <h3>Select Working Directory</h3>
+        <div id="cwd-picker-drives" class="cwd-picker-drives" hidden></div>
+        <div class="cwd-picker-path-bar">
+          <button id="cwd-picker-up" class="cwd-picker-up-btn" type="button" aria-label="Go up" data-tooltip="Parent directory">&#8679; Up</button>
+          <span id="cwd-picker-current" class="cwd-picker-current"></span>
+        </div>
+        <div id="cwd-picker-list" class="cwd-picker-list" role="listbox" aria-label="Directories"></div>
+        <div class="cwd-picker-actions">
+          <button id="cwd-picker-clear" class="modal-btn" type="button" title="Use home directory">Home</button>
+          <button id="cwd-picker-cancel" class="modal-btn" type="button">Cancel</button>
+          <button id="cwd-picker-select" class="modal-btn primary" type="button">Select This Folder</button>
         </div>
       </div>
     </div>
