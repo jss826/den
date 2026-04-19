@@ -18,6 +18,22 @@ const MAX_SESSIONS: usize = 5;
 /// Valid permission modes for Claude Code.
 const VALID_PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "bypassPermissions"];
 
+/// Built-in tools that den-channel sessions always allowlist. Mirrors the
+/// orch adapter defaults so Claude Code does not fall back to its internal
+/// AskUserQuestion permission flow (which would hang with `-p` stdio I/O).
+const ALLOWED_BUILTIN_TOOLS: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Agent"];
+
+/// den-channel MCP tools that the session must also allowlist so Claude Code
+/// can post assistant replies and request tool-use permissions back to the UI.
+const ALLOWED_CHANNEL_TOOLS: &[&str] = &[
+    "mcp__den-channel__reply",
+    "mcp__den-channel__request_permission",
+];
+
+/// Upper bound on agentic iterations per chat turn. Matches the orch adapter
+/// default and exists to contain runaway tool loops — it is not a hard budget.
+const DEFAULT_MAX_TURNS: u32 = 200;
+
 /// Chat session manager — holds all active chat sessions.
 pub struct ChatSessionManager {
     sessions: Mutex<HashMap<String, Arc<ChatSession>>>,
@@ -246,16 +262,9 @@ impl ChatSessionManager {
 
         tracing::debug!("MCP config written to {}", config_path.display());
 
+        let claude_args = build_claude_args(&config_path, permission_mode);
         let mut cmd = tokio::process::Command::new("claude");
-        cmd.arg("--mcp-config")
-            .arg(&config_path)
-            .arg("--permission-mode")
-            .arg(permission_mode)
-            .arg("--input-format")
-            .arg("stream-json")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose")
+        cmd.args(&claude_args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -336,6 +345,49 @@ fn resolve_cwd(input: Option<&str>) -> Result<PathBuf, String> {
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "no cwd provided and neither USERPROFILE nor HOME is set".to_string())?;
     Ok(PathBuf::from(home))
+}
+
+/// Build the CLI argv passed to `claude` when spawning a chat session.
+///
+/// The argument list mirrors what the orch adapter emits so the two stay in
+/// sync as the Claude CLI evolves:
+/// - `--allowedTools` pins the built-in tools plus the den-channel MCP tools
+///   (`reply` / `request_permission`). Without an allowlist Claude Code falls
+///   back to its internal AskUserQuestion dialog, which has no UI to surface
+///   it here and results in the session hanging silently.
+/// - `--permission-prompt-tool` routes any allowlist-miss through the
+///   den-channel MCP tool so the UI's permission modal is the single source
+///   of truth. Harmless under `bypassPermissions` (never invoked), so we set
+///   it unconditionally rather than branching on permission_mode.
+/// - `--no-session-persistence` keeps Claude from writing to the shared
+///   ~/.claude history. Den stores its own per-session transcript.
+/// - `--max-turns` caps agentic iterations so a stuck loop can't chew up
+///   tokens forever.
+fn build_claude_args(config_path: &Path, permission_mode: &str) -> Vec<String> {
+    let allowed_tools: Vec<&str> = ALLOWED_BUILTIN_TOOLS
+        .iter()
+        .chain(ALLOWED_CHANNEL_TOOLS.iter())
+        .copied()
+        .collect();
+
+    vec![
+        "--mcp-config".into(),
+        config_path.to_string_lossy().into_owned(),
+        "--permission-mode".into(),
+        permission_mode.to_string(),
+        "--allowedTools".into(),
+        allowed_tools.join(","),
+        "--permission-prompt-tool".into(),
+        "mcp__den-channel__request_permission".into(),
+        "--no-session-persistence".into(),
+        "--max-turns".into(),
+        DEFAULT_MAX_TURNS.to_string(),
+        "--input-format".into(),
+        "stream-json".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+    ]
 }
 
 /// Remove the Windows `\\?\` verbatim prefix from a canonicalized path.
@@ -1003,6 +1055,101 @@ mod tests {
             }
         });
         assert!(extract_assistant_text(&only_tool_use).is_none());
+    }
+
+    #[test]
+    fn build_claude_args_contains_core_flags() {
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let args = build_claude_args(&config, "default");
+
+        // Flag/value pairs must appear as consecutive argv entries — checking
+        // membership isn't enough because Claude CLI parses positionally.
+        fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
+            args.windows(2)
+                .any(|w| w[0].as_str() == flag && w[1].as_str() == value)
+        }
+
+        assert!(
+            has_pair(&args, "--mcp-config", "/tmp/x.mcp.json"),
+            "args: {args:?}"
+        );
+        assert!(has_pair(&args, "--permission-mode", "default"));
+        assert!(has_pair(&args, "--input-format", "stream-json"));
+        assert!(has_pair(&args, "--output-format", "stream-json"));
+        assert!(
+            args.iter().any(|a| a == "--verbose"),
+            "expected --verbose flag, args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_claude_args_pins_allowed_tools_and_prompt_tool() {
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let args = build_claude_args(&config, "default");
+
+        let allowed_idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("--allowedTools flag must be present");
+        let allowed_csv = args
+            .get(allowed_idx + 1)
+            .expect("--allowedTools must have a value");
+
+        // Built-ins (a representative sample) + both den-channel MCP tools must
+        // appear so Claude Code never falls back to the AskUserQuestion prompt.
+        for tool in ["Read", "Write", "Edit", "Bash", "Agent"] {
+            assert!(
+                allowed_csv.split(',').any(|t| t == tool),
+                "allowedTools should contain {tool}: {allowed_csv}"
+            );
+        }
+        assert!(allowed_csv.contains("mcp__den-channel__reply"));
+        assert!(allowed_csv.contains("mcp__den-channel__request_permission"));
+
+        // Permission-prompt-tool must be the channel's request_permission tool
+        // so allowlist misses route through the UI modal, not claude's
+        // built-in prompt.
+        let prompt_idx = args
+            .iter()
+            .position(|a| a == "--permission-prompt-tool")
+            .expect("--permission-prompt-tool flag must be present");
+        assert_eq!(
+            args.get(prompt_idx + 1).map(String::as_str),
+            Some("mcp__den-channel__request_permission")
+        );
+    }
+
+    #[test]
+    fn build_claude_args_enforces_safety_defaults() {
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let args = build_claude_args(&config, "default");
+
+        assert!(
+            args.iter().any(|a| a == "--no-session-persistence"),
+            "--no-session-persistence must be set so Claude doesn't share history: {args:?}"
+        );
+
+        let turns_idx = args
+            .iter()
+            .position(|a| a == "--max-turns")
+            .expect("--max-turns flag must be present");
+        assert_eq!(
+            args.get(turns_idx + 1).map(String::as_str),
+            Some(DEFAULT_MAX_TURNS.to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn build_claude_args_passes_permission_mode_through() {
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        for mode in ["default", "acceptEdits", "bypassPermissions"] {
+            let args = build_claude_args(&config, mode);
+            let idx = args
+                .iter()
+                .position(|a| a == "--permission-mode")
+                .expect("--permission-mode flag must be present");
+            assert_eq!(args.get(idx + 1).map(String::as_str), Some(mode));
+        }
     }
 
     #[test]

@@ -186,24 +186,44 @@ async fn handle_message(ctx: &ChannelContext, msg: JsonRpcMessage) {
                 jsonrpc: "2.0".into(),
                 id,
                 result: Some(serde_json::json!({
-                    "tools": [{
-                        "name": "reply",
-                        "description": "Send a message back to the den Chat UI",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "chat_id": {
-                                    "type": "string",
-                                    "description": "The conversation to reply in"
+                    "tools": [
+                        {
+                            "name": "reply",
+                            "description": "Send a message back to the den Chat UI",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "chat_id": {
+                                        "type": "string",
+                                        "description": "The conversation to reply in"
+                                    },
+                                    "text": {
+                                        "type": "string",
+                                        "description": "The message to send"
+                                    }
                                 },
-                                "text": {
-                                    "type": "string",
-                                    "description": "The message to send"
-                                }
-                            },
-                            "required": ["chat_id", "text"]
+                                "required": ["chat_id", "text"]
+                            }
+                        },
+                        {
+                            "name": "request_permission",
+                            "description": "Ask the den Chat UI to allow or deny a tool invocation. Returns an MCP permission verdict object the Claude CLI consumes via --permission-prompt-tool.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "tool_name": {
+                                        "type": "string",
+                                        "description": "Name of the tool requesting permission"
+                                    },
+                                    "input": {
+                                        "type": "object",
+                                        "description": "Raw tool arguments, shown to the user as an input preview"
+                                    }
+                                },
+                                "required": ["tool_name"]
+                            }
                         }
-                    }]
+                    ]
                 })),
                 error: None,
             })
@@ -293,7 +313,108 @@ async fn handle_tool_call(ctx: &ChannelContext, params: Option<&Value>) -> Value
                 Err(e) => tool_error(&format!("Failed to post reply: {e}")),
             }
         }
+        "request_permission" => handle_request_permission_tool(ctx, arguments).await,
         _ => tool_error(&format!("Unknown tool: {tool_name}")),
+    }
+}
+
+/// Handle an MCP `request_permission` tool call.
+///
+/// Claude CLI invokes this tool (via `--permission-prompt-tool
+/// mcp__den-channel__request_permission`) whenever a tool use falls outside
+/// the allowlist. The call is forwarded to the den backend, which surfaces a
+/// permission modal in the UI and eventually writes a verdict that we long-
+/// poll for. The verdict is returned to Claude Code as an MCP tool result
+/// whose text content is the JSON object specified by the Claude CLI
+/// permission-prompt-tool contract:
+///
+/// ```json
+/// { "behavior": "allow" | "deny", "updatedInput"?: {...}, "message"?: "..." }
+/// ```
+///
+/// A verdict poll timeout (5 minutes) yields `deny` with a message so a stuck
+/// backend can't leave Claude Code waiting forever.
+async fn handle_request_permission_tool(ctx: &ChannelContext, arguments: Value) -> Value {
+    let tool_name = match arguments.get("tool_name").and_then(|v| v.as_str()) {
+        Some(n) => n.to_string(),
+        None => return tool_error("Missing 'tool_name' argument"),
+    };
+    let input_value = arguments
+        .get("input")
+        .cloned()
+        .unwrap_or(Value::Object(Default::default()));
+    let input_preview = serde_json::to_string(&input_value).unwrap_or_else(|_| "{}".into());
+    let description = format!("Tool call: {tool_name}");
+    let request_id = uuid::Uuid::new_v4().to_string();
+
+    let post_url = format!("{}/api/channel/permission", ctx.api_url);
+    if let Err(e) = ctx
+        .client
+        .post(&post_url)
+        .header("X-Channel-Token", &ctx.token)
+        .json(&serde_json::json!({
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "description": description,
+            "input_preview": input_preview,
+        }))
+        .send()
+        .await
+    {
+        return tool_error(&format!("Failed to notify UI of permission request: {e}"));
+    }
+
+    let verdict_url = format!(
+        "{}/api/channel/verdict?token={}&request_id={}",
+        ctx.api_url, ctx.token, request_id
+    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+
+    loop {
+        match ctx.client.get(&verdict_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                #[derive(Deserialize)]
+                struct Verdict {
+                    behavior: String,
+                    #[serde(default)]
+                    message: Option<String>,
+                    #[serde(default)]
+                    updated_input: Option<Value>,
+                }
+                if let Ok(v) = resp.json::<Verdict>().await {
+                    let mut payload = serde_json::Map::new();
+                    payload.insert("behavior".into(), Value::String(v.behavior));
+                    if let Some(msg) = v.message {
+                        payload.insert("message".into(), Value::String(msg));
+                    }
+                    if let Some(updated) = v.updated_input {
+                        payload.insert("updatedInput".into(), updated);
+                    } else {
+                        payload.insert("updatedInput".into(), input_value.clone());
+                    }
+                    let body = serde_json::to_string(&Value::Object(payload))
+                        .unwrap_or_else(|_| r#"{"behavior":"deny"}"#.into());
+                    return tool_result(&body, false);
+                }
+            }
+            Ok(_) => {
+                // No verdict yet — keep polling.
+            }
+            Err(e) => {
+                eprintln!("den-channel: verdict poll error: {e}");
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            let body = serde_json::json!({
+                "behavior": "deny",
+                "message": "Permission request timed out after 5 minutes",
+            })
+            .to_string();
+            return tool_result(&body, false);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
     }
 }
 
