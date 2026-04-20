@@ -111,6 +111,10 @@ pub fn create_app_with_secret(
             "/api/channel/notification",
             post(chat::channel_api::post_notification),
         )
+        .route(
+            "/api/channel/directive",
+            get(chat::channel_api::get_directive),
+        )
         .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
 
     // 認証不要のルート
@@ -284,6 +288,10 @@ pub fn create_app_with_secret(
         .route(
             "/api/channel/verdict",
             post(chat::channel_api::send_verdict),
+        )
+        .route(
+            "/api/channel/directive",
+            post(chat::channel_api::send_directive),
         )
         .route(
             "/api/channel/ws",

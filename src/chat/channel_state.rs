@@ -29,6 +29,10 @@ pub struct ChannelState {
     /// so concurrent requests for different `request_id`s all re-check after
     /// any verdict lands; non-matching waiters fall back to sleep.
     verdict_notify: Notify,
+    /// Pending directive from UI -> worker. Consumed on read: the MCP
+    /// `check_directive` tool takes the value and returns it once, mirroring
+    /// orch's `HUB_DIRECTIVE` file semantics.
+    directive: Mutex<Option<String>>,
     /// Token for authenticating the channel server (loopback HTTP).
     token: String,
 }
@@ -101,6 +105,7 @@ impl ChannelState {
             reply_tx,
             message_notify: Notify::new(),
             verdict_notify: Notify::new(),
+            directive: Mutex::new(None),
             token,
         }
     }
@@ -207,6 +212,20 @@ impl ChannelState {
     /// interest *before* calling `poll_verdict()`, closing the push/poll race.
     pub fn verdict_notify(&self) -> &Notify {
         &self.verdict_notify
+    }
+
+    // ── Directive (UI -> worker, one-shot) ─────────────────────
+
+    /// Store a directive from the UI. Overwrites any pending directive so a
+    /// newer instruction always wins (matches orch's file-overwrite semantics).
+    pub fn set_directive(&self, text: String) {
+        *self.directive.lock().expect("directive lock") = Some(text);
+    }
+
+    /// Take the pending directive, clearing it. Called by the MCP
+    /// `check_directive` tool — the directive is delivered exactly once.
+    pub fn take_directive(&self) -> Option<String> {
+        self.directive.lock().expect("directive lock").take()
     }
 
     /// Validate the channel token.
@@ -361,6 +380,28 @@ mod tests {
         assert!(
             !r2,
             "w2 should not see a verdict for a different request_id"
+        );
+    }
+
+    /// The directive slot is one-shot: a newer push overwrites any previous
+    /// pending directive (so stacking "Stop", then "Redirect to X" means the
+    /// worker sees only the redirect), and `take_directive` drains it so the
+    /// MCP tool doesn't repeatedly surface the same instruction.
+    #[test]
+    fn directive_is_one_shot_and_overwritten_by_newer_pushes() {
+        let state = ChannelState::new();
+        assert!(state.take_directive().is_none(), "initial take is empty");
+
+        state.set_directive("stop and wait".into());
+        state.set_directive("actually, refactor module X".into());
+        assert_eq!(
+            state.take_directive().as_deref(),
+            Some("actually, refactor module X"),
+            "newest directive must win on take"
+        );
+        assert!(
+            state.take_directive().is_none(),
+            "second take must be empty; directives are consumed, not repeated"
         );
     }
 

@@ -164,6 +164,14 @@
           </div>
           <span class="setting-hint">Click the folder above to browse. Leave empty to start in the user home directory.</span>
         </div>
+        <details class="modal-section chat-advanced-section">
+          <summary>Advanced: auto / escalate tools</summary>
+          <span class="setting-hint">Comma-separated tool names. When either list is filled in, it overrides the Permission Mode above. Use <code>*</code> in Auto to mean &ldquo;every built-in not in Escalate&rdquo;.</span>
+          <label for="chat-auto-tools">Auto (skip permission prompt)</label>
+          <textarea id="chat-auto-tools" class="settings-input chat-tool-list" rows="2" placeholder="Edit, Write, MultiEdit"></textarea>
+          <label for="chat-escalate-tools">Escalate (always ask UI)</label>
+          <textarea id="chat-escalate-tools" class="settings-input chat-tool-list" rows="2" placeholder="Bash"></textarea>
+        </details>
         <div class="modal-actions">
           <button id="chat-session-cancel" class="modal-btn">Cancel</button>
           <button id="chat-session-create" class="modal-btn primary">Create</button>

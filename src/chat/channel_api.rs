@@ -27,7 +27,12 @@ pub async fn create_session(
 ) -> Response {
     match state
         .chat_sessions
-        .create_session(&req.permission_mode, req.cwd.as_deref())
+        .create_session(
+            &req.permission_mode,
+            req.cwd.as_deref(),
+            &req.auto_tools,
+            &req.escalate_tools,
+        )
         .await
     {
         Ok(session) => {
@@ -37,6 +42,8 @@ pub async fn create_session(
                 created_at: session.created_at,
                 alive: session.is_alive().await,
                 cwd: session.cwd.clone(),
+                auto_tools: session.auto_tools.clone(),
+                escalate_tools: session.escalate_tools.clone(),
             };
             (StatusCode::CREATED, Json(info)).into_response()
         }
@@ -119,6 +126,37 @@ pub async fn send_verdict(
         request_id: req.request_id,
         behavior: req.behavior,
     });
+    StatusCode::OK.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SendDirectiveRequest {
+    pub session: String,
+    pub text: String,
+}
+
+/// POST /api/channel/directive — UI pushes a one-shot directive that the worker
+/// picks up via the MCP `check_directive` tool. Overwrites any pending
+/// directive so a newer instruction always wins (matches orch's file-based
+/// `HUB_DIRECTIVE` semantics).
+pub async fn send_directive(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SendDirectiveRequest>,
+) -> Response {
+    let trimmed = req.text.trim();
+    if trimmed.is_empty() {
+        return (StatusCode::BAD_REQUEST, "Directive text must be non-empty").into_response();
+    }
+    let session = match state.chat_sessions.get_session(&req.session).await {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, "Session not found").into_response(),
+    };
+    session.channel_state.set_directive(trimmed.to_string());
+    tracing::info!(
+        chat_session = %session.id,
+        "directive queued ({} chars)",
+        trimmed.len()
+    );
     StatusCode::OK.into_response()
 }
 
@@ -321,6 +359,30 @@ pub async fn post_status(
         .channel_state
         .broadcast_status(req.event, req.payload);
     StatusCode::OK
+}
+
+#[derive(Deserialize)]
+pub struct DirectiveQuery {
+    pub token: String,
+}
+
+/// GET /api/channel/directive — den-channel (MCP) polls the pending directive.
+///
+/// Returns `{ text }` on hit, 204 on empty. The directive is consumed by the
+/// first reader so a Worker that successfully calls `check_directive` won't
+/// re-surface the same instruction on the next call.
+pub async fn get_directive(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DirectiveQuery>,
+) -> Response {
+    let session = match state.chat_sessions.find_by_token(&query.token).await {
+        Some(s) => s,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    match session.channel_state.take_directive() {
+        Some(text) => Json(serde_json::json!({ "text": text })).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
 }
 
 /// POST /api/channel/notification — den-chat-hook posts a Notification hook payload.

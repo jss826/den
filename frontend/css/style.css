@@ -833,6 +833,22 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   gap: 6px;
   align-items: stretch;
 }
+.chat-advanced-section > summary {
+  cursor: pointer;
+  font-weight: 500;
+  padding: 4px 0;
+  user-select: none;
+}
+.chat-advanced-section[open] > summary {
+  margin-bottom: 6px;
+}
+.chat-tool-list {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85rem;
+  margin-top: 4px;
+  resize: vertical;
+  min-height: 2.4em;
+}
 .chat-cwd-row .modal-btn {
   white-space: nowrap;
   font-size: 12px;

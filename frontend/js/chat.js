@@ -113,6 +113,12 @@ const DenChat = (() => {
       newSessionBtn.addEventListener('click', () => {
         selectedCwd = '';
         updateCwdDisplay();
+        // Reset the advanced-settings accordion so the previous session's
+        // auto/escalate lists don't silently carry over into the next one.
+        const autoEl = document.getElementById('chat-auto-tools');
+        const escalateEl = document.getElementById('chat-escalate-tools');
+        if (autoEl) autoEl.value = '';
+        if (escalateEl) escalateEl.value = '';
         newSessionModal.hidden = false;
       });
     }
@@ -208,6 +214,19 @@ const DenChat = (() => {
     return match ? match[0] : path;
   }
 
+  /**
+   * Split the auto/escalate textarea contents into a clean tool-name array.
+   * Accepts commas, newlines, and whitespace as separators and drops empties
+   * so a trailing comma or stray newline doesn't produce a bogus entry.
+   */
+  function parseToolList(el) {
+    if (!el || typeof el.value !== 'string') return [];
+    return el.value
+      .split(/[\s,]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
+  }
+
   function renderSessionList() {
     if (!sessionListEl) return;
     sessionListEl.innerHTML = '';
@@ -262,12 +281,19 @@ const DenChat = (() => {
   async function handleCreateSession() {
     const mode = permissionModeSelect ? permissionModeSelect.value : 'default';
     const cwd = selectedCwd.trim();
+    const autoTools = parseToolList(document.getElementById('chat-auto-tools'));
+    const escalateTools = parseToolList(document.getElementById('chat-escalate-tools'));
     newSessionModal.hidden = true;
 
-    appendSystemMessage(`Creating session (${mode})${cwd ? ` in ${cwd}` : ''}...`);
+    const summaryBits = [mode];
+    if (autoTools.length) summaryBits.push(`auto=${autoTools.join(',')}`);
+    if (escalateTools.length) summaryBits.push(`escalate=${escalateTools.join(',')}`);
+    appendSystemMessage(`Creating session (${summaryBits.join(' | ')})${cwd ? ` in ${cwd}` : ''}...`);
 
     const body = { permission_mode: mode };
     if (cwd) body.cwd = cwd;
+    if (autoTools.length) body.auto_tools = autoTools;
+    if (escalateTools.length) body.escalate_tools = escalateTools;
 
     try {
       const resp = await fetch(`${getApiBase()}/channel/sessions`, {

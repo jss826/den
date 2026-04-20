@@ -222,6 +222,14 @@ async fn handle_message(ctx: &ChannelContext, msg: JsonRpcMessage) {
                                 },
                                 "required": ["tool_name"]
                             }
+                        },
+                        {
+                            "name": "check_directive",
+                            "description": "Poll for a one-shot directive from the den Chat UI. Returns the directive text when the user has queued one, or an empty object otherwise. Call this between turns or before a long-running action so the user can steer you (stop / redirect / add constraints) without interrupting the stream.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
                         }
                     ]
                 })),
@@ -314,7 +322,29 @@ async fn handle_tool_call(ctx: &ChannelContext, params: Option<&Value>) -> Value
             }
         }
         "request_permission" => handle_request_permission_tool(ctx, arguments).await,
+        "check_directive" => handle_check_directive(ctx).await,
         _ => tool_error(&format!("Unknown tool: {tool_name}")),
+    }
+}
+
+/// Fetch any pending UI directive from the Den backend.
+///
+/// Returns the directive text verbatim when the UI has queued one, or an
+/// empty JSON object `{}` otherwise. Network errors surface as MCP tool
+/// errors so Claude Code can decide whether to retry.
+async fn handle_check_directive(ctx: &ChannelContext) -> Value {
+    let url = format!("{}/api/channel/directive?token={}", ctx.api_url, ctx.token);
+    match ctx.client.get(&url).send().await {
+        Ok(resp) if resp.status() == reqwest::StatusCode::NO_CONTENT => tool_result("{}", false),
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(body) => tool_result(&body, false),
+            Err(e) => tool_error(&format!("Failed to read directive body: {e}")),
+        },
+        Ok(resp) => tool_error(&format!(
+            "Backend returned HTTP {} for directive",
+            resp.status()
+        )),
+        Err(e) => tool_error(&format!("Failed to GET directive: {e}")),
     }
 }
 

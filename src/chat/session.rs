@@ -24,11 +24,18 @@ const VALID_PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "bypassPermi
 const ALLOWED_BUILTIN_TOOLS: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Agent"];
 
 /// den-channel MCP tools that the session must also allowlist so Claude Code
-/// can post assistant replies and request tool-use permissions back to the UI.
+/// can post assistant replies, request tool-use permissions, and check for
+/// pending UI directives back to the Den backend.
 const ALLOWED_CHANNEL_TOOLS: &[&str] = &[
     "mcp__den-channel__reply",
     "mcp__den-channel__request_permission",
+    "mcp__den-channel__check_directive",
 ];
+
+/// Built-in tools that `acceptEdits` auto-approves. Matches the Claude CLI's
+/// native interpretation of the mode so users see the same behavior whether
+/// they picked the shortcut in the UI or spelled the tools out explicitly.
+const ACCEPT_EDITS_AUTO: &[&str] = &["Edit", "Write", "MultiEdit"];
 
 /// Upper bound on agentic iterations per chat turn. Matches the orch adapter
 /// default and exists to contain runaway tool loops — it is not a hard budget.
@@ -50,6 +57,14 @@ pub struct ChatSession {
     /// Resolved working directory for the Claude Code process.
     /// Displayed to the UI so users can tell sessions apart by project.
     pub cwd: String,
+    /// Resolved list of tool names that the session auto-approves. `"*"`
+    /// means "every built-in not in `escalate_tools`". Exposed so the UI can
+    /// display the effective policy after permission_mode synonym expansion.
+    pub auto_tools: Vec<String>,
+    /// Resolved list of tool names that always escalate to the UI modal.
+    /// `"*"` takes precedence over `auto_tools == ["*"]` and forces every
+    /// tool through the permission prompt.
+    pub escalate_tools: Vec<String>,
     /// Claude Code process (None if not yet started or already stopped).
     process: Mutex<Option<ChatProcess>>,
 }
@@ -80,6 +95,16 @@ pub struct CreateSessionRequest {
     /// If None or empty, falls back to the user's home directory.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Tool names that should be auto-approved without a permission prompt.
+    /// A single `"*"` entry means "every tool not in `escalate_tools`" —
+    /// mirrors orch's `ORCH_HUB_AUTO` contract.
+    #[serde(default)]
+    pub auto_tools: Vec<String>,
+    /// Tool names that must always escalate to the UI, even if `auto_tools`
+    /// contains `"*"`. Takes precedence over `auto_tools` so a blanket auto
+    /// rule can still hold back destructive tools.
+    #[serde(default)]
+    pub escalate_tools: Vec<String>,
 }
 
 fn default_permission_mode() -> String {
@@ -94,6 +119,8 @@ pub struct ChatSessionInfo {
     pub created_at: DateTime<Utc>,
     pub alive: bool,
     pub cwd: String,
+    pub auto_tools: Vec<String>,
+    pub escalate_tools: Vec<String>,
 }
 
 impl ChatSessionManager {
@@ -108,10 +135,16 @@ impl ChatSessionManager {
     ///
     /// `cwd` is an optional working directory. If `None` or empty, the Claude
     /// Code process is started in the user's home directory.
+    ///
+    /// `auto_tools` / `escalate_tools` override the implicit policy derived
+    /// from `permission_mode`. When both are empty, the legacy mode names are
+    /// expanded via `resolve_tool_policy` so existing clients keep working.
     pub async fn create_session(
         &self,
         permission_mode: &str,
         cwd: Option<&str>,
+        auto_tools: &[String],
+        escalate_tools: &[String],
     ) -> Result<Arc<ChatSession>, String> {
         if !VALID_PERMISSION_MODES.contains(&permission_mode) {
             return Err(format!("Invalid permission mode: {permission_mode}"));
@@ -119,6 +152,9 @@ impl ChatSessionManager {
 
         // Resolve cwd before taking any locks so validation errors fail fast.
         let resolved_cwd = resolve_cwd(cwd)?;
+
+        let (effective_auto, effective_escalate) =
+            resolve_tool_policy(permission_mode, auto_tools, escalate_tools);
 
         // Clean up dead sessions first (snapshot to avoid holding lock during is_alive)
         let snapshot: Vec<(String, Arc<ChatSession>)> = {
@@ -156,6 +192,8 @@ impl ChatSessionManager {
             permission_mode: permission_mode.to_string(),
             created_at: Utc::now(),
             cwd: cwd_display.clone(),
+            auto_tools: effective_auto.clone(),
+            escalate_tools: effective_escalate.clone(),
             process: Mutex::new(None),
         });
 
@@ -163,7 +201,12 @@ impl ChatSessionManager {
         // Arc<ChatSession> so the stdout parse task can call
         // session.channel_state.broadcast_reply() when assistant text arrives.
         let process = self
-            .start_claude(Arc::clone(&session), permission_mode, &resolved_cwd)
+            .start_claude(
+                Arc::clone(&session),
+                &effective_auto,
+                &effective_escalate,
+                &resolved_cwd,
+            )
             .await?;
         *session.process.lock().await = Some(process);
 
@@ -171,6 +214,8 @@ impl ChatSessionManager {
         tracing::info!(
             chat_session = %session.id,
             permission_mode = permission_mode,
+            auto_tools = ?effective_auto,
+            escalate_tools = ?effective_escalate,
             cwd = %cwd_display,
             "Chat session created"
         );
@@ -204,6 +249,8 @@ impl ChatSessionManager {
                 created_at: session.created_at,
                 alive: session.is_alive().await,
                 cwd: session.cwd.clone(),
+                auto_tools: session.auto_tools.clone(),
+                escalate_tools: session.escalate_tools.clone(),
             });
         }
         result
@@ -229,7 +276,8 @@ impl ChatSessionManager {
     async fn start_claude(
         &self,
         session: Arc<ChatSession>,
-        permission_mode: &str,
+        auto_tools: &[String],
+        escalate_tools: &[String],
         cwd: &Path,
     ) -> Result<ChatProcess, String> {
         let session_id = session.id.as_str();
@@ -275,7 +323,8 @@ impl ChatSessionManager {
             .map_err(|e| format!("Failed to write hook settings: {e}"))?;
         tracing::debug!("hook settings written to {}", settings_path.display());
 
-        let claude_args = build_claude_args(&config_path, &settings_path, permission_mode);
+        let claude_args =
+            build_claude_args(&config_path, &settings_path, auto_tools, escalate_tools);
         let mut cmd = tokio::process::Command::new("claude");
         cmd.args(&claude_args)
             // Hook commands are spawned by Claude Code and inherit its env, so
@@ -370,18 +419,86 @@ fn resolve_cwd(input: Option<&str>) -> Result<PathBuf, String> {
     Ok(PathBuf::from(home))
 }
 
+/// Expand the legacy `permission_mode` knob into explicit auto/escalate lists.
+///
+/// When either list is non-empty the caller wins — the 3-way mode picker is
+/// only a shortcut and must not overrule the detailed-settings accordion.
+/// Otherwise the synonyms mirror what the Claude CLI does natively:
+/// - `default`: every tool escalates to the UI.
+/// - `acceptEdits`: `ACCEPT_EDITS_AUTO` is auto-approved, the rest escalate.
+/// - `bypassPermissions`: everything is auto-approved.
+fn resolve_tool_policy(
+    permission_mode: &str,
+    auto_tools: &[String],
+    escalate_tools: &[String],
+) -> (Vec<String>, Vec<String>) {
+    if !auto_tools.is_empty() || !escalate_tools.is_empty() {
+        return (auto_tools.to_vec(), escalate_tools.to_vec());
+    }
+    match permission_mode {
+        "acceptEdits" => (
+            ACCEPT_EDITS_AUTO.iter().map(|s| (*s).to_string()).collect(),
+            Vec::new(),
+        ),
+        "bypassPermissions" => (vec!["*".into()], Vec::new()),
+        _ => (Vec::new(), vec!["*".into()]),
+    }
+}
+
+/// Build the concrete `--allowedTools` list from the resolved auto/escalate
+/// policy. Channel MCP tools are always included so Claude Code can reach the
+/// den backend regardless of the user's policy choices.
+///
+/// `auto` containing `"*"` means "every built-in not in `escalate`" — this is
+/// how the `bypassPermissions` synonym maps onto the allowlist. Escalate wins
+/// ties so the UI can hold back Bash even under a blanket auto rule.
+fn build_allowed_tools(auto: &[String], escalate: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = ALLOWED_CHANNEL_TOOLS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let star_escalate = escalate.iter().any(|e| e == "*");
+    if star_escalate {
+        // Everything must escalate: leave the allowlist at channel tools only.
+        return out;
+    }
+    let escalate_set: std::collections::HashSet<&str> =
+        escalate.iter().map(String::as_str).collect();
+
+    if auto.iter().any(|t| t == "*") {
+        for t in ALLOWED_BUILTIN_TOOLS {
+            if !escalate_set.contains(*t) {
+                out.push((*t).into());
+            }
+        }
+    } else {
+        for t in auto {
+            if t == "*" {
+                continue;
+            }
+            if !escalate_set.contains(t.as_str()) {
+                out.push(t.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Build the CLI argv passed to `claude` when spawning a chat session.
 ///
 /// The argument list mirrors what the orch adapter emits so the two stay in
 /// sync as the Claude CLI evolves:
-/// - `--allowedTools` pins the built-in tools plus the den-channel MCP tools
-///   (`reply` / `request_permission`). Without an allowlist Claude Code falls
-///   back to its internal AskUserQuestion dialog, which has no UI to surface
-///   it here and results in the session hanging silently.
+/// - `--allowedTools` pins the den-channel MCP tools plus whatever the
+///   resolved auto policy grants (see `build_allowed_tools`). Without an
+///   allowlist Claude Code falls back to its internal AskUserQuestion dialog,
+///   which has no UI to surface it here and results in the session hanging.
 /// - `--permission-prompt-tool` routes any allowlist-miss through the
 ///   den-channel MCP tool so the UI's permission modal is the single source
-///   of truth. Harmless under `bypassPermissions` (never invoked), so we set
-///   it unconditionally rather than branching on permission_mode.
+///   of truth for anything the user chose to escalate.
+/// - `--permission-mode default` is hard-coded because the auto/escalate
+///   lists now own the policy surface; Claude's own `acceptEdits` /
+///   `bypassPermissions` shortcuts would double-apply under the synonym
+///   expansion in `resolve_tool_policy`.
 /// - `--settings` injects the hook relay (SessionStart / Stop / PostToolUse /
 ///   Notification) so lifecycle + tool-use events stream into the UI.
 /// - `--no-session-persistence` keeps Claude from writing to the shared
@@ -391,13 +508,10 @@ fn resolve_cwd(input: Option<&str>) -> Result<PathBuf, String> {
 fn build_claude_args(
     config_path: &Path,
     settings_path: &Path,
-    permission_mode: &str,
+    auto_tools: &[String],
+    escalate_tools: &[String],
 ) -> Vec<String> {
-    let allowed_tools: Vec<&str> = ALLOWED_BUILTIN_TOOLS
-        .iter()
-        .chain(ALLOWED_CHANNEL_TOOLS.iter())
-        .copied()
-        .collect();
+    let allowed = build_allowed_tools(auto_tools, escalate_tools);
 
     vec![
         "--mcp-config".into(),
@@ -405,9 +519,9 @@ fn build_claude_args(
         "--settings".into(),
         settings_path.to_string_lossy().into_owned(),
         "--permission-mode".into(),
-        permission_mode.to_string(),
+        "default".into(),
         "--allowedTools".into(),
-        allowed_tools.join(","),
+        allowed.join(","),
         "--permission-prompt-tool".into(),
         "mcp__den-channel__request_permission".into(),
         "--no-session-persistence".into(),
@@ -1140,11 +1254,19 @@ mod tests {
             .any(|w| w[0].as_str() == flag && w[1].as_str() == value)
     }
 
+    /// Shortcut that builds claude args under the `bypassPermissions` synonym,
+    /// i.e. `auto=["*"]`. The historical tests exercised this shape via the
+    /// `permission_mode` knob, so most of them keep that coverage via this
+    /// helper after the signature change.
+    fn build_args_star_auto(config: &Path, settings: &Path) -> Vec<String> {
+        build_claude_args(config, settings, &["*".to_string()], &[])
+    }
+
     #[test]
     fn build_claude_args_contains_core_flags() {
         let config = PathBuf::from("/tmp/x.mcp.json");
         let settings = PathBuf::from("/tmp/x.hub-settings.json");
-        let args = build_claude_args(&config, &settings, "default");
+        let args = build_args_star_auto(&config, &settings);
 
         // Flag/value pairs must appear as consecutive argv entries — checking
         // membership isn't enough because Claude CLI parses positionally.
@@ -1152,6 +1274,8 @@ mod tests {
             has_pair(&args, "--mcp-config", "/tmp/x.mcp.json"),
             "args: {args:?}"
         );
+        // Auto/escalate now own policy; Claude's own --permission-mode is
+        // pinned to default so the synonyms don't double-apply.
         assert!(has_pair(&args, "--permission-mode", "default"));
         assert!(has_pair(&args, "--input-format", "stream-json"));
         assert!(has_pair(&args, "--output-format", "stream-json"));
@@ -1165,7 +1289,7 @@ mod tests {
     fn build_claude_args_pins_allowed_tools_and_prompt_tool() {
         let config = PathBuf::from("/tmp/x.mcp.json");
         let settings = PathBuf::from("/tmp/x.hub-settings.json");
-        let args = build_claude_args(&config, &settings, "default");
+        let args = build_args_star_auto(&config, &settings);
 
         let allowed_idx = args
             .iter()
@@ -1185,6 +1309,8 @@ mod tests {
         }
         assert!(allowed_csv.contains("mcp__den-channel__reply"));
         assert!(allowed_csv.contains("mcp__den-channel__request_permission"));
+        // Phase 4 adds check_directive so the UI can push one-shot directives.
+        assert!(allowed_csv.contains("mcp__den-channel__check_directive"));
 
         // Permission-prompt-tool must be the channel's request_permission tool
         // so allowlist misses route through the UI modal, not claude's
@@ -1203,7 +1329,7 @@ mod tests {
     fn build_claude_args_enforces_safety_defaults() {
         let config = PathBuf::from("/tmp/x.mcp.json");
         let settings = PathBuf::from("/tmp/x.hub-settings.json");
-        let args = build_claude_args(&config, &settings, "default");
+        let args = build_args_star_auto(&config, &settings);
 
         assert!(
             args.iter().any(|a| a == "--no-session-persistence"),
@@ -1221,30 +1347,148 @@ mod tests {
     }
 
     #[test]
-    fn build_claude_args_passes_permission_mode_through() {
-        let config = PathBuf::from("/tmp/x.mcp.json");
-        let settings = PathBuf::from("/tmp/x.hub-settings.json");
-        for mode in ["default", "acceptEdits", "bypassPermissions"] {
-            let args = build_claude_args(&config, &settings, mode);
-            let idx = args
-                .iter()
-                .position(|a| a == "--permission-mode")
-                .expect("--permission-mode flag must be present");
-            assert_eq!(args.get(idx + 1).map(String::as_str), Some(mode));
-        }
-    }
-
-    #[test]
     fn build_claude_args_includes_settings_path() {
         let config = PathBuf::from("/tmp/x.mcp.json");
         let settings = PathBuf::from("/tmp/x.hub-settings.json");
-        let args = build_claude_args(&config, &settings, "default");
+        let args = build_args_star_auto(&config, &settings);
         // The hook relay is only active when --settings points at our
         // generated file; the flag must be present with the exact path.
         assert!(
             has_pair(&args, "--settings", "/tmp/x.hub-settings.json"),
             "args: {args:?}"
         );
+    }
+
+    #[test]
+    fn build_claude_args_uses_channel_only_allowlist_for_star_escalate() {
+        // escalate=["*"] means "never auto-approve anything" — the allowlist
+        // must collapse to channel MCP tools so every built-in tool hits the
+        // permission-prompt path.
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(&config, &settings, &[], &["*".to_string()]);
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("--allowedTools flag");
+        let csv = args.get(idx + 1).expect("--allowedTools value");
+        for tool in ["Read", "Write", "Edit", "Bash", "Agent", "Glob", "Grep"] {
+            assert!(
+                !csv.split(',').any(|t| t == tool),
+                "star-escalate must exclude {tool}: {csv}"
+            );
+        }
+        for mcp in [
+            "mcp__den-channel__reply",
+            "mcp__den-channel__request_permission",
+            "mcp__den-channel__check_directive",
+        ] {
+            assert!(csv.contains(mcp), "channel tool {mcp} missing in {csv}");
+        }
+    }
+
+    #[test]
+    fn build_claude_args_star_auto_respects_escalate_exclusion() {
+        // auto=["*"], escalate=["Bash"] — every built-in is auto-approved
+        // EXCEPT Bash, which still routes through the UI modal.
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(
+            &config,
+            &settings,
+            &["*".to_string()],
+            &["Bash".to_string()],
+        );
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("--allowedTools flag");
+        let csv = args.get(idx + 1).expect("--allowedTools value");
+        for tool in ["Read", "Write", "Edit", "Agent"] {
+            assert!(
+                csv.split(',').any(|t| t == tool),
+                "{tool} should stay auto with star-auto: {csv}"
+            );
+        }
+        assert!(
+            !csv.split(',').any(|t| t == "Bash"),
+            "Bash must be escalated out of the allowlist: {csv}"
+        );
+    }
+
+    #[test]
+    fn build_claude_args_explicit_auto_excludes_other_builtins() {
+        // An explicit auto list should NOT silently include the other
+        // built-ins — users who typed "Edit,Write" expect only those two to
+        // be auto-approved.
+        let config = PathBuf::from("/tmp/x.mcp.json");
+        let settings = PathBuf::from("/tmp/x.hub-settings.json");
+        let args = build_claude_args(
+            &config,
+            &settings,
+            &["Edit".to_string(), "Write".to_string()],
+            &[],
+        );
+
+        let idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("--allowedTools flag");
+        let csv = args.get(idx + 1).expect("--allowedTools value");
+        assert!(csv.split(',').any(|t| t == "Edit"));
+        assert!(csv.split(',').any(|t| t == "Write"));
+        for tool in ["Read", "Bash", "Agent", "Glob", "Grep"] {
+            assert!(
+                !csv.split(',').any(|t| t == tool),
+                "{tool} must not be auto when only Edit/Write were requested: {csv}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_tool_policy_expands_permission_mode_synonyms_when_empty() {
+        // default → everything escalates.
+        let (auto, esc) = resolve_tool_policy("default", &[], &[]);
+        assert!(auto.is_empty());
+        assert_eq!(esc, vec!["*".to_string()]);
+
+        // acceptEdits → Edit/Write/MultiEdit auto, rest escalate implicitly
+        // (i.e. no star-escalate, they just aren't auto).
+        let (auto, esc) = resolve_tool_policy("acceptEdits", &[], &[]);
+        assert_eq!(
+            auto,
+            vec![
+                "Edit".to_string(),
+                "Write".to_string(),
+                "MultiEdit".to_string()
+            ]
+        );
+        assert!(esc.is_empty());
+
+        // bypassPermissions → star-auto, nothing escalates.
+        let (auto, esc) = resolve_tool_policy("bypassPermissions", &[], &[]);
+        assert_eq!(auto, vec!["*".to_string()]);
+        assert!(esc.is_empty());
+    }
+
+    #[test]
+    fn resolve_tool_policy_prefers_explicit_lists_over_permission_mode() {
+        // The accordion should win over the 3-way select whenever the user
+        // filled it in — otherwise "acceptEdits + my explicit escalate list"
+        // would surprise users by silently ignoring the escalate entries.
+        let auto_in = vec!["Read".to_string()];
+        let esc_in = vec!["Bash".to_string()];
+        let (auto, esc) = resolve_tool_policy("bypassPermissions", &auto_in, &esc_in);
+        assert_eq!(auto, auto_in);
+        assert_eq!(esc, esc_in);
+
+        // A partial override (only auto) still wins — the empty escalate list
+        // must NOT fall back to the synonym.
+        let (auto, esc) = resolve_tool_policy("default", &["Read".into()], &[]);
+        assert_eq!(auto, vec!["Read".to_string()]);
+        assert!(esc.is_empty());
     }
 
     #[test]
