@@ -196,6 +196,9 @@ pub struct PollQuery {
 
 /// GET /api/channel/poll — den-channel fetches pending messages.
 /// Long-polls: waits up to 30 seconds for a message, then returns empty.
+///
+/// Uses `tokio::sync::Notify` so newly pushed messages wake the poll
+/// immediately instead of the pre-#101-Phase-3 500 ms sleep-poll floor.
 pub async fn poll_message(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PollQuery>,
@@ -205,20 +208,26 @@ pub async fn poll_message(
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    // Try immediate poll first
-    if let Some(msg) = session.channel_state.poll_message() {
-        return Json(msg).into_response();
-    }
-
-    // Long-poll: check every 500ms for up to 30 seconds
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+
     loop {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Register interest BEFORE checking the queue so a message pushed
+        // between the check and the await is still observed.
+        let notified = session.channel_state.message_notify().notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
         if let Some(msg) = session.channel_state.poll_message() {
             return Json(msg).into_response();
         }
-        if tokio::time::Instant::now() >= deadline {
-            return StatusCode::NO_CONTENT.into_response();
+
+        tokio::select! {
+            _ = notified => {
+                // Loop back and re-check; a spurious wake is harmless.
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                return StatusCode::NO_CONTENT.into_response();
+            }
         }
     }
 }
@@ -343,7 +352,11 @@ pub struct VerdictQuery {
 }
 
 /// GET /api/channel/verdict — den-channel polls for user's permission decision.
-/// Long-polls: waits up to 5 minutes for a verdict.
+/// Long-polls: waits up to 5 minutes for a verdict, then auto-denies.
+///
+/// Uses `tokio::sync::Notify` (woken by `push_verdict` via `notify_waiters()`)
+/// so the caller returns as soon as a verdict for the requested id lands,
+/// instead of paying the 500 ms sleep-poll floor from #86.
 pub async fn poll_verdict(
     State(state): State<Arc<AppState>>,
     Query(query): Query<VerdictQuery>,
@@ -353,25 +366,30 @@ pub async fn poll_verdict(
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    // Try immediate poll first
-    if let Some(verdict) = session.channel_state.poll_verdict(&query.request_id) {
-        return Json(verdict).into_response();
-    }
-
-    // Long-poll: check every 500ms for up to 5 minutes
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+
     loop {
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Register interest BEFORE checking the verdict map so a verdict
+        // pushed between the check and the await is still observed.
+        let notified = session.channel_state.verdict_notify().notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
         if let Some(verdict) = session.channel_state.poll_verdict(&query.request_id) {
             return Json(verdict).into_response();
         }
-        if tokio::time::Instant::now() >= deadline {
-            // Timeout: auto-deny
-            return Json(PermissionVerdict {
-                request_id: query.request_id,
-                behavior: "deny".into(),
-            })
-            .into_response();
+
+        tokio::select! {
+            _ = notified => {
+                // A verdict arrived for *some* request_id; re-check ours.
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Json(PermissionVerdict {
+                    request_id: query.request_id,
+                    behavior: "deny".into(),
+                })
+                .into_response();
+            }
         }
     }
 }

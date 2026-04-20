@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 
 /// Broadcast capacity for reply events -> UI WebSocket.
 const BROADCAST_CAPACITY: usize = 256;
@@ -22,6 +22,13 @@ pub struct ChannelState {
     verdicts: Mutex<HashMap<String, PermissionVerdict>>,
     /// Broadcast channel for replies + permission events -> UI WebSocket.
     reply_tx: broadcast::Sender<ChannelEvent>,
+    /// Wakes long-poll waiters on `poll_message` as soon as a message is
+    /// enqueued. Using `Notify` removes the 500 ms sleep-poll floor from #86.
+    message_notify: Notify,
+    /// Wakes long-poll waiters on `poll_verdict`. `notify_waiters()` is used
+    /// so concurrent requests for different `request_id`s all re-check after
+    /// any verdict lands; non-matching waiters fall back to sleep.
+    verdict_notify: Notify,
     /// Token for authenticating the channel server (loopback HTTP).
     token: String,
 }
@@ -92,6 +99,8 @@ impl ChannelState {
             permission_requests: Mutex::new(HashMap::new()),
             verdicts: Mutex::new(HashMap::new()),
             reply_tx,
+            message_notify: Notify::new(),
+            verdict_notify: Notify::new(),
             token,
         }
     }
@@ -114,6 +123,10 @@ impl ChannelState {
             .lock()
             .expect("message_queue lock")
             .push_back(msg);
+        // Only one long-poller is expected per session, so `notify_one()`
+        // (which stores a permit if no waiter exists yet) is sufficient and
+        // avoids waking the entire websocket fanout.
+        self.message_notify.notify_one();
     }
 
     /// Dequeue a pending message (for channel server polling).
@@ -122,6 +135,12 @@ impl ChannelState {
             .lock()
             .expect("message_queue lock")
             .pop_front()
+    }
+
+    /// Accessor for the message-arrival notifier so API handlers can register
+    /// interest *before* calling `poll_message()`, closing the push/poll race.
+    pub fn message_notify(&self) -> &Notify {
+        &self.message_notify
     }
 
     // ── Channel server -> UI (replies) ─────────────────────────
@@ -170,6 +189,10 @@ impl ChannelState {
             .lock()
             .expect("verdicts lock")
             .insert(verdict.request_id.clone(), verdict);
+        // Multiple `poll_verdict` requests may be in flight for different
+        // request_ids; wake all of them so the matching waiter can return and
+        // mismatches re-arm their own notifier.
+        self.verdict_notify.notify_waiters();
     }
 
     /// Poll for a verdict (channel server polling).
@@ -178,6 +201,12 @@ impl ChannelState {
             .lock()
             .expect("verdicts lock")
             .remove(request_id)
+    }
+
+    /// Accessor for the verdict-arrival notifier so API handlers can register
+    /// interest *before* calling `poll_verdict()`, closing the push/poll race.
+    pub fn verdict_notify(&self) -> &Notify {
+        &self.verdict_notify
     }
 
     /// Validate the channel token.
@@ -198,6 +227,7 @@ impl ChannelState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tokio::sync::broadcast::error::RecvError;
 
     /// A slow subscriber that never drains its queue must observe `Lagged`
@@ -222,6 +252,116 @@ mod tests {
             }
             other => panic!("expected RecvError::Lagged, got {other:?}"),
         }
+    }
+
+    /// `push_message` must wake a waiter blocked on `message_notify()` so the
+    /// long-poll HTTP handler returns without paying the 500 ms sleep-poll
+    /// floor that #86 complained about.
+    #[tokio::test]
+    async fn push_message_wakes_notify_waiter() {
+        let state = Arc::new(ChannelState::new());
+        let s2 = state.clone();
+
+        let waiter = tokio::spawn(async move {
+            // Mimic the channel_api.rs handler: register interest, check, wait.
+            let notified = s2.message_notify().notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if s2.poll_message().is_none() {
+                let start = tokio::time::Instant::now();
+                notified.await;
+                return start.elapsed();
+            }
+            std::time::Duration::ZERO
+        });
+
+        // Give the waiter time to reach the .await point.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        state.push_message(ChannelMessage {
+            text: "hello".into(),
+            meta: HashMap::new(),
+        });
+
+        let elapsed = waiter.await.expect("waiter task panicked");
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "notify should wake the waiter fast; took {elapsed:?}"
+        );
+        assert!(state.poll_message().is_some(), "message should be present");
+    }
+
+    /// A message pushed *before* the waiter registers interest must still be
+    /// delivered immediately — the `poll_message()` check after `enable()`
+    /// closes the push/poll race and is what makes the loop correct.
+    #[tokio::test]
+    async fn push_before_notify_registration_is_not_lost() {
+        let state = Arc::new(ChannelState::new());
+        state.push_message(ChannelMessage {
+            text: "early".into(),
+            meta: HashMap::new(),
+        });
+
+        // Handler-style check: register, then poll.
+        let notified = state.message_notify().notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        assert!(
+            state.poll_message().is_some(),
+            "pre-registered message must be drained by the handler path"
+        );
+    }
+
+    /// `push_verdict` must wake *every* waiter (via `notify_waiters`) so that
+    /// concurrent `poll_verdict` calls for different request_ids can each
+    /// re-check and either return their match or fall back to sleep.
+    #[tokio::test]
+    async fn push_verdict_wakes_all_waiters() {
+        let state = Arc::new(ChannelState::new());
+        let s1 = state.clone();
+        let s2 = state.clone();
+
+        let w1 = tokio::spawn(async move {
+            let notified = s1.verdict_notify().notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if s1.poll_verdict("req-1").is_some() {
+                return true;
+            }
+            notified.await;
+            s1.poll_verdict("req-1").is_some()
+        });
+        let w2 = tokio::spawn(async move {
+            let notified = s2.verdict_notify().notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if s2.poll_verdict("req-2").is_some() {
+                return true;
+            }
+            notified.await;
+            s2.poll_verdict("req-2").is_some()
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // Push a verdict only for req-1. Both waiters must wake; w1 returns
+        // the verdict, w2 re-checks and finds nothing (returns false).
+        state.push_verdict(PermissionVerdict {
+            request_id: "req-1".into(),
+            behavior: "allow".into(),
+        });
+
+        let (r1, r2) = tokio::time::timeout(std::time::Duration::from_millis(500), async move {
+            (w1.await.unwrap(), w2.await.unwrap())
+        })
+        .await
+        .expect("waiters did not complete — notify_waiters may have woken only one");
+
+        assert!(r1, "w1 should get its verdict");
+        assert!(
+            !r2,
+            "w2 should not see a verdict for a different request_id"
+        );
     }
 
     /// Under the capacity limit the receiver must deliver events in order.
