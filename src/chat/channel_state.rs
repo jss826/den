@@ -6,11 +6,22 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use tokio::sync::{Notify, broadcast};
 
 /// Broadcast capacity for reply events -> UI WebSocket.
 const BROADCAST_CAPACITY: usize = 256;
+
+/// Lock a `std::sync::Mutex` and recover from poisoning by taking the inner
+/// guard anyway (#86 item 4). The collections we hold (VecDeque, HashMap,
+/// Option) have no inter-field invariant that a mid-mutation panic could
+/// break, so continuing with a "poisoned" guard is strictly better than
+/// cascading the original panic to every subsequent channel operation.
+fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Channel state: lightweight message broker between Chat UI and den-channel.
 pub struct ChannelState {
@@ -124,10 +135,7 @@ impl ChannelState {
 
     /// Enqueue a message from the UI.
     pub fn push_message(&self, msg: ChannelMessage) {
-        self.message_queue
-            .lock()
-            .expect("message_queue lock")
-            .push_back(msg);
+        lock_recover(&self.message_queue).push_back(msg);
         // Only one long-poller is expected per session, so `notify_one()`
         // (which stores a permit if no waiter exists yet) is sufficient and
         // avoids waking the entire websocket fanout.
@@ -136,10 +144,7 @@ impl ChannelState {
 
     /// Dequeue a pending message (for channel server polling).
     pub fn poll_message(&self) -> Option<ChannelMessage> {
-        self.message_queue
-            .lock()
-            .expect("message_queue lock")
-            .pop_front()
+        lock_recover(&self.message_queue).pop_front()
     }
 
     /// Accessor for the message-arrival notifier so API handlers can register
@@ -176,24 +181,15 @@ impl ChannelState {
             description: req.description.clone(),
             input_preview: req.input_preview.clone(),
         };
-        self.permission_requests
-            .lock()
-            .expect("permission_requests lock")
-            .insert(req.request_id.clone(), req);
+        lock_recover(&self.permission_requests).insert(req.request_id.clone(), req);
         let _ = self.reply_tx.send(event);
     }
 
     /// Store a verdict from the UI (for channel server to poll).
     pub fn push_verdict(&self, verdict: PermissionVerdict) {
         // Remove from pending requests
-        self.permission_requests
-            .lock()
-            .expect("permission_requests lock")
-            .remove(&verdict.request_id);
-        self.verdicts
-            .lock()
-            .expect("verdicts lock")
-            .insert(verdict.request_id.clone(), verdict);
+        lock_recover(&self.permission_requests).remove(&verdict.request_id);
+        lock_recover(&self.verdicts).insert(verdict.request_id.clone(), verdict);
         // Multiple `poll_verdict` requests may be in flight for different
         // request_ids; wake all of them so the matching waiter can return and
         // mismatches re-arm their own notifier.
@@ -202,10 +198,7 @@ impl ChannelState {
 
     /// Poll for a verdict (channel server polling).
     pub fn poll_verdict(&self, request_id: &str) -> Option<PermissionVerdict> {
-        self.verdicts
-            .lock()
-            .expect("verdicts lock")
-            .remove(request_id)
+        lock_recover(&self.verdicts).remove(request_id)
     }
 
     /// Accessor for the verdict-arrival notifier so API handlers can register
@@ -219,13 +212,13 @@ impl ChannelState {
     /// Store a directive from the UI. Overwrites any pending directive so a
     /// newer instruction always wins (matches orch's file-overwrite semantics).
     pub fn set_directive(&self, text: String) {
-        *self.directive.lock().expect("directive lock") = Some(text);
+        *lock_recover(&self.directive) = Some(text);
     }
 
     /// Take the pending directive, clearing it. Called by the MCP
     /// `check_directive` tool — the directive is delivered exactly once.
     pub fn take_directive(&self) -> Option<String> {
-        self.directive.lock().expect("directive lock").take()
+        lock_recover(&self.directive).take()
     }
 
     /// Validate the channel token.
@@ -402,6 +395,45 @@ mod tests {
         assert!(
             state.take_directive().is_none(),
             "second take must be empty; directives are consumed, not repeated"
+        );
+    }
+
+    /// A panic inside a mutex critical section poisons the lock. Subsequent
+    /// channel operations must keep working — #86 item 4 — so the whole
+    /// session isn't taken down by one bad caller. Uses `set_directive` /
+    /// `take_directive` as a representative pair since both go through
+    /// `lock_recover`.
+    #[test]
+    fn lock_recover_survives_poisoning() {
+        let state = Arc::new(ChannelState::new());
+
+        // Poison the `directive` mutex by panicking while it's held.
+        let poisoner = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let _guard = state.directive.lock().expect("initial lock");
+                panic!("intentional poisoner");
+            })
+        };
+        assert!(
+            poisoner.join().is_err(),
+            "the poisoner thread must have panicked"
+        );
+
+        // Confirm the lock really is poisoned — otherwise this test is
+        // proving nothing about recovery.
+        assert!(
+            state.directive.lock().is_err(),
+            "lock must be poisoned after the panic for this test to be meaningful"
+        );
+
+        // Public API goes through `lock_recover`; writes and reads must keep
+        // working after poisoning.
+        state.set_directive("post-poison write".into());
+        assert_eq!(
+            state.take_directive().as_deref(),
+            Some("post-poison write"),
+            "poison must not prevent reads of subsequent directives"
         );
     }
 

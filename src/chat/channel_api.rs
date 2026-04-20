@@ -225,23 +225,21 @@ async fn handle_channel_ws(mut socket: WebSocket, session: Arc<super::session::C
 
 // ── Channel server endpoints (token auth) ──────────────────────
 
-#[derive(Deserialize)]
-pub struct PollQuery {
-    pub token: String,
-    #[allow(dead_code)]
-    pub session: Option<String>,
-}
-
 /// GET /api/channel/poll — den-channel fetches pending messages.
 /// Long-polls: waits up to 30 seconds for a message, then returns empty.
 ///
 /// Uses `tokio::sync::Notify` so newly pushed messages wake the poll
 /// immediately instead of the pre-#101-Phase-3 500 ms sleep-poll floor.
-pub async fn poll_message(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<PollQuery>,
-) -> Response {
-    let session = match state.chat_sessions.find_by_token(&query.token).await {
+///
+/// Auth: `X-Channel-Token` header. Tokens previously traveled in the query
+/// string, where they would leak into access logs and `tracing::info!` spans
+/// on the loopback side (#86 item 3).
+pub async fn poll_message(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let token = match extract_channel_token(&headers) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let session = match state.chat_sessions.find_by_token(token).await {
         Some(s) => s,
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -361,21 +359,20 @@ pub async fn post_status(
     StatusCode::OK
 }
 
-#[derive(Deserialize)]
-pub struct DirectiveQuery {
-    pub token: String,
-}
-
 /// GET /api/channel/directive — den-channel (MCP) polls the pending directive.
 ///
 /// Returns `{ text }` on hit, 204 on empty. The directive is consumed by the
 /// first reader so a Worker that successfully calls `check_directive` won't
 /// re-surface the same instruction on the next call.
-pub async fn get_directive(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<DirectiveQuery>,
-) -> Response {
-    let session = match state.chat_sessions.find_by_token(&query.token).await {
+///
+/// Auth: `X-Channel-Token` header (#86 item 3 — previously passed via query
+/// string).
+pub async fn get_directive(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    let token = match extract_channel_token(&headers) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let session = match state.chat_sessions.find_by_token(token).await {
         Some(s) => s,
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -409,7 +406,6 @@ pub async fn post_notification(
 
 #[derive(Deserialize)]
 pub struct VerdictQuery {
-    pub token: String,
     pub request_id: String,
 }
 
@@ -419,11 +415,20 @@ pub struct VerdictQuery {
 /// Uses `tokio::sync::Notify` (woken by `push_verdict` via `notify_waiters()`)
 /// so the caller returns as soon as a verdict for the requested id lands,
 /// instead of paying the 500 ms sleep-poll floor from #86.
+///
+/// Auth: `X-Channel-Token` header (#86 item 3 — previously in query string).
+/// The `request_id` stays in the query string because it is not sensitive and
+/// keeps the handler straightforward.
 pub async fn poll_verdict(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<VerdictQuery>,
 ) -> Response {
-    let session = match state.chat_sessions.find_by_token(&query.token).await {
+    let token = match extract_channel_token(&headers) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    let session = match state.chat_sessions.find_by_token(token).await {
         Some(s) => s,
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };

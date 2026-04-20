@@ -61,7 +61,6 @@ struct JsonRpcError {
 struct ChannelContext {
     api_url: String,
     token: String,
-    session_id: String,
     client: reqwest::Client,
     /// Protects stdout writes from concurrent tasks.
     stdout: Arc<Mutex<std::io::Stdout>>,
@@ -101,7 +100,9 @@ async fn async_run() {
     let api_url =
         std::env::var("DEN_CHANNEL_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3131".into());
     let token = std::env::var("DEN_CHANNEL_TOKEN").unwrap_or_default();
-    let session_id = std::env::var("DEN_CHANNEL_SESSION_ID").unwrap_or_default();
+    // `DEN_CHANNEL_SESSION_ID` is still exported by `session.rs` for hooks,
+    // but the client no longer needs it: `X-Channel-Token` alone identifies
+    // the session server-side via `find_by_token`.
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(LONG_POLL_TIMEOUT_SECS + 10))
@@ -111,7 +112,6 @@ async fn async_run() {
     let ctx = Arc::new(ChannelContext {
         api_url,
         token,
-        session_id,
         client,
         stdout: Arc::new(Mutex::new(std::io::stdout())),
     });
@@ -333,8 +333,14 @@ async fn handle_tool_call(ctx: &ChannelContext, params: Option<&Value>) -> Value
 /// empty JSON object `{}` otherwise. Network errors surface as MCP tool
 /// errors so Claude Code can decide whether to retry.
 async fn handle_check_directive(ctx: &ChannelContext) -> Value {
-    let url = format!("{}/api/channel/directive?token={}", ctx.api_url, ctx.token);
-    match ctx.client.get(&url).send().await {
+    let url = format!("{}/api/channel/directive", ctx.api_url);
+    match ctx
+        .client
+        .get(&url)
+        .header("X-Channel-Token", &ctx.token)
+        .send()
+        .await
+    {
         Ok(resp) if resp.status() == reqwest::StatusCode::NO_CONTENT => tool_result("{}", false),
         Ok(resp) if resp.status().is_success() => match resp.text().await {
             Ok(body) => tool_result(&body, false),
@@ -395,13 +401,19 @@ async fn handle_request_permission_tool(ctx: &ChannelContext, arguments: Value) 
     }
 
     let verdict_url = format!(
-        "{}/api/channel/verdict?token={}&request_id={}",
-        ctx.api_url, ctx.token, request_id
+        "{}/api/channel/verdict?request_id={}",
+        ctx.api_url, request_id
     );
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
 
     loop {
-        match ctx.client.get(&verdict_url).send().await {
+        match ctx
+            .client
+            .get(&verdict_url)
+            .header("X-Channel-Token", &ctx.token)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 #[derive(Deserialize)]
                 struct Verdict {
@@ -488,13 +500,19 @@ async fn handle_permission_request(ctx: &ChannelContext, params: Value) {
 
     // Poll for verdict
     let url = format!(
-        "{}/api/channel/verdict?token={}&request_id={}",
-        ctx.api_url, ctx.token, req.request_id
+        "{}/api/channel/verdict?request_id={}",
+        ctx.api_url, req.request_id
     );
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
 
     loop {
-        match ctx.client.get(&url).send().await {
+        match ctx
+            .client
+            .get(&url)
+            .header("X-Channel-Token", &ctx.token)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 #[derive(Deserialize)]
                 struct Verdict {
@@ -544,13 +562,15 @@ async fn handle_permission_request(ctx: &ChannelContext, params: Value) {
 // ── Message polling loop ────────────────────────────────────────
 
 async fn poll_messages_loop(ctx: Arc<ChannelContext>) {
+    let url = format!("{}/api/channel/poll", ctx.api_url);
     loop {
-        let url = format!(
-            "{}/api/channel/poll?token={}&session={}",
-            ctx.api_url, ctx.token, ctx.session_id
-        );
-
-        match ctx.client.get(&url).send().await {
+        match ctx
+            .client
+            .get(&url)
+            .header("X-Channel-Token", &ctx.token)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 // Got a message — emit notification to Claude Code
                 if let Ok(body) = resp.text().await {
