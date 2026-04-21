@@ -22,7 +22,7 @@ jobs:
             ext: tar.gz
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         run: rustup target add ${{ matrix.target }}
