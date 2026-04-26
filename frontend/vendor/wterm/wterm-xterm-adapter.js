@@ -7,7 +7,7 @@ import { WTerm } from './wterm.bundle.js';
 
 // Single source of truth for cache-busting the vendored bundle, CSS, and the
 // adapter's own dynamic import URL in terminal-adapter.js.
-const WTERM_VERSION = '14';
+const WTERM_VERSION = '15';
 
 let _cssInjected = false;
 function ensureCss() {
