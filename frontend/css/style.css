@@ -2460,7 +2460,7 @@ pre:hover .code-copy-btn {
 /* Connections dialog */
 .connections-empty {
   text-align: center;
-  color: var(--text-muted);
+  color: var(--muted);
   padding: 16px 0;
 }
 .connection-entry {
@@ -2500,7 +2500,7 @@ pre:hover .code-copy-btn {
 }
 .connection-details {
   font-size: 0.8rem;
-  color: var(--text-muted);
+  color: var(--muted);
   min-width: 0;
 }
 .connection-details code {
