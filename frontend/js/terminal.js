@@ -1331,7 +1331,7 @@ const DenTerminal = (() => {
         const idx = tabs.indexOf(tab);
         if (idx === -1) return;
 
-        let target = null;
+        let target;
         if (e.key === 'ArrowRight') {
           target = tabs[(idx + 1) % tabs.length];
         } else if (e.key === 'ArrowLeft') {
