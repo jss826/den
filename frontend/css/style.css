@@ -1015,8 +1015,8 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   background: rgba(255, 255, 255, 0.1);
 }
 .chat-bar-btn-danger:hover {
-  background: rgba(244, 68, 68, 0.2);
-  color: #f44;
+  background: var(--error-tint);
+  color: var(--error);
 }
 
 /* Chat bar spacer — pushes toolbar buttons to the right */
@@ -2495,7 +2495,7 @@ pre:hover .code-copy-btn {
   color: #fff;
 }
 .connection-type-badge.relay {
-  background: #f59e0b;
+  background: var(--warn);
   color: #000;
 }
 .connection-details {
