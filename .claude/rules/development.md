@@ -13,10 +13,12 @@ paths: ['src/**/*.rs', 'frontend/**', 'tests/**']
 
 ## フロントエンド
 
+**UI / CSS の規約は `frontend/DESIGN.md` が canonical**。`frontend/` 配下を編集する前に必ず参照すること（トークン・テーマ・コンポーネント・z-index バンド・ブレークポイント・既知 Drift）。
+
+このファイルでは「DESIGN.md に書かれていない or 違反しやすい」ものだけ列挙:
+
 - 素の HTML/CSS/JS を維持（フレームワーク導入禁止）
-- iPad タッチターゲット 48px 以上
 - xterm.js 関連は `frontend/vendor/` に配置
-- `[hidden]` 属性で表示制御する要素に `display: flex` 等を指定する場合、`要素[hidden] { display: none; }` を必ず併記する（CSS の `display` 指定が `[hidden]` のデフォルト挙動を上書きするため）
 - 新しい IIFE グローバルモジュールを追加したら `eslint.config.mjs` の globals と varsIgnorePattern に登録する
 
 ## プロセス管理

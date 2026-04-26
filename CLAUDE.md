@@ -26,11 +26,16 @@ cargo test --target-dir target-test
 - 静的ファイル: rust-embed でバイナリ埋め込み
 - 永続化: JSON ファイル (`./data/` 配下)
 
-## CSS 注意点
+## UI / CSS
 
-- `.pane` の子要素（`#terminal-pane` 等）に ID セレクタで `display: flex` を指定しているため、`hidden` 属性が効かない。`#terminal-pane[hidden] { display: none }` で明示的にオーバーライドが必要
-- `#filer-pane` は `display: flex` を追加してはいけない。absolute positioning + `.filer-layout { height: 100% }` で正しく動作している
-- E2E テスト（Playwright）で CSS レイアウト変更を必ず検証すること: `npx playwright test tests/e2e/filer-ui.e2e.ts`
+UI デザインの規約は **`frontend/DESIGN.md`** が canonical（トークン・テーマ・コンポーネント・z-index バンド・ブレークポイント・既知 Drift など全て）。新規 UI 追加・既存 UI 変更時はそちらを参照する。
+
+特に違反しやすい 2 点だけ手元に残す:
+
+- **`[hidden]` + ID セレクタ `display: flex` の落とし穴**: `.pane` の子要素 (`#terminal-pane` 等) は ID セレクタで `display: flex` を当てているため `[hidden]` が効かない。**新規 ID で `display: flex` を使うときは必ず `要素[hidden] { display: none; }` を併記**
+- **`#filer-pane` に `display: flex` を追加してはいけない**: absolute positioning + `.filer-layout { height: 100% }` で動作中。flex 化すると Safari でレイアウト崩壊
+
+UI 変更後は **E2E テストを必ず実行**: `npx playwright test tests/e2e/filer-ui.e2e.ts`（CSS セレクタ・hidden 問題は実行しないと検出できない、`.claude/rules/workflow.md`）
 
 ## CSP 注意点
 
