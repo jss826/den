@@ -32,6 +32,7 @@
   --diff-add-bg: rgba(158,206,106,0.15);
   --diff-del-bg: rgba(247,118,142,0.15);
   --keybar-vertical-top: 40px; /* tab-bar(40px) — pane と同じ高さから開始 */
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 [data-theme="light"],
@@ -670,11 +671,11 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   border-bottom: 1px solid var(--border, #333);
 }
 .chat-stop-btn {
-  background: var(--danger, #e55);
+  background: var(--error);
   color: #fff;
 }
 .chat-stop-btn:hover {
-  background: var(--danger-hover, #c44);
+  filter: brightness(0.9);
 }
 .chat-session-list {
   flex: 1;
@@ -702,7 +703,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 .chat-session-empty {
   padding: 12px;
   text-align: center;
-  color: var(--dim, #888);
+  color: var(--muted);
   font-size: 12px;
 }
 .chat-session-label {
@@ -718,7 +719,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   padding: 1px 6px;
   border-radius: 8px;
   background: var(--hover, rgba(255,255,255,0.05));
-  color: var(--dim, #888);
+  color: var(--muted);
   white-space: nowrap;
 }
 .chat-session-cwd {
@@ -747,7 +748,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   margin-bottom: 6px;
 }
 .chat-tool-list {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.85rem;
   margin-top: 4px;
   resize: vertical;
@@ -834,7 +835,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 }
 .chat-main-title {
   font-size: 13px;
-  color: var(--dim, #888);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -865,7 +866,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 }
 .chat-assistant {
   align-self: flex-start;
-  background: var(--pane-bg, #1e1e1e);
+  background: var(--surface);
   border: 1px solid var(--border, #333);
   max-width: 95%;
   overflow: hidden;
@@ -890,7 +891,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
 .chat-assistant p:last-child { margin-bottom: 0; }
 .chat-system {
   align-self: center;
-  color: var(--dim, #888);
+  color: var(--muted);
   font-size: 12px;
   padding: 2px 8px;
 }
@@ -941,7 +942,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   padding: 6px 10px;
   font-size: 12px;
   font-style: italic;
-  color: var(--dim, #888);
+  color: var(--muted);
   border-top: 1px solid var(--border, #333);
 }
 .chat-input-area {
@@ -973,7 +974,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   padding: 8px 10px;
   font-size: 14px;
   font-family: inherit;
-  background: var(--pane-bg, #1e1e1e);
+  background: var(--surface);
   color: var(--fg, #ccc);
   outline: none;
 }
@@ -1004,7 +1005,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   padding: 4px 10px;
   border: 1px solid var(--border, #333);
   border-radius: 4px;
-  background: var(--pane-bg, #1e1e1e);
+  background: var(--surface);
   color: var(--fg, #ccc);
   font-size: 13px;
   cursor: pointer;
@@ -1033,7 +1034,7 @@ body[data-keybar-layout="left"] .pane { left: var(--keybar-layout-width, 0px); }
   border: 1px solid var(--border, #333);
   border-radius: 4px;
   background: var(--bg, #181818);
-  color: var(--dim, #888);
+  color: var(--muted);
   font-size: 11px;
   cursor: pointer;
   opacity: 0;
@@ -1044,7 +1045,7 @@ pre:hover .code-copy-btn {
 }
 .code-copy-btn:hover {
   color: var(--fg, #ccc);
-  background: var(--pane-bg, #1e1e1e);
+  background: var(--surface);
 }
 
 /* Mobile optimization for Chat */
@@ -1452,7 +1453,7 @@ pre:hover .code-copy-btn {
 }
 .text-input-toolbar-btn:hover {
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: #fff;
 }
 .text-input-row {
   display: flex;
@@ -1479,7 +1480,7 @@ pre:hover .code-copy-btn {
 }
 .text-input-send-btn {
   background: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: #fff;
   border: none;
   border-radius: 4px;
   padding: 0.4rem 1rem;
@@ -2084,7 +2085,7 @@ pre:hover .code-copy-btn {
 .cwd-picker-up-btn:hover { background: var(--accent); color: #fff; }
 
 .cwd-picker-current {
-  color: var(--fg-muted, #999);
+  color: var(--muted);
   font-size: 0.8rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2125,7 +2126,7 @@ pre:hover .code-copy-btn {
 .cwd-picker-empty {
   padding: 24px;
   text-align: center;
-  color: var(--fg-muted, #999);
+  color: var(--muted);
   font-size: 0.85rem;
 }
 
@@ -2432,8 +2433,8 @@ pre:hover .code-copy-btn {
 /* Host key modal */
 .hostkey-warning {
   background: rgba(238, 85, 85, 0.15);
-  border: 1px solid var(--danger, #e55);
-  color: var(--danger, #e55);
+  border: 1px solid var(--error);
+  color: var(--error);
   padding: 10px 12px;
   border-radius: 6px;
   margin-bottom: 16px;
@@ -2441,8 +2442,8 @@ pre:hover .code-copy-btn {
   line-height: 1.4;
 }
 .hostkey-trust-btn {
-  background: var(--danger, #e55);
-  border-color: var(--danger, #e55);
+  background: var(--error);
+  border-color: var(--error);
   color: #fff;
   font-weight: 600;
 }
@@ -2866,7 +2867,7 @@ pre:hover .code-copy-btn {
 .clipboard-history-clear {
   border: none;
   background: none;
-  color: var(--danger);
+  color: var(--error);
   cursor: pointer;
   font-size: 0.8rem;
   padding: 2px 6px;
@@ -3542,7 +3543,7 @@ pre:hover .code-copy-btn {
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.75rem;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
