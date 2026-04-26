@@ -10,7 +10,7 @@ use crate::store::Settings;
 // --- Bookmark password encryption (AES-256-GCM with HMAC-derived key) ---
 
 fn derive_bookmark_key(master_password: &str) -> [u8; 32] {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     let mut mac =
