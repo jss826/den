@@ -1,13 +1,12 @@
 import {
   createRestty
-} from "./chunk-meqn8xtd.js";
+} from "./chunk-zqscavsh.js";
 
 // src/xterm/app-options.ts
-function createCompatAppOptions(userAppOptions, emitData, onGridSize) {
+function createCompatAppOptions(userAppOptions, emitData) {
   return (context) => {
     const resolved = typeof userAppOptions === "function" ? userAppOptions(context) : userAppOptions ?? {};
     const userBeforeInput = resolved.beforeInput;
-    const userCallbacks = resolved.callbacks;
     return {
       ...resolved,
       beforeInput: ({ text, source }) => {
@@ -19,13 +18,6 @@ function createCompatAppOptions(userAppOptions, emitData, onGridSize) {
           emitData(nextText);
         }
         return nextText;
-      },
-      callbacks: {
-        ...userCallbacks,
-        onGridSize: (cols, rows) => {
-          userCallbacks?.onGridSize?.(cols, rows);
-          onGridSize(cols, rows);
-        }
       }
     };
   };
@@ -115,14 +107,6 @@ class Terminal {
       ...this.resttyOptionsBase,
       appOptions: createCompatAppOptions(this.userAppOptions, (data) => {
         emitWithGuard(this.dataListeners, data, "onData");
-      }, (cols, rows) => {
-        const prevCols = this.cols;
-        const prevRows = this.rows;
-        this.cols = cols;
-        this.rows = rows;
-        if (cols !== prevCols || rows !== prevRows) {
-          emitWithGuard(this.resizeListeners, { cols, rows }, "onResize");
-        }
       }),
       root: parent
     });

@@ -8,7 +8,7 @@ import {
   isBuiltinThemeName,
   listBuiltinThemeNames,
   parseGhosttyTheme
-} from "./chunk-meqn8xtd.js";
+} from "./chunk-zqscavsh.js";
 export {
   parseGhosttyTheme,
   listBuiltinThemeNames,

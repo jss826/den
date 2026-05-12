@@ -8,9 +8,10 @@
     "check": "npm run lint && npm test",
     "test:e2e": "playwright test",
     "test:all": "npm run check && playwright test",
-    "build:vendor": "node scripts/build-codemirror.js && node scripts/build-wterm.js",
+    "build:vendor": "node scripts/build-codemirror.js && node scripts/build-wterm.js && node scripts/build-restty.js",
     "build:codemirror": "node scripts/build-codemirror.js",
-    "build:wterm": "node scripts/build-wterm.js"
+    "build:wterm": "node scripts/build-wterm.js",
+    "build:restty": "node scripts/build-restty.js"
   },
   "devDependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -32,6 +33,7 @@
     "codemirror": "^6.0.2",
     "esbuild": "^0.28.0",
     "eslint": "^10.3.0",
-    "globals": "^17.6.0"
+    "globals": "^17.6.0",
+    "restty": "0.1.35"
   }
 }

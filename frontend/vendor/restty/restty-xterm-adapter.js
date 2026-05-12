@@ -35,7 +35,7 @@ function xtermThemeToGhostty(theme) {
 /**
  * Replicate restty's DEFAULT_FONT_SOURCES fallback chain so that custom
  * user fonts can be prepended WITHOUT losing CJK, symbol, and emoji support.
- * Source: restty chunk-meqn8xtd.js DEFAULT_FONT_SOURCES
+ * Source: restty chunk-*.js DEFAULT_FONT_SOURCES
  */
 const RESTTY_FALLBACK_SOURCES = [
   // Main monospace — local Nerd Fonts
