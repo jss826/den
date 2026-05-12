@@ -688,9 +688,9 @@ fn build_pinned_clients(
 
     // reqwest: pin the probed certificate and skip hostname validation.
     // The fingerprint was already verified in the trust flow (TOFU model).
+    // tls_certs_only disables built-in roots and trusts only the provided cert.
     let http_client = reqwest::Client::builder()
-        .tls_built_in_root_certs(false)
-        .add_root_certificate(certificate)
+        .tls_certs_only([certificate])
         .danger_accept_invalid_hostnames(true)
         .https_only(true)
         .build()
