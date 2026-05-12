@@ -423,9 +423,9 @@ impl SessionRegistry {
 
         // Generate random instance ID for self-connection detection
         let instance_id = {
-            use rand::Rng;
+            use rand::RngExt;
             let mut buf = [0u8; 16];
-            rand::thread_rng().fill(&mut buf);
+            rand::rng().fill(&mut buf[..]);
             hex::encode(buf)
         };
 

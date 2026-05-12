@@ -150,8 +150,9 @@ async fn authenticate_agent(
         return Err(SftpError::AuthFailed);
     }
     for key in identities {
+        let public_key = key.public_key().into_owned();
         match session
-            .authenticate_publickey_with(username.clone(), key, None, &mut agent)
+            .authenticate_publickey_with(username.clone(), public_key, None, &mut agent)
             .await
         {
             Ok(result) if result.success() => return Ok(session),

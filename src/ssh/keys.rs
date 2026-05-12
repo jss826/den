@@ -13,7 +13,7 @@ pub fn load_or_generate_host_key(data_dir: &Path) -> anyhow::Result<PrivateKey> 
         Ok(key)
     } else {
         tracing::info!("Generating new Ed25519 SSH host key");
-        let key = PrivateKey::random(&mut rand::thread_rng(), Algorithm::Ed25519)?;
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
         let line_ending = if cfg!(windows) {
             LineEnding::CRLF
         } else {

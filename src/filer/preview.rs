@@ -12,7 +12,7 @@ use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
 };
-use rand::RngCore;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -92,7 +92,7 @@ fn prune_expired(map: &mut HashMap<String, PreviewSession>) {
 
 fn generate_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes[..]);
     hex::encode(bytes)
 }
 

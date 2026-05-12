@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use bytes::Bytes;
 use russh::keys::ssh_key;
 use russh::server::{Auth, Handler, Msg, Server as _, Session};
-use russh::{ChannelId, CryptoVec, Pty};
+use russh::{ChannelId, Pty};
 
 use tokio::sync::mpsc;
 
@@ -297,7 +298,7 @@ impl DenSshHandler {
             tracing::warn!("SSH self-connection detected via DEN_INSTANCE env var");
             session.data(
                 channel_id,
-                CryptoVec::from_slice(
+                Bytes::copy_from_slice(
                     b"Error: Self-connection detected (DEN_INSTANCE match).\r\n\
                       Connecting to Den from within a Den session creates an infinite loop.\r\n",
                 ),
@@ -318,7 +319,7 @@ impl DenSshHandler {
                     "Error: Too many SSH connections from localhost ({count} exceeds limit of {LOOPBACK_HARD_LIMIT}).\r\n\
                      This may indicate a self-connection loop.\r\n"
                 );
-                session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
+                session.data(channel_id, Bytes::copy_from_slice(msg.as_bytes()))?;
                 session.close(channel_id)?;
                 return Ok(());
             }
@@ -351,7 +352,7 @@ impl DenSshHandler {
                     tracing::warn!("SSH self-connection detected via process tree (peer={peer})");
                     session.data(
                         channel_id,
-                        CryptoVec::from_slice(
+                        Bytes::copy_from_slice(
                             b"Error: Self-connection detected.\r\n\
                               Connecting to Den from within a Den terminal session \
                               creates an infinite loop.\r\n",
@@ -390,18 +391,18 @@ impl DenSshHandler {
         // ターミナル画面をクリアしてカーソルをホームに戻す。
         // これにより、クライアントの既存の画面内容（ssh コマンド等）と
         // リプレイバッファの内容が混ざって表示が崩れるのを防ぐ。
-        session.data(channel_id, CryptoVec::from_slice(b"\x1b[2J\x1b[H"))?;
+        session.data(channel_id, Bytes::copy_from_slice(b"\x1b[2J\x1b[H"))?;
 
         if !replay.is_empty() {
             let filtered_replay = filter_conpty_private_modes(&replay);
             let filtered_replay = replace_osc_title(&filtered_replay, &osc_replacement);
             if !filtered_replay.is_empty() {
-                session.data(channel_id, CryptoVec::from_slice(&filtered_replay))?;
+                session.data(channel_id, Bytes::copy_from_slice(&filtered_replay))?;
             }
         }
 
         // Set terminal title to "Den SSH [session_name]"
-        session.data(channel_id, CryptoVec::from_slice(&osc_replacement))?;
+        session.data(channel_id, Bytes::copy_from_slice(&osc_replacement))?;
 
         // Output: broadcast::Receiver → SSH channel
         let handle = session.handle();
@@ -425,7 +426,7 @@ impl DenSshHandler {
                             continue;
                         }
                         if handle
-                            .data(channel_id, CryptoVec::from_slice(&filtered))
+                            .data(channel_id, Bytes::copy_from_slice(&filtered))
                             .await
                             .is_err()
                         {
@@ -591,7 +592,7 @@ impl DenSshHandler {
             .ok_or_else(|| anyhow::anyhow!("No channel"))?;
 
         let msg = format!("Connecting to {}:{}...\r\n", remote_host, remote_port);
-        session.data(channel_id, CryptoVec::from_slice(msg.as_bytes()))?;
+        session.data(channel_id, Bytes::copy_from_slice(msg.as_bytes()))?;
 
         let cols = self.pty_cols;
         let rows = self.pty_rows;
@@ -734,8 +735,9 @@ async fn authenticate_remote_agent(
         return Err(anyhow::anyhow!("No keys in SSH agent"));
     }
     for key in identities {
+        let public_key = key.public_key().into_owned();
         match session
-            .authenticate_publickey_with(username.clone(), key, None, &mut agent)
+            .authenticate_publickey_with(username.clone(), public_key, None, &mut agent)
             .await
         {
             Ok(result) if result.success() => return Ok(session),
@@ -783,7 +785,7 @@ async fn remote_bridge_task(
         let msg = msg.to_string();
         async move {
             let _ = local_handle
-                .data(local_channel, CryptoVec::from_slice(msg.as_bytes()))
+                .data(local_channel, Bytes::copy_from_slice(msg.as_bytes()))
                 .await;
             let _ = local_handle.close(local_channel).await;
         }
@@ -864,7 +866,7 @@ async fn remote_bridge_task(
     let _ = local_handle
         .data(
             local_channel,
-            CryptoVec::from_slice(connected_msg.as_bytes()),
+            Bytes::copy_from_slice(connected_msg.as_bytes()),
         )
         .await;
 
@@ -878,7 +880,7 @@ async fn remote_bridge_task(
                 match msg {
                     Some(russh::ChannelMsg::Data { data }) => {
                         if local_handle
-                            .data(local_channel, CryptoVec::from_slice(&data))
+                            .data(local_channel, Bytes::copy_from_slice(&data))
                             .await
                             .is_err()
                         {
@@ -889,7 +891,7 @@ async fn remote_bridge_task(
                     Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
                         // stderr — forward as-is
                         if local_handle
-                            .data(local_channel, CryptoVec::from_slice(&data))
+                            .data(local_channel, Bytes::copy_from_slice(&data))
                             .await
                             .is_err()
                         {
@@ -1099,7 +1101,7 @@ impl Handler for DenSshHandler {
                 }
                 output.push_str("\r\nRemote: attach host/session or attach host:port/session (default port 2222)\r\n");
 
-                session.data(channel, CryptoVec::from_slice(output.as_bytes()))?;
+                session.data(channel, Bytes::copy_from_slice(output.as_bytes()))?;
                 session.close(channel)?;
                 Ok(())
             }
@@ -1110,7 +1112,7 @@ impl Handler for DenSshHandler {
                 if name.is_empty() {
                     session.data(
                         channel,
-                        CryptoVec::from_slice(b"Usage: attach <session-name>\r\n"),
+                        Bytes::copy_from_slice(b"Usage: attach <session-name>\r\n"),
                     )?;
                     session.close(channel)?;
                     return Ok(());
@@ -1118,7 +1120,7 @@ impl Handler for DenSshHandler {
                 if !self.pty_requested {
                     session.data(
                         channel,
-                        CryptoVec::from_slice(
+                        Bytes::copy_from_slice(
                             b"Error: PTY required. Use: ssh -t ... attach <name>\r\n",
                         ),
                     )?;
@@ -1133,7 +1135,7 @@ impl Handler for DenSshHandler {
                     } else {
                         session.data(
                             channel,
-                            CryptoVec::from_slice(
+                            Bytes::copy_from_slice(
                                 b"Invalid remote syntax. Use: attach host/session or attach host:port/session\r\n",
                             ),
                         )?;
@@ -1151,7 +1153,7 @@ impl Handler for DenSshHandler {
                 if name.is_empty() {
                     session.data(
                         channel,
-                        CryptoVec::from_slice(b"Usage: new <session-name>\r\n"),
+                        Bytes::copy_from_slice(b"Usage: new <session-name>\r\n"),
                     )?;
                     session.close(channel)?;
                     return Ok(());
@@ -1159,7 +1161,7 @@ impl Handler for DenSshHandler {
                 if !self.pty_requested {
                     session.data(
                         channel,
-                        CryptoVec::from_slice(
+                        Bytes::copy_from_slice(
                             b"Error: PTY required. Use: ssh -t ... new <name>\r\n",
                         ),
                     )?;
@@ -1169,7 +1171,7 @@ impl Handler for DenSshHandler {
                 // 既存セッションがあればエラー
                 if self.registry.exists(name).await {
                     let msg = format!("Session already exists: {name}\r\n");
-                    session.data(channel, CryptoVec::from_slice(msg.as_bytes()))?;
+                    session.data(channel, Bytes::copy_from_slice(msg.as_bytes()))?;
                     session.close(channel)?;
                     return Ok(());
                 }
@@ -1183,7 +1185,7 @@ impl Handler for DenSshHandler {
                 if !self.pty_requested {
                     session.data(
                         channel,
-                        CryptoVec::from_slice(
+                        Bytes::copy_from_slice(
                             b"Error: PTY required. Use: ssh -t ... attach <name>\r\n",
                         ),
                     )?;
@@ -1214,11 +1216,11 @@ impl Handler for DenSshHandler {
             match cmd {
                 EscapeCommand::ShowStatus => {
                     let output = self.format_status().await;
-                    session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
+                    session.data(channel_id, Bytes::copy_from_slice(output.as_bytes()))?;
                 }
                 EscapeCommand::ShowHelp => {
                     let output = Self::format_help().to_string();
-                    session.data(channel_id, CryptoVec::from_slice(output.as_bytes()))?;
+                    session.data(channel_id, Bytes::copy_from_slice(output.as_bytes()))?;
                 }
                 EscapeCommand::ForceRedraw => {
                     if let (Some(shared), Some(client_id)) = (&self.shared_session, self.client_id)
