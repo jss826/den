@@ -14,6 +14,15 @@
 
 UI 変更を含む場合、e2e テストを必ずローカルで実行してから出荷する。CSS セレクタや hidden 属性のオーバーライド問題は実行しないと検出できない。
 
+### terminal renderer の vendor bump 時は切替スモーク必須
+
+`frontend/vendor/restty/` や `frontend/vendor/wterm/` の version bump（npm bump 含む）を含む release は、e2e に加えて **renderer 切替スモークを必ず実施** してから出荷する。
+
+- e2e のデフォルト renderer (xterm) では restty / wterm 固有の regression が拾えない
+- 切替後に最低限確認: 初期描画が遅延しないこと、CJK レンダリング、theme 反映、入力エコー
+- chrome-cdp で自動化可能（手順は `memory/patterns.md` の「chrome-cdp で renderer 切替 + WASM ready 検証」を参照）
+- v3.3.3 で restty 0.1.35 化したが、xterm e2e は全通過する一方で restty に切り替えると初期描画が破綻していた前例あり（v3.3.4 で hotfix）
+
 ## 具体例
 
 - /develop の Phase が冗長に感じる → 「Phase 2 と 3 を統合したい。小さい Issue では設計と実装を分ける必要がないため」
