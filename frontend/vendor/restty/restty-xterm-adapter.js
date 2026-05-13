@@ -197,6 +197,20 @@ class DenResttyTerminal {
     this._restty = new Restty({
       root: parent,
       fontSources: this._fontSources,
+      // restty 0.1.35+ destructures `callbacks` from top-level options.
+      // Putting them inside appOptions silently drops onBackend / onGridSize.
+      callbacks: {
+        onGridSize: (cols, rows) => {
+          if (cols !== this.cols || rows !== this.rows) {
+            this.cols = cols;
+            this.rows = rows;
+            for (const cb of this._resizeListeners) {
+              try { cb({ cols, rows }); } catch (e) { /* ignore */ }
+            }
+          }
+        },
+        onBackend: () => this._onBackendReady(),
+      },
       appOptions: () => ({
         renderer: 'auto',
         autoResize: true,
@@ -216,18 +230,6 @@ class DenResttyTerminal {
           resize() {},
           isConnected: () => true,
           destroy() {},
-        },
-        callbacks: {
-          onGridSize: (cols, rows) => {
-            if (cols !== this.cols || rows !== this.rows) {
-              this.cols = cols;
-              this.rows = rows;
-              for (const cb of this._resizeListeners) {
-                try { cb({ cols, rows }); } catch (e) { /* ignore */ }
-              }
-            }
-          },
-          onBackend: () => this._onBackendReady(),
         },
       }),
     });
