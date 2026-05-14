@@ -7,7 +7,14 @@ import { WTerm } from './wterm.bundle.js';
 
 // Single source of truth for cache-busting the vendored bundle, CSS, and the
 // adapter's own dynamic import URL in terminal-adapter.js.
-const WTERM_VERSION = '16';
+const WTERM_VERSION = '17';
+
+// _doRelayout retry tuning. Init can land before `inner` has a non-zero box
+// (e.g. tab not yet visible) or before fonts have settled enough for the probe
+// span to report a glyph size. Without retry the grid sticks at 80x24 because
+// the parent ResizeObserver only fires on subsequent size changes.
+const RELAYOUT_RETRY_DELAY_MS = 50;
+const RELAYOUT_RETRY_MAX = 20; // ~1s total — generous for slow font load
 
 let _cssInjected = false;
 function ensureCss() {
@@ -82,6 +89,8 @@ class DenWtermTerminal {
     this._charH = null;
     this._relayoutRaf = null;
     this._scrollRaf = null;
+    this._relayoutRetryTimer = null;
+    this._relayoutRetryCount = 0;
     this._ready = false;
     this._writeQueue = [];
     this._disposed = false;
@@ -238,14 +247,20 @@ class DenWtermTerminal {
     this._parentObserver.observe(parent);
   }
 
-  /** Measure char size once; invalidate on font changes via `_invalidateCharCache`. */
+  /** Measure char size once; invalidate on font changes via `_invalidateCharCache`.
+   *  Inherits font from `inner` via cs lookup so the probe isn't affected by
+   *  ancestors that override `font` (e.g. tab-switch transitions). */
   _measureCharSize() {
     if (this._charW && this._charH) return { charW: this._charW, charH: this._charH };
     const inner = this._inner;
     if (!inner) return { charW: 0, charH: 0 };
+    const cs = getComputedStyle(inner);
     const probe = document.createElement('span');
     probe.textContent = 'W';
-    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;top:0;left:0;';
+    probe.style.fontFamily = cs.fontFamily;
+    probe.style.fontSize = cs.fontSize;
+    probe.style.lineHeight = cs.lineHeight;
     inner.appendChild(probe);
     const pr = probe.getBoundingClientRect();
     probe.remove();
@@ -279,6 +294,20 @@ class DenWtermTerminal {
     });
   }
 
+  /** Re-arm a relayout when the previous attempt landed before the box or the
+   *  font probe was usable. Without this the grid stays at 80x24 forever if
+   *  init() raced ahead of the first visible frame. */
+  _scheduleRelayoutRetry() {
+    if (this._disposed) return;
+    if (this._relayoutRetryTimer != null) return;
+    if (this._relayoutRetryCount >= RELAYOUT_RETRY_MAX) return;
+    this._relayoutRetryCount += 1;
+    this._relayoutRetryTimer = setTimeout(() => {
+      this._relayoutRetryTimer = null;
+      this._relayoutFromParent();
+    }, RELAYOUT_RETRY_DELAY_MS);
+  }
+
   _doRelayout() {
     const inner = this._inner;
     const wterm = this._wterm;
@@ -288,10 +317,17 @@ class DenWtermTerminal {
     const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
     const width = inner.clientWidth - padX;
     const height = inner.clientHeight - padY;
-    if (width <= 0 || height <= 0) return;
+    if (width <= 0 || height <= 0) {
+      this._scheduleRelayoutRetry();
+      return;
+    }
 
     const { charW, charH } = this._measureCharSize();
-    if (!charW || !charH) return;
+    if (!charW || !charH) {
+      this._scheduleRelayoutRetry();
+      return;
+    }
+    this._relayoutRetryCount = 0;
 
     const cols = Math.max(1, Math.floor(width / charW));
     const rows = Math.max(1, Math.floor(height / charH));
@@ -504,6 +540,7 @@ class DenWtermTerminal {
     this._disposed = true;
     if (this._relayoutRaf != null) { cancelAnimationFrame(this._relayoutRaf); this._relayoutRaf = null; }
     if (this._scrollRaf != null) { cancelAnimationFrame(this._scrollRaf); this._scrollRaf = null; }
+    if (this._relayoutRetryTimer != null) { clearTimeout(this._relayoutRetryTimer); this._relayoutRetryTimer = null; }
     this._writeQueue.length = 0;
     this._dataListeners.clear();
     this._resizeListeners.clear();
