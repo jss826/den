@@ -53,7 +53,6 @@ const DenChat = (() => {
 
   // ── Remote connection state ──
   let chatRemoteId = null;
-  let chatRemoteType = null; // 'direct' | 'relay'
 
   // ── Notification permission ──
   let notificationsEnabled = false;
@@ -62,7 +61,6 @@ const DenChat = (() => {
 
   function getApiBase() {
     if (!chatRemoteId) return '/api';
-    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}`;
     return `/api/remote/${chatRemoteId}`;
   }
 
@@ -70,9 +68,6 @@ const DenChat = (() => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const base = `${proto}//${location.host}`;
     if (chatRemoteId) {
-      if (chatRemoteType === 'relay') {
-        return `${base}/api/relay/${chatRemoteId}/chat-ws?session=${encodeURIComponent(sessionId)}`;
-      }
       return `${base}/api/remote/${encodeURIComponent(chatRemoteId)}/chat-ws?session=${encodeURIComponent(sessionId)}`;
     }
     return `${base}/api/channel/ws?session=${encodeURIComponent(sessionId)}`;
@@ -153,9 +148,9 @@ const DenChat = (() => {
 
     // Remote connection awareness
     document.addEventListener('den:remote-changed', (e) => {
-      const { connectionId, connection: conn } = e.detail || {};
+      const { connectionId } = e.detail || {};
       if (connectionId) {
-        setRemote(connectionId, conn?.type || 'direct');
+        setRemote(connectionId);
       } else {
         setRemote(null);
       }
@@ -651,9 +646,8 @@ const DenChat = (() => {
 
   // ── Remote ──
 
-  function setRemote(remoteId = null, type = null) {
+  function setRemote(remoteId = null) {
     chatRemoteId = remoteId;
-    chatRemoteType = type;
     // Clear stale state from previous connection
     activeSessionId = null;
     disconnectWs();
@@ -694,7 +688,6 @@ const DenChat = (() => {
   // where the session will be created.
   function getFilerApiBase() {
     if (!chatRemoteId) return '/api/filer';
-    if (chatRemoteType === 'relay') return `/api/relay/${chatRemoteId}/filer`;
     return `/api/remote/${chatRemoteId}/filer`;
   }
 

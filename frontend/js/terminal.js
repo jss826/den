@@ -4,7 +4,7 @@ const DenTerminal = (() => {
   let fitAddon = null;
   let ws = null;
   let currentSession = null;
-  let currentRemote = null; // null for local, connectionId for remote Den (direct or relay)
+  let currentRemote = null; // null for local, connectionId for remote Den
   let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
   let pingTimer = null; // WS keepalive ping interval
   const WS_PING_INTERVAL_MS = 30000;
@@ -27,9 +27,6 @@ const DenTerminal = (() => {
 
   function getWsPath() {
     if (!currentRemote) return '/api/ws';
-    const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
-    const conn = conns[currentRemote];
-    if (conn?.type === 'relay') return `/api/relay/${currentRemote}/ws`;
     return `/api/remote/${currentRemote}/ws`;
   }
 
@@ -508,7 +505,7 @@ const DenTerminal = (() => {
     const cols = term.cols;
     const rows = term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Route WS through remote/relay proxy if connected to another Den
+    // Route WS through remote proxy if connected to another Den
     const wsPath = getWsPath();
     const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
 
@@ -907,22 +904,19 @@ const DenTerminal = (() => {
     } catch (_) { /* best-effort */ }
   }
 
-  /** Fetch sessions from local + all remote Den connections + relay */
+  /** Fetch sessions from local + all remote Den connections */
   async function fetchAllSessions() {
     const local = await fetchSessions();
 
     // Mark local sessions
     const all = local.map(s => ({ ...s, remote: null, remoteDisplayName: null }));
 
-    // Fetch sessions for all Den connections (direct + relay) in parallel
     const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
     const denEntries = Object.entries(denConns);
     if (denEntries.length > 0) {
       const results = await Promise.all(denEntries.map(async ([connId, info]) => {
         try {
-          const apiPrefix = info.type === 'relay'
-            ? `/api/relay/${connId}`
-            : `/api/remote/${connId}`;
+          const apiPrefix = `/api/remote/${connId}`;
           const [sessResp, portsResp] = await Promise.all([
             fetch(`${apiPrefix}/terminal/sessions`, { credentials: 'same-origin' }),
             fetch(`${apiPrefix}/ports`, { credentials: 'same-origin' }),
@@ -947,9 +941,6 @@ const DenTerminal = (() => {
   /** Get API base path for session operations */
   function sessionApiBase(remote) {
     if (!remote) return '/api';
-    const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
-    const conn = conns[remote];
-    if (conn?.type === 'relay') return `/api/relay/${remote}`;
     return `/api/remote/${remote}`;
   }
 
@@ -1221,11 +1212,6 @@ const DenTerminal = (() => {
 
   function getFwdUrl(portInfo) {
     if (portInfo.remote) {
-      const conns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
-      const conn = conns[portInfo.remote];
-      if (conn?.type === 'relay') {
-        return `/api/relay/${portInfo.remote}/fwd/${portInfo.port}/`;
-      }
       return `/api/remote/${portInfo.remote}/fwd/${portInfo.port}/`;
     }
     return `/fwd/${portInfo.port}/`;
@@ -1543,13 +1529,12 @@ const DenTerminal = (() => {
     });
     menu.appendChild(localItem);
 
-    // Den connections (one section per connection, direct + relay unified)
+    // Den connections (one section per connection)
     const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
     for (const [connId, info] of Object.entries(denConns)) {
-      const prefix = info.type === 'relay' ? 'Relay' : 'Remote';
       const sep = document.createElement('div');
       sep.className = 'new-session-menu-separator';
-      sep.textContent = `${prefix} ${info.displayName || stripPort(info.hostPort) || connId}`;
+      sep.textContent = `Remote ${info.displayName || stripPort(info.hostPort) || connId}`;
       menu.appendChild(sep);
 
       const newItem = document.createElement('div');

@@ -232,8 +232,7 @@ const DenFiler = (() => {
     if (info.mode === 'den') {
       const activeConn = denConns[FilerRemote.getActiveDenId()];
       const label = activeConn?.displayName || activeConn?.hostPort || 'Remote Den';
-      const suffix = activeConn?.type === 'relay' ? ' (relay)' : '';
-      btn.textContent = denCount > 1 ? `${label}${suffix} (+${denCount - 1})` : `${label}${suffix}`;
+      btn.textContent = denCount > 1 ? `${label} (+${denCount - 1})` : label;
       btn.classList.add('active');
       btn.setAttribute('data-tooltip', `${denCount} Den connection${denCount !== 1 ? 's' : ''}`);
     } else if (info.mode === 'sftp') {
@@ -287,8 +286,7 @@ const DenFiler = (() => {
       // Each Den connection
       for (const connId of denIds) {
         const conn = denConns[connId];
-        let label = conn.displayName || conn.hostPort || connId;
-        if (conn.type === 'relay') label += ' (relay)';
+        const label = conn.displayName || conn.hostPort || connId;
         const item = document.createElement('div');
         item.className = 'new-session-menu-item';
         if (info.mode === 'den' && connId === activeId) item.classList.add('current');
@@ -340,8 +338,7 @@ const DenFiler = (() => {
     }
     for (const connId of denIds) {
       const conn = denConns[connId];
-      let label = conn.displayName || conn.hostPort || connId;
-      if (conn.type === 'relay') label += ' (relay)';
+      const label = conn.displayName || conn.hostPort || connId;
       disconnectTargets.push({ label, action: () => doDenDisconnect(connId) });
     }
     if (disconnectTargets.length > 0) {
@@ -504,11 +501,6 @@ const DenFiler = (() => {
     });
     const denSubmit = document.getElementById('den-connect-submit');
     if (denSubmit) denSubmit.addEventListener('click', doDenConnect);
-    const denUseRelay = document.getElementById('den-use-relay');
-    if (denUseRelay) denUseRelay.addEventListener('change', () => {
-      const section = document.getElementById('den-relay-section');
-      if (section) section.hidden = !denUseRelay.checked;
-    });
     // Den bookmarks
     const denBookmarkSelect = document.getElementById('den-bookmark-select');
     if (denBookmarkSelect) denBookmarkSelect.addEventListener('change', onDenBookmarkSelect);
@@ -578,7 +570,7 @@ const DenFiler = (() => {
       opt.value = b.url;
       const hp = bookmarkHostPort(b.url);
       const name = _tlsCertsForRender[hp]?.display_name || hp;
-      opt.textContent = b.use_relay ? `${name} (relay)` : name;
+      opt.textContent = name;
       if (b.url === selectedUrl) opt.selected = true;
       select.appendChild(opt);
     });
@@ -595,14 +587,6 @@ const DenFiler = (() => {
     if (!b) return;
     document.getElementById('den-connect-url').value = b.url || '';
     document.getElementById('den-connect-password').value = b.password || '';
-    const relayCheckbox = document.getElementById('den-use-relay');
-    if (relayCheckbox) relayCheckbox.checked = !!b.use_relay;
-    const relaySection = document.getElementById('den-relay-section');
-    if (relaySection) relaySection.hidden = !b.use_relay;
-    const relayUrl = document.getElementById('den-relay-url');
-    if (relayUrl) relayUrl.value = b.relay_url || '';
-    const relayPassword = document.getElementById('den-relay-password');
-    if (relayPassword) relayPassword.value = b.relay_password || '';
   }
 
   async function onDenBookmarkSave() {
@@ -618,13 +602,9 @@ const DenFiler = (() => {
     if (!rawName) return;
     const displayName = rawName.trim();
 
-    const useRelay = document.getElementById('den-use-relay')?.checked || false;
     const entry = {
       url,
       password: document.getElementById('den-connect-password').value || null,
-      use_relay: useRelay,
-      relay_url: useRelay ? (document.getElementById('den-relay-url')?.value.trim() || null) : null,
-      relay_password: useRelay ? (document.getElementById('den-relay-password')?.value || null) : null,
     };
 
     const bookmarks = (DenSettings.get('den_bookmarks') || []).slice();
@@ -675,15 +655,6 @@ const DenFiler = (() => {
     const passwordInput = document.getElementById('den-connect-password');
     urlInput.value = defaultUrl || '';
     passwordInput.value = '';
-    // Reset relay fields
-    const relayCheckbox = document.getElementById('den-use-relay');
-    if (relayCheckbox) relayCheckbox.checked = false;
-    const relaySection = document.getElementById('den-relay-section');
-    if (relaySection) relaySection.hidden = true;
-    const relayUrl = document.getElementById('den-relay-url');
-    if (relayUrl) relayUrl.value = '';
-    const relayPassword = document.getElementById('den-relay-password');
-    if (relayPassword) relayPassword.value = '';
     // Populate bookmarks and URL datalist
     renderDenBookmarkSelect(null);
     populateDenUrlDatalist();
@@ -732,31 +703,12 @@ const DenFiler = (() => {
       return;
     }
 
-    const useRelay = document.getElementById('den-use-relay')?.checked;
-    if (useRelay) {
-      const relayUrl = document.getElementById('den-relay-url')?.value.trim();
-      const relayPassword = document.getElementById('den-relay-password')?.value;
-      if (!relayUrl || !relayPassword) {
-        Toast.error('Relay URL and password are required');
-        return;
-      }
-    }
-
     const submitBtn = document.getElementById('den-connect-submit');
     await Spinner.button(submitBtn, async () => {
       try {
-        let data;
-        if (useRelay) {
-          const relayUrl = document.getElementById('den-relay-url').value.trim();
-          const relayPassword = document.getElementById('den-relay-password').value;
-          data = await FilerRemote.connectDenViaRelay(relayUrl, relayPassword, url, password);
-          document.getElementById('den-connect-modal').hidden = true;
-          Toast.success(`Connected to ${data.target_host_port || url} via relay`);
-        } else {
-          data = await FilerRemote.connectDen(url, password);
-          document.getElementById('den-connect-modal').hidden = true;
-          Toast.success(`Connected to ${data.host_port || url} (direct)`);
-        }
+        const data = await FilerRemote.connectDen(url, password);
+        document.getElementById('den-connect-modal').hidden = true;
+        Toast.success(`Connected to ${data.host_port || url}`);
       } catch (e) {
         if (e.message !== 'Connection cancelled') {
           Toast.error(e.message || 'Connection failed');
@@ -1486,23 +1438,15 @@ const DenFiler = (() => {
       const entry = document.createElement('div');
       entry.className = 'connection-entry';
 
-      const isRelay = conn.type === 'relay';
-      const typeLabel = isRelay ? 'Relay' : 'Direct';
-      // F013: sanitize CSS class — only allow known values
-      const typeCssClass = isRelay ? 'relay' : 'direct';
       const displayName = conn.displayName || conn.hostPort || connId;
 
       let html = `<div class="connection-header">`;
       html += `<strong class="connection-name">${escapeHtml(displayName)}</strong>`;
-      html += `<span class="connection-type-badge ${typeCssClass}">${typeLabel}</span>`;
       html += `</div>`;
       html += `<div class="connection-details">`;
       html += `<div class="connection-detail"><span class="connection-label">Host:Port</span> <code>${escapeHtml(conn.hostPort || 'unknown')}</code></div>`;
       if (conn.fingerprint) {
         html += `<div class="connection-detail"><span class="connection-label">Fingerprint</span> <code class="connection-fingerprint">${escapeHtml(conn.fingerprint)}</code></div>`;
-      }
-      if (isRelay && conn.relayHostPort) {
-        html += `<div class="connection-detail"><span class="connection-label">Via Relay</span> <code>${escapeHtml(conn.relayHostPort)}</code></div>`;
       }
 
       // Associated sessions

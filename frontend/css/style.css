@@ -2476,10 +2476,6 @@ pre:hover .code-copy-btn {
   background: var(--accent, #3b82f6);
   color: #fff;
 }
-.connection-type-badge.relay {
-  background: var(--warn);
-  color: #000;
-}
 .connection-details {
   font-size: 0.8rem;
   color: var(--muted);

@@ -48,7 +48,7 @@ const DenTlsTrust = (() => {
     cache = null;
   }
 
-  function showConfirm({ hostPort, fingerprint, expectedFingerprint, hop }) {
+  function showConfirm({ hostPort, fingerprint, expectedFingerprint }) {
     return new Promise((resolve) => {
       const modal = document.getElementById('tls-cert-modal');
       const title = document.getElementById('tls-cert-title');
@@ -61,10 +61,9 @@ const DenTlsTrust = (() => {
       const trustBtn = document.getElementById('tls-cert-trust');
 
       const isMismatch = !!expectedFingerprint && expectedFingerprint !== fingerprint;
-      const hopLabel = hop === 'relay' ? 'Relay ' : hop === 'target' ? 'Target ' : '';
       title.textContent = isMismatch
-        ? `${hopLabel}TLS Certificate Changed!`
-        : `Trust ${hopLabel}TLS Certificate`;
+        ? 'TLS Certificate Changed!'
+        : 'Trust TLS Certificate';
       warning.hidden = !isMismatch;
       hostEl.textContent = hostPort;
       fingerprintEl.textContent = fingerprint;
@@ -104,18 +103,15 @@ const DenTlsTrust = (() => {
     });
   }
 
-  async function confirmAndStore({ hostPort, fingerprint, expectedFingerprint, hop }) {
+  async function confirmAndStore({ hostPort, fingerprint, expectedFingerprint }) {
     if (!hostPort) throw new Error('host:port is required');
     if (!isValidFingerprint(fingerprint)) {
       throw new Error('Fingerprint must be SHA256: followed by 64 hex characters');
     }
 
-    const accepted = await showConfirm({ hostPort, fingerprint, expectedFingerprint, hop });
+    const accepted = await showConfirm({ hostPort, fingerprint, expectedFingerprint });
     if (!accepted) return false;
-    // For relay target hop, trust is passed ephemerally via trusted_fingerprint — no need to save locally
-    if (hop !== 'target') {
-      await save(hostPort, fingerprint);
-    }
+    await save(hostPort, fingerprint);
     return true;
   }
 

@@ -40,8 +40,6 @@ pub struct AppState {
     pub rate_limiter: auth::LoginRateLimiter,
     pub sftp_manager: sftp::client::SftpManager,
     pub remote_manager: Arc<remote::RemoteManager>,
-    pub relay_manager: remote::RelayManager,
-    pub relay_client: remote::RelayClientManager,
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
     pub port_monitor: Arc<port_monitor::PortMonitor>,
@@ -88,8 +86,6 @@ pub fn create_app_with_secret(
         rate_limiter: auth::LoginRateLimiter::new(),
         sftp_manager,
         remote_manager,
-        relay_manager: remote::RelayManager::default(),
-        relay_client: remote::RelayClientManager::default(),
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
         port_monitor,
@@ -161,22 +157,6 @@ pub fn create_app_with_secret(
         .route(
             "/api/remote/{id}/{*rest}",
             any(remote::remote_proxy_catch_all),
-        )
-        // Relay routes
-        .route("/api/relay/connect", post(remote::relay_connect))
-        .route(
-            "/api/relay/connections",
-            get(remote::relay_list_connections),
-        )
-        .route("/api/relay/{id}/disconnect", post(remote::relay_disconnect))
-        .route(
-            "/api/relay/{id}/chat-ws",
-            get(remote::relay_chat_ws_handler),
-        )
-        .route("/api/relay/{id}/ws", get(remote::relay_ws_handler))
-        .route(
-            "/api/relay/{id}/{*rest}",
-            any(remote::relay_proxy_catch_all),
         )
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),

@@ -17,7 +17,7 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **Snippets** — one-click command input from customizable snippet list
 - **Clipboard History** — automatic clipboard tracking with system clipboard monitoring where available
 - **Port Forwarding** — forward remote ports through Quick Connect for local access
-- **Quick Connect** — connect to another Den instance's terminal and files through TLS-secured relay
+- **Quick Connect** — connect to another Den instance's terminal and files through TLS-secured proxy
 - **Self-Signed TLS** — optional HTTPS/WSS with auto-generated certificates and fingerprint-based trust
 - **Authentication** — HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
 - **Self-Update** — check for updates and apply from the Settings panel (downloads from GitHub Releases)
@@ -161,32 +161,11 @@ The server's TLS fingerprint is shown in Settings. When connecting to a remote D
 
 Connect to another Den instance's terminal and files from your browser. Requires TLS on the remote Den.
 
-### Direct Connection
-
 1. Open the **Remote** dropdown in the file manager (or session bar)
 2. Select **Quick Connect Den**
 3. Enter the remote Den's URL and password
 4. Confirm the TLS fingerprint on first connection
 5. Terminal sessions and files from the remote Den appear alongside local ones
-
-### Relay Connection
-
-When the target Den is not directly reachable (e.g., a VM on another host's private network), use one-hop relay through an intermediate Den:
-
-1. Open **Quick Connect Den**
-2. Enter the **Target URL** and **Target Password**
-3. Check **Use Relay**
-4. Enter the **Relay URL** and **Relay Password**
-5. Confirm TLS fingerprints for each hop (relay and target)
-
-```
-Browser → Local Den → Relay Den → Target Den
-```
-
-- Explicit one-hop only — no automatic route discovery or multi-hop
-- Passwords are never persisted; session tokens remain memory-only
-- Each hop uses HTTPS/WSS with TLS certificate pinning
-- Relay sessions expire after 30 minutes of inactivity
 
 All connections are proxied through the local Den — your browser only talks to localhost.
 
@@ -249,7 +228,7 @@ Falls back to password auth when no keys are set up.
 │  │ PTY (shell, ConPTY) │  │  Filer API  │  │ SFTP API  │ │
 │  └─────────────────────┘  └─────────────┘  └───────────┘ │
 │  ┌──────────────────────────────────────────────────────┐ │
-│  │ Quick Connect  →  Remote Den (HTTPS, direct or relay) │ │
+│  │ Quick Connect  →  Remote Den (HTTPS proxy)            │ │
 │  │ (terminal + filer + WS proxy + port forwarding)      │ │
 │  └──────────────────────────────────────────────────────┘ │
 │  Static files (rust-embed)    TLS (self-signed / custom)  │
@@ -271,7 +250,7 @@ den/
 │   ├── store.rs            # JSON file persistence
 │   ├── store_api.rs        # Settings REST API
 │   ├── assets.rs           # Static file serving (rust-embed)
-│   ├── remote.rs           # Quick Connect relay (terminal, filer, WS)
+│   ├── remote.rs           # Quick Connect proxy (terminal, filer, WS)
 │   ├── tls.rs              # TLS setup, fingerprint trust API
 │   ├── update.rs           # Self-update from GitHub Releases
 │   ├── port_forward.rs     # Port forwarding through Quick Connect

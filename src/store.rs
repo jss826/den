@@ -106,12 +106,6 @@ pub struct DenBookmark {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    #[serde(default)]
-    pub use_relay: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay_password: Option<String>,
 }
 
 /// Persisted session record for restart recovery

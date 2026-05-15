@@ -19,7 +19,7 @@ This note records the assumptions behind Den's current remote access design.
 ## Transport Assumptions
 
 - Browser-to-Den and Den-to-Den access should converge on the same transport model where practical.
-- HTTPS/WSS is preferred for both browser access and future Quick Connect / relay flows.
+- HTTPS/WSS is preferred for both browser access and Quick Connect flows.
 - In closed networks, self-signed certificates are an acceptable bootstrap mechanism.
 - Fingerprint confirmation is therefore an important part of the trust model.
 
@@ -42,11 +42,10 @@ Den does not assume:
 - The old trusted-peer model has been replaced by Quick Connect.
 - Self-signed TLS is acceptable, but certificate fingerprints must be surfaced clearly.
 - Remote access flows should be explicit and user-directed.
-- Relay, when added, should be explicit and constrained rather than automatic.
 
 ## Documentation Rule
 
-User-facing changes to browser access, Den-to-Den access, Quick Connect, relay, TLS, or fingerprint handling should update:
+User-facing changes to browser access, Den-to-Den access, Quick Connect, TLS, or fingerprint handling should update:
 
 - `README.md`
 - `README.ja.md`

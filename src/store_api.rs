@@ -66,11 +66,6 @@ fn encrypt_den_bookmarks(settings: &mut Settings, key: &[u8; 32]) {
             {
                 b.password = Some(encrypt_password(pw, key));
             }
-            if let Some(ref pw) = b.relay_password
-                && !pw.is_empty()
-            {
-                b.relay_password = Some(encrypt_password(pw, key));
-            }
         }
     }
 }
@@ -84,12 +79,6 @@ fn decrypt_den_bookmarks(settings: &mut Settings, key: &[u8; 32]) {
                 && let Ok(plain) = decrypt_password(pw, key)
             {
                 b.password = Some(plain);
-            }
-            if let Some(ref pw) = b.relay_password
-                && !pw.is_empty()
-                && let Ok(plain) = decrypt_password(pw, key)
-            {
-                b.relay_password = Some(plain);
             }
         }
     }
@@ -250,13 +239,6 @@ pub async fn put_settings(
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "den bookmark url too long",
-                )
-                    .into_response();
-            }
-            if b.relay_url.as_deref().is_some_and(|u| u.len() > 2048) {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "den bookmark relay_url too long",
                 )
                     .into_response();
             }
