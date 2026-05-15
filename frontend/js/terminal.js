@@ -1059,7 +1059,7 @@ const DenTerminal = (() => {
 
     scheduleSessionTabsLayout();
 
-    // Notify other modules (e.g. filer connections dialog) via event — avoids circular dependency
+    // Notify filer connections dialog (and any future consumers) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
   }
 
