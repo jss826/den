@@ -514,7 +514,6 @@ pub async fn remote_proxy_catch_all(
         || rest.starts_with("filer/")
         || rest.starts_with("chat/")
         || rest.starts_with("channel/")
-        || rest == "settings"
         || rest == "ports"
     {
         format!("/api/{rest}")
