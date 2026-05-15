@@ -8,7 +8,6 @@
 ## 機能
 
 - **Web ターミナル** — xterm.js v6 + タッチ対応キーバー (Shift, Ctrl, F1–F12 等)
-- **フローティングターミナル** — ドラッグ＆リサイズ可能なオーバーレイターミナル (Ctrl+\` またはタブバーボタン)
 - **ファイルマネージャ** — ツリー表示、CodeMirror 6 エディタ、アップロード/ダウンロード、検索、画像/Markdown プレビュー
 - **SSH ブックマークセッション** — 保存済みブックマークからワンクリックで SSH ターミナル作成＋自動接続
 - **SFTP リモートファイル** — russh-sftp 経由でリモート SSH ホストに接続し、ファイルを閲覧・編集
@@ -304,7 +303,6 @@ den/
 │   │   ├── filer-tree.js   # ツリービューコンポーネント
 │   │   ├── filer-editor.js # CodeMirror 6 エディタ
 │   │   ├── markdown.js     # Markdown レンダラー
-│   │   ├── float-terminal.js # フローティングターミナル
 │   │   ├── filer-remote.js # SFTP リモート接続 UI
 │   │   ├── keybar.js       # タッチキーバー
 │   │   ├── settings.js     # 設定モーダル

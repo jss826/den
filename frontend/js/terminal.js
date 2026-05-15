@@ -1088,7 +1088,7 @@ const DenTerminal = (() => {
     // Update port bar with detected ports from sessions
     checkRemotePorts(sessions);
 
-    // Notify other modules (e.g. FloatTerminal) via event — avoids circular dependency
+    // Notify other modules (e.g. filer connections dialog) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
   }
 

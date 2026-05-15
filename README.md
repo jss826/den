@@ -8,7 +8,6 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 ## Features
 
 - **Web Terminal** — xterm.js v6 with touch-friendly keybar (Shift, Ctrl, F1–F12, etc.)
-- **Floating Terminal** — draggable/resizable overlay terminal (Ctrl+\` or tab bar button)
 - **File Manager** — tree view, CodeMirror 6 editor, upload/download, search, image/Markdown preview
 - **SSH Bookmark Sessions** — one-click SSH terminal creation from saved bookmarks with auto-connect
 - **SFTP Remote Files** — connect to remote SSH hosts and browse/edit files via russh-sftp
@@ -304,7 +303,6 @@ den/
 │   │   ├── filer-tree.js   # Tree view component
 │   │   ├── filer-editor.js # CodeMirror 6 editor
 │   │   ├── markdown.js     # Markdown renderer
-│   │   ├── float-terminal.js # Floating terminal overlay
 │   │   ├── filer-remote.js # SFTP remote connection UI
 │   │   ├── keybar.js       # Touch keyboard bar
 │   │   ├── settings.js     # Settings modal

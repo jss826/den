@@ -35,7 +35,6 @@
       <button id="clipboard-history-btn" class="tab-icon-btn" data-tooltip="Clipboard History" aria-label="Clipboard history"></button>
       <button id="snippet-btn" class="tab-icon-btn" data-tooltip="Snippets" aria-label="Snippets"></button>
       <button id="text-input-btn" class="tab-icon-btn" data-tooltip="Text Input (Ctrl+J)" aria-label="Text input"></button>
-      <button id="float-terminal-btn" class="tab-icon-btn" data-tooltip="Floating Terminal (Ctrl+`)" aria-label="Floating terminal"></button>
       <button id="connections-btn" class="tab-icon-btn" data-tooltip="Connections" aria-label="Connections" hidden></button>
       <button id="ports-btn" class="tab-icon-btn" data-tooltip="Ports" aria-label="Ports" hidden></button>
       <button id="keep-awake-btn" class="tab-icon-btn" data-tooltip="Keep Awake" aria-label="Keep awake"></button>
@@ -703,29 +702,6 @@
       </div>
     </div>
 
-    <!-- フローティングターミナル -->
-    <div id="float-terminal" class="float-terminal" hidden role="region" aria-label="Floating terminal">
-      <div class="float-terminal-header">
-        <select class="float-session-select session-select" aria-label="Session"></select>
-        <button class="float-session-new session-bar-btn" data-tooltip="New Session" aria-label="New session">+</button>
-        <span class="float-session-clients session-clients"></span>
-        <div class="float-header-spacer"></div>
-        <button class="float-session-kill session-bar-btn danger" data-tooltip="Kill Session" aria-label="Kill session">x</button>
-        <button class="float-minimize session-bar-btn" data-tooltip="Minimize" aria-label="Minimize">_</button>
-        <button class="float-close session-bar-btn" data-tooltip="Close" aria-label="Close">X</button>
-      </div>
-      <div class="float-terminal-body"></div>
-      <div class="float-resize" data-dir="n"></div>
-      <div class="float-resize" data-dir="s"></div>
-      <div class="float-resize" data-dir="e"></div>
-      <div class="float-resize" data-dir="w"></div>
-      <div class="float-resize" data-dir="ne"></div>
-      <div class="float-resize" data-dir="nw"></div>
-      <div class="float-resize" data-dir="se"></div>
-      <div class="float-resize" data-dir="sw"></div>
-    </div>
-    <button id="float-terminal-restore" class="float-terminal-restore" hidden aria-label="Restore floating terminal">Terminal</button>
-
     <!-- キーバー (フローティング) -->
     <div id="keybar" hidden role="toolbar" aria-label="Keyboard bar">
       <div class="keybar-drag-handle" aria-hidden="true">&#x2807;</div>
@@ -764,7 +740,6 @@
   <script src="/js/terminal.js"></script>
   <script src="/js/text-input.js"></script>
   <script src="/js/snippet.js"></script>
-  <script src="/js/float-terminal.js"></script>
   <script src="/js/keybar.js"></script>
   <script src="/js/markdown.js"></script>
   <script src="/js/filer-remote.js"></script>

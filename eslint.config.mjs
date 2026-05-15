@@ -21,7 +21,6 @@ export default [
         DenIcons: 'readonly',
         DenClipboard: 'readonly',
         ClipboardHistory: 'readonly',
-        FloatTerminal: 'writable',
         TerminalAdapter: 'readonly',
         DenSnippet: 'readonly',
         DenDragList: 'readonly',
@@ -46,12 +45,12 @@ export default [
       'no-redeclare': ['error', { builtinGlobals: false }],
       'no-unused-vars': ['warn', {
         argsIgnorePattern: '^_',
-        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|FloatTerminal|TerminalAdapter|DenChat)$',
+        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|TerminalAdapter|DenChat)$',
         caughtErrorsIgnorePattern: '^_',
       }],
       'no-console': 'off',
       'no-restricted-syntax': ['error', {
-        selector: "MemberExpression[object.name='window'][property.name=/^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|Toast|Spinner|DenIcons|DenClipboard|ClipboardHistory|FloatTerminal|DenSnippet|DenDragList|DenKeyPresets|DenFiler|FilerTree|FilerEditor|FilerRemote|DenTlsTrust|CM)$/]",
+        selector: "MemberExpression[object.name='window'][property.name=/^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|Toast|Spinner|DenIcons|DenClipboard|ClipboardHistory|DenSnippet|DenDragList|DenKeyPresets|DenFiler|FilerTree|FilerEditor|FilerRemote|DenTlsTrust|CM)$/]",
         message: "Do not access IIFE modules via window.X — const declarations are not window properties. Use the name directly or typeof guard.",
       }],
     },

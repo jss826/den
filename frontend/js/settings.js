@@ -1,4 +1,4 @@
-/* global DenDragList, DenKeyPresets, Keybar, DenTerminal, FloatTerminal, DenSnippet, Toast, FilerRemote */
+/* global DenDragList, DenKeyPresets, Keybar, DenTerminal, DenSnippet, Toast, FilerRemote */
 // Den - 設定管理モジュール
 const DenSettings = (() => {
   function escHtml(str) {
@@ -1063,9 +1063,6 @@ const DenSettings = (() => {
           t.options.fontSize = Math.max(8, Math.min(32, fontSize));
           DenTerminal.fitAndRefresh();
         }
-
-        // フローティングターミナルにも設定反映
-        if (typeof FloatTerminal !== 'undefined') FloatTerminal.applySettings();
 
         // キーバーを即時反映
         Keybar.reload(keybarButtons, keybarSecondaryButtons);

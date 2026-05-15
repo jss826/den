@@ -79,7 +79,7 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 |---|---|
 | `4px` | 微小要素（chip, badge, snippet item） |
 | `6px` | ボタン、タブ、入力フィールド |
-| `8px` | カード、モーダル要素、フローティングターミナル |
+| `8px` | カード、モーダル要素 |
 | `12px` | モーダル本体 |
 
 > **Drift**: `.session-bar-btn` (6px) と `.filer-tool-btn` (4px) のように同じ「ツールバーアイコンボタン」で揃っていない箇所がある。新規ボタンは **6px** を選ぶ。
@@ -104,16 +104,14 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 
 | バンド | 範囲 | 例 |
 |---|---|---|
-| ローカル | `1` ~ `10` | `.float-resize`, `.terminal-empty-state`, `.select-mode-overlay` |
+| ローカル | `1` ~ `10` | `.terminal-empty-state`, `.select-mode-overlay` |
 | ペイン内オーバーレイ | `50` ~ `100` | `.spinner-overlay`, `.snippet-popup`, `.clipboard-history-popup` |
-| サイドバー expand (mobile) | `140` ~ `150` | `.sidebar-overlay`, `.float-terminal`, `.chat-sidebar.sidebar-expanded` |
+| サイドバー expand (mobile) | `140` ~ `150` | `.sidebar-overlay`, `.chat-sidebar.sidebar-expanded` |
 | グローバル UI | `160` | `#keybar` |
 | モーダル系 | `200` | `.modal`, `.stack-popup`, `.text-input-history-popup` |
 | トースト | `400` | `#toast-container` |
 | ドロップダウン | `1000` | `.new-session-menu` |
 | ツールチップ | `9999` | `#den-tooltip` |
-
-> **Drift**: float-terminal (150) と keybar (160) が近接。意図通り (keybar が float の上) だが、**float の中にモーダルを出すと keybar の下に隠れる**ため、float 内モーダルは要設計（現状そのケースは無い）。
 
 ### 2.7 ブレークポイント
 
@@ -161,7 +159,6 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
     .pane (#terminal-pane | #filer-pane | #chat-pane)
       ※ position: absolute; top: 40px; bottom: env(safe-area-inset-bottom)
     #keybar (position: fixed; z-index: 160)
-    .float-terminal (position: fixed; z-index: 150)
     #toast-container (z-index: 400)
     #den-tooltip (z-index: 9999)
 ```
@@ -200,12 +197,7 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 - `#keybar` は ID で `display: flex`、表示制御は `#keybar:not([hidden])` でガード
 - `.key-btn`: `min-height: 44px` (touch)、padding `8px 12px`、radius `6px`
 
-### 5.5 Float Terminal
-- `position: fixed; z-index: 150; min-width: 320px; min-height: 200px; border-radius: 8px`
-- 8 方向 resize handle (`.float-resize[data-dir="..."]`) はタッチで 12-20px に拡大
-- DenTerminal とは `den:sessions-changed` CustomEvent 経由で通信（循環依存回避）
-
-### 5.6 Filer
+### 5.5 Filer
 - サイドバー `260px (min 200px)`、collapsed 時 `width: 0`
 - breadcrumb: monospace, `0.7rem`
 - タブ: `padding 6px 12px; max-width 180px`
@@ -213,7 +205,7 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 - 768px 以下でサイドバーは overlay 表示
 - **HTML プレビュー** (`.filer-html-preview-frame`): iframe で **`background: #fff` 固定**（プレビュー対象 HTML の作者意図に揃えるため、テーマ非依存）。Markdown プレビューは `--bg` を使う
 
-### 5.7 Chat
+### 5.6 Chat
 - サイドバー仕様は Filer と揃える（260px / collapse / overlay）
 - メッセージ: user `max-width: 85%`, assistant `max-width: 95%`
 - `padding 8px 12px; border-radius: 8px; gap: 8px`
@@ -221,7 +213,7 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 - Markdown は `DenMarkdown.renderMarkdown()` + `sanitize()` を使う（`render` メソッドは存在しない）
 - **Advanced Section** (`.chat-advanced-section`): `<details><summary>` を使った折りたたみ。summary は `cursor: pointer; font-weight: 500; padding: 4px 0`、`[open]` 時に `margin-bottom: 6px`。中の `.chat-tool-list` は monospace `0.85rem`、`resize: vertical; min-height: 2.4em`
 
-### 5.8 Buttons
+### 5.7 Buttons
 標準ボタンクラスは未確立。新規ボタンは以下のいずれかに合わせる:
 
 | クラス | 用途 | サイズ |
@@ -233,7 +225,7 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 
 > **Drift**: `.btn` という汎用クラスが無く、似た見た目のボタンが個別に定義されている。共通 base class への抽出は未着手。新規追加時は**最も近い既存クラスを再利用**し、新クラスを増やさないこと。
 
-### 5.9 Scrollbar
+### 5.8 Scrollbar
 - WebKit: `width/height: 8px` (desktop) / `16px` (touch)
 - thumb: `var(--border)`, hover `var(--muted)`, radius `4px`
 - Firefox: `scrollbar-width: thin; scrollbar-color: var(--border) transparent`
@@ -319,7 +311,6 @@ DESIGN.md にトークン表を新規 / 大幅追加した直後は、必ず `fr
 - HTML 構造: `frontend/index.html`
 - 主要 JS モジュール:
   - `frontend/js/terminal.js` (DenTerminal, セッション管理)
-  - `frontend/js/float-terminal.js` (フローティングターミナル)
   - `frontend/js/filer/` (ファイラ各機能)
   - `frontend/js/chat.js` (Chat タブ)
   - `frontend/js/markdown.js` (DenMarkdown)

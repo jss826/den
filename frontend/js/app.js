@@ -1,4 +1,4 @@
-/* global Auth, DenSettings, DenTerminal, FloatTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet, ClipboardHistory, TextInput */
+/* global Auth, DenSettings, DenTerminal, Keybar, DenFiler, FilerRemote, DenIcons, DenSnippet, ClipboardHistory, TextInput */
 // Den - アプリケーションエントリポイント
 document.addEventListener('DOMContentLoaded', () => {
   const loginScreen = document.getElementById('login-screen');
@@ -141,13 +141,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Ctrl+` フローティングターミナル toggle（モーダル中はスキップ）
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'Backquote' && !anyModalOpen) {
-      e.preventDefault();
-      FloatTerminal.toggle();
-      return;
-    }
-
     // Ctrl+1/2 タブ切替（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !anyModalOpen) {
       const tabs = { '1': 'terminal', '2': 'filer', '3': 'chat' };
@@ -216,7 +209,6 @@ document.addEventListener('DOMContentLoaded', () => {
       'clipboard-history-btn': DenIcons.clipboard,
       'snippet-btn': DenIcons.snippet,
       'text-input-btn': DenIcons.edit,
-      'float-terminal-btn': DenIcons.terminal,
       'connections-btn': DenIcons.globe,
       'ports-btn': DenIcons.network,
       'keep-awake-btn': DenIcons.coffee,
@@ -282,10 +274,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // テキスト入力ボックス初期化
     TextInput.init();
     document.getElementById('text-input-btn')?.addEventListener('click', () => TextInput.toggle());
-
-    // フローティングターミナル初期化（DOM イベントのみ、xterm は lazy）
-    FloatTerminal.init();
-    document.getElementById('float-terminal-btn')?.addEventListener('click', () => FloatTerminal.toggle());
 
     // SFTP 接続状態チェック（ページリロード時の復元）
     FilerRemote.checkStatus();
