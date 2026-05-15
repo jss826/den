@@ -413,33 +413,6 @@ pub async fn remote_ws_handler(
         .into_response())
 }
 
-/// GET /api/remote/{id}/fwd-ws/{port} — WebSocket proxy to remote Den's /fwd-ws/{port}
-pub async fn remote_fwd_ws_root_handler(
-    ws: WebSocketUpgrade,
-    Path((id, port)): Path<(String, u16)>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, StatusCode> {
-    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    Ok(ws
-        .on_upgrade(move |socket| handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}")))
-        .into_response())
-}
-
-/// GET /api/remote/{id}/fwd-ws/{port}/{*path} — WebSocket proxy to remote Den's /fwd-ws/{port}/{path}
-pub async fn remote_fwd_ws_handler(
-    ws: WebSocketUpgrade,
-    Path((id, port, path)): Path<(String, u16, String)>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, StatusCode> {
-    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let path = sanitize_proxy_path(&path);
-    Ok(ws
-        .on_upgrade(move |socket| {
-            handle_remote_ws_path(socket, remote, format!("/fwd-ws/{port}/{path}"))
-        })
-        .into_response())
-}
-
 /// GET /api/remote/{id}/chat-ws — WebSocket proxy to remote Den's /api/channel/ws
 pub async fn remote_chat_ws_handler(
     ws: WebSocketUpgrade,
@@ -460,9 +433,7 @@ pub async fn remote_chat_ws_handler(
 
 /// Catch-all proxy for /api/remote/{id}/{*rest}
 ///
-/// Routes `rest` to the appropriate path on the remote Den:
-/// - `fwd/{port}` and `fwd/{port}/{path}` → `/fwd/{port}` and `/fwd/{port}/{path}` (not under /api/)
-/// - everything else → `/api/{rest}`
+/// Routes `rest` to `/api/{rest}` on the remote Den.
 pub async fn remote_proxy_catch_all(
     State(state): State<Arc<AppState>>,
     Path((id, rest)): Path<(String, String)>,
@@ -475,14 +446,10 @@ pub async fn remote_proxy_catch_all(
     let rest = sanitize_proxy_path(&rest);
 
     // Allowlist: only proxy known API paths to the remote Den
-    let path = if rest.starts_with("fwd/") {
-        // Port forwarding: /fwd/{port}/... → /fwd/{port}/...
-        format!("/{rest}")
-    } else if rest.starts_with("terminal/")
+    let path = if rest.starts_with("terminal/")
         || rest.starts_with("filer/")
         || rest.starts_with("chat/")
         || rest.starts_with("channel/")
-        || rest == "ports"
     {
         format!("/api/{rest}")
     } else {
@@ -541,7 +508,7 @@ fn to_ws_base(base_url: &str) -> String {
 }
 
 /// Sanitize a proxy path to prevent path traversal attacks.
-/// Removes `..` segments that could escape the `/fwd/` scope.
+/// Removes `..` segments that could escape the proxy scope.
 fn sanitize_proxy_path(path: &str) -> String {
     path.split('/')
         .filter(|seg| !seg.is_empty() && *seg != ".." && *seg != ".")

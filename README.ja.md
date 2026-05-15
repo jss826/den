@@ -16,7 +16,6 @@
 - **テキスト入力** — モバイル/タブレット向けリサイズ可能なコマンド入力ボックス (Ctrl+J)、コマンド履歴付き
 - **スニペット** — カスタマイズ可能なリストからワンクリックでコマンド入力
 - **クリップボード履歴** — 利用可能な環境ではシステムクリップボード監視による自動追跡
-- **ポートフォワーディング** — Quick Connect 経由でリモートポートをローカルに転送
 - **Quick Connect** — 別の Den インスタンスのターミナルとファイルに TLS 経由で接続
 - **自己署名 TLS** — HTTPS/WSS オプション対応、証明書自動生成＋フィンガープリントベースの信頼モデル
 - **認証** — HttpOnly Cookie (HMAC-SHA256 トークン, 24時間有効期限) + レートリミット + CSP
@@ -229,7 +228,7 @@ cat ~/.ssh/id_ed25519.pub >> ./data-dev/ssh/authorized_keys
 │  └─────────────────────┘  └─────────────┘  └───────────┘ │
 │  ┌──────────────────────────────────────────────────────┐ │
 │  │ Quick Connect  →  Remote Den (HTTPS proxy)            │ │
-│  │ (terminal + filer + WS proxy + port forwarding)      │ │
+│  │ (terminal + filer + WS proxy)                        │ │
 │  └──────────────────────────────────────────────────────┘ │
 │  Static files (rust-embed)    TLS (self-signed / custom)  │
 │  Store (JSON persistence)     SSH Server (russh)          │
@@ -253,9 +252,6 @@ den/
 │   ├── remote.rs           # Quick Connect リレー (ターミナル, ファイラー, WS)
 │   ├── tls.rs              # TLS 設定, フィンガープリント信頼 API
 │   ├── update.rs           # セルフアップデート (GitHub Releases)
-│   ├── port_forward.rs     # Quick Connect 経由のポートフォワーディング
-│   ├── port_detection.rs   # リッスンポート検出
-│   ├── port_monitor.rs     # ポート変更監視
 │   ├── clipboard_api.rs    # クリップボード REST API
 │   ├── clipboard_monitor.rs # システムクリップボード監視
 │   ├── filer/              # ファイルマネージャ API

@@ -41,7 +41,6 @@ const DenTerminal = (() => {
   }
   let lastSentCols = 0;
   let lastSentRows = 0;
-  let lastKnownPorts = {}; // session key → Set of port numbers (for toast dedup)
 
   // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
   // eslint-disable-next-line no-control-regex
@@ -917,16 +916,11 @@ const DenTerminal = (() => {
       const results = await Promise.all(denEntries.map(async ([connId, info]) => {
         try {
           const apiPrefix = `/api/remote/${connId}`;
-          const [sessResp, portsResp] = await Promise.all([
-            fetch(`${apiPrefix}/terminal/sessions`, { credentials: 'same-origin' }),
-            fetch(`${apiPrefix}/ports`, { credentials: 'same-origin' }),
-          ]);
+          const sessResp = await fetch(`${apiPrefix}/terminal/sessions`, { credentials: 'same-origin' });
           if (sessResp.ok) {
-            const remotePorts = portsResp.ok ? await portsResp.json() : [];
             return (await sessResp.json()).map(s => ({
               ...s, remote: connId,
               remoteDisplayName: info.displayName || null,
-              detected_ports: remotePorts.filter(p => !p.session || p.session === s.name),
             }));
           }
         } catch { /* ignore */ }
@@ -1076,173 +1070,8 @@ const DenTerminal = (() => {
 
     scheduleSessionTabsLayout();
 
-    // Update port bar with detected ports from sessions
-    checkRemotePorts(sessions);
-
     // Notify other modules (e.g. filer connections dialog) via event — avoids circular dependency
     document.dispatchEvent(new CustomEvent('den:sessions-changed', { detail: { sessions } }));
-  }
-
-  async function checkRemotePorts(sessions) {
-    // Collect ports from SSH and remote sessions
-    const allPorts = [];
-    const seenPorts = new Set();
-    for (const s of sessions) {
-      if (!s.detected_ports || s.detected_ports.length === 0) continue;
-      // Show ports from SSH sessions and remote Den sessions
-      if (!s.ssh_host && !s.remote) continue;
-      const sessionKey = s.remote ? `${s.remote}:${s.name}` : s.name;
-      for (const p of s.detected_ports) {
-        const key = `${s.remote || ''}:${p.port}`;
-        if (!seenPorts.has(key)) {
-          seenPorts.add(key);
-          allPorts.push({ ...p, session: s.name, remote: s.remote, sshHost: s.ssh_host, sessionKey });
-        }
-      }
-    }
-
-    // Show clickable toast for newly detected ports
-    for (const p of allPorts) {
-      if (!lastKnownPorts[p.sessionKey]) lastKnownPorts[p.sessionKey] = new Set();
-      if (!lastKnownPorts[p.sessionKey].has(p.port)) {
-        lastKnownPorts[p.sessionKey].add(p.port);
-        const label = p.remote ? `${p.remote}:${p.port}` : `Port ${p.port}`;
-        Toast.show(`${label} detected — click to open`, 'info', 5000, {
-          onClick: () => openPort(p),
-        });
-      }
-    }
-
-    // Update ports button visibility
-    updatePortsButton(allPorts);
-  }
-
-  // Track current ports for the dialog
-  let _currentPorts = [];
-
-  function updatePortsButton(ports) {
-    _currentPorts = ports;
-    const btn = document.getElementById('ports-btn');
-    if (!btn) return;
-    btn.hidden = ports.length === 0;
-    btn.classList.toggle('active', ports.length > 0);
-  }
-
-  function initPortsButton() {
-    const btn = document.getElementById('ports-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => showPortsDialog());
-  }
-
-  function showPortsDialog() {
-    const allModals = document.querySelectorAll('.modal');
-    allModals.forEach(m => { m.hidden = true; });
-
-    let modal = document.getElementById('ports-modal');
-    if (!modal) {
-      modal = document.createElement('div');
-      modal.id = 'ports-modal';
-      modal.className = 'modal';
-      modal.innerHTML = `
-        <div class="modal-content" style="max-width:420px">
-          <h3>Detected Ports</h3>
-          <div id="ports-modal-body"></div>
-          <div class="modal-actions">
-            <button class="modal-btn" id="ports-modal-close">Close</button>
-          </div>
-        </div>`;
-      document.body.appendChild(modal);
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) modal.hidden = true;
-      });
-      modal.querySelector('#ports-modal-close').addEventListener('click', () => {
-        modal.hidden = true;
-      });
-    }
-
-    const body = modal.querySelector('#ports-modal-body');
-    body.textContent = '';
-
-    if (_currentPorts.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'connections-empty';
-      empty.textContent = 'No ports detected';
-      body.appendChild(empty);
-    } else {
-      for (const p of _currentPorts) {
-        const entry = document.createElement('div');
-        entry.className = 'connection-entry';
-        entry.style.cursor = 'pointer';
-
-        const header = document.createElement('div');
-        header.className = 'connection-header';
-
-        const name = document.createElement('span');
-        name.className = 'connection-name';
-        const host = p.sshHost || (p.remote ? p.remote : '');
-        name.textContent = host ? `${host}:${p.port}` : `Port ${p.port}`;
-        header.appendChild(name);
-
-        if (p.remote) {
-          const badge = document.createElement('span');
-          badge.className = 'connection-type-badge direct';
-          badge.textContent = p.sshHost ? 'SSH' : p.remote;
-          header.appendChild(badge);
-        }
-
-        entry.appendChild(header);
-
-        if (p.source) {
-          const details = document.createElement('div');
-          details.className = 'connection-details';
-          details.textContent = p.source;
-          entry.appendChild(details);
-        }
-
-        entry.addEventListener('click', () => {
-          modal.hidden = true;
-          openPort(p);
-        });
-        body.appendChild(entry);
-      }
-    }
-
-    modal.hidden = false;
-  }
-
-  function getFwdUrl(portInfo) {
-    if (portInfo.remote) {
-      return `/api/remote/${portInfo.remote}/fwd/${portInfo.port}/`;
-    }
-    return `/fwd/${portInfo.port}/`;
-  }
-
-  async function openPort(portInfo) {
-    const url = getFwdUrl(portInfo);
-    // Open tab first to avoid popup blocker after await (F004)
-    const tab = window.open('about:blank', '_blank', 'noopener,noreferrer');
-
-    // For local SSH sessions, start tunnel first
-    if (!portInfo.forwarded && !portInfo.remote && portInfo.session) {
-      try {
-        const resp = await fetch(
-          `/api/terminal/sessions/${encodeURIComponent(portInfo.session)}/ports/${portInfo.port}/forward`,
-          { method: 'POST', credentials: 'same-origin' }
-        );
-        if (!resp.ok && resp.status !== 201) {
-          const msg = await resp.text();
-          if (msg && !msg.includes('Password auth')) {
-            Toast.error(`Forward failed: ${msg}`);
-            if (tab) tab.close();
-            return;
-          }
-        }
-      } catch { /* ignore — will open directly */ }
-    }
-
-    if (tab) {
-      tab.location.href = url;
-    }
   }
 
   function initSessionBar() {
@@ -1476,8 +1305,6 @@ const DenTerminal = (() => {
       lastSessionsKey = '';
       refreshSessionList();
     });
-
-    initPortsButton();
   }
 
   /** Generate a unique session name from a base, appending -2, -3, etc. if needed. */

@@ -9,9 +9,6 @@ pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
-pub mod port_detection;
-pub mod port_forward;
-pub mod port_monitor;
 pub mod pty;
 pub mod remote;
 pub mod sftp;
@@ -42,7 +39,6 @@ pub struct AppState {
     pub remote_manager: Arc<remote::RemoteManager>,
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
-    pub port_monitor: Arc<port_monitor::PortMonitor>,
     pub chat_sessions: chat::session::ChatSessionManager,
     pub preview_store: filer::preview::PreviewStore,
 }
@@ -74,7 +70,6 @@ pub fn create_app_with_secret(
 
     let sftp_manager = sftp::client::SftpManager::new(store.clone());
 
-    let port_monitor = Arc::new(port_monitor::PortMonitor::new());
     let remote_manager = Arc::new(remote::RemoteManager::default());
     let server_port = config.port;
 
@@ -88,7 +83,6 @@ pub fn create_app_with_secret(
         remote_manager,
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
-        port_monitor,
         chat_sessions: chat::session::ChatSessionManager::new(server_port),
         preview_store: filer::preview::PreviewStore::new(),
     });
@@ -145,14 +139,6 @@ pub fn create_app_with_secret(
         .route(
             "/api/remote/{id}/chat-ws",
             get(remote::remote_chat_ws_handler),
-        )
-        .route(
-            "/api/remote/{id}/fwd-ws/{port}",
-            get(remote::remote_fwd_ws_root_handler),
-        )
-        .route(
-            "/api/remote/{id}/fwd-ws/{port}/{*path}",
-            get(remote::remote_fwd_ws_handler),
         )
         .route(
             "/api/remote/{id}/{*rest}",
@@ -223,34 +209,6 @@ pub fn create_app_with_secret(
         .route("/api/sftp/download", get(sftp::api::download))
         .route("/api/sftp/upload", post(sftp::api::upload))
         .route("/api/sftp/search", get(sftp::api::search))
-        // Port detection API (system-level + PTY combined)
-        .route("/api/ports", get(ws::list_all_ports))
-        // Port forwarding API
-        .route("/api/terminal/sessions/{name}/ports", get(ws::list_ports))
-        .route(
-            "/api/terminal/sessions/{name}/ports/{port}/forward",
-            post(ws::start_forward).delete(ws::stop_forward),
-        )
-        // HTTP reverse proxy for forwarded ports (all methods)
-        .route(
-            "/fwd/{port}",
-            get(port_forward::fwd_proxy_root)
-                .post(port_forward::fwd_proxy_root)
-                .put(port_forward::fwd_proxy_root)
-                .delete(port_forward::fwd_proxy_root)
-                .patch(port_forward::fwd_proxy_root),
-        )
-        .route(
-            "/fwd/{port}/{*path}",
-            get(port_forward::fwd_proxy)
-                .post(port_forward::fwd_proxy)
-                .put(port_forward::fwd_proxy)
-                .delete(port_forward::fwd_proxy)
-                .patch(port_forward::fwd_proxy),
-        )
-        // WebSocket proxy for forwarded ports
-        .route("/fwd-ws/{port}", get(port_forward::fwd_ws_proxy_root))
-        .route("/fwd-ws/{port}/{*path}", get(port_forward::fwd_ws_proxy))
         // Channel API (Chat v2) — session management
         .route(
             "/api/channel/sessions",

@@ -16,7 +16,6 @@ Built-in SSH server enables seamless terminal session handoff across devices.
 - **Text Input** — resizable command input box for mobile/tablet (Ctrl+J), with command history
 - **Snippets** — one-click command input from customizable snippet list
 - **Clipboard History** — automatic clipboard tracking with system clipboard monitoring where available
-- **Port Forwarding** — forward remote ports through Quick Connect for local access
 - **Quick Connect** — connect to another Den instance's terminal and files through TLS-secured proxy
 - **Self-Signed TLS** — optional HTTPS/WSS with auto-generated certificates and fingerprint-based trust
 - **Authentication** — HttpOnly Cookie (HMAC-SHA256 token, 24h expiry) + rate limiting + CSP
@@ -229,7 +228,7 @@ Falls back to password auth when no keys are set up.
 │  └─────────────────────┘  └─────────────┘  └───────────┘ │
 │  ┌──────────────────────────────────────────────────────┐ │
 │  │ Quick Connect  →  Remote Den (HTTPS proxy)            │ │
-│  │ (terminal + filer + WS proxy + port forwarding)      │ │
+│  │ (terminal + filer + WS proxy)                        │ │
 │  └──────────────────────────────────────────────────────┘ │
 │  Static files (rust-embed)    TLS (self-signed / custom)  │
 │  Store (JSON persistence)     SSH Server (russh)          │
@@ -253,9 +252,6 @@ den/
 │   ├── remote.rs           # Quick Connect proxy (terminal, filer, WS)
 │   ├── tls.rs              # TLS setup, fingerprint trust API
 │   ├── update.rs           # Self-update from GitHub Releases
-│   ├── port_forward.rs     # Port forwarding through Quick Connect
-│   ├── port_detection.rs   # Listening port detection
-│   ├── port_monitor.rs     # Port change monitoring
 │   ├── clipboard_api.rs    # Clipboard REST API
 │   ├── clipboard_monitor.rs # System clipboard monitoring
 │   ├── filer/              # File manager API

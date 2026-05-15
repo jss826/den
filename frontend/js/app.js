@@ -210,7 +210,6 @@ document.addEventListener('DOMContentLoaded', () => {
       'snippet-btn': DenIcons.snippet,
       'text-input-btn': DenIcons.edit,
       'connections-btn': DenIcons.globe,
-      'ports-btn': DenIcons.network,
       'keep-awake-btn': DenIcons.coffee,
       'settings-btn': DenIcons.gear,
     };
