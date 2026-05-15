@@ -52,6 +52,17 @@ const RESTTY_FALLBACK_SOURCES = [
   { type: 'local', matchers: ['symbols nerd font mono', 'symbols nerd font', 'nerd fonts symbols', 'nerdfontssymbolsonly'], label: 'Symbols Nerd Font (Local)' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.4.0/patched-fonts/NerdFontsSymbolsOnly/SymbolsNerdFontMono-Regular.ttf' },
   // CJK — Japanese variant BEFORE symbols to prevent Symbola from hijacking hiragana
+  // Local OS-installed JP fonts come first so Den works even when the
+  // jsdelivr CDN fetch is blocked or slow. Chromium-based browsers on
+  // self-signed HTTPS origins have been observed to leave the Noto CJK
+  // CDN font in a pending state, which previously made the chain drop
+  // through Symbola and broke hiragana / katakana rendering. Listing
+  // the system JP fonts here keeps the same intent ("CJK before
+  // Symbola") while removing the hard dependency on CDN connectivity.
+  { type: 'local', matchers: ['yu gothic ui', 'yugothicui', 'yu gothic', 'yugothic'], label: 'Yu Gothic UI (System)' },
+  { type: 'local', matchers: ['meiryo ui', 'meiryoui', 'meiryo'], label: 'Meiryo (System)' },
+  { type: 'local', matchers: ['hiragino sans', 'hiragino kaku gothic pron', 'hiragino kaku gothic', 'hiraginosans-w3', 'hiraginokakugothicpron-w3'], label: 'Hiragino Sans (System)' },
+  { type: 'local', matchers: ['ms gothic', 'msgothic', 'ms pgothic', 'mspgothic'], label: 'MS Gothic (System)' },
   { type: 'url', url: 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf' },
   // Symbols — general
   { type: 'local', matchers: ['apple symbols', 'applesymbols', 'apple symbols regular'], label: 'Apple Symbols' },
