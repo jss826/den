@@ -30,7 +30,6 @@ export default [
         FilerEditor: 'readonly',
         FilerRemote: 'readonly',
         DenTlsTrust: 'readonly',
-        DenChat: 'writable',
         CM: 'readonly',
         // xterm.js vendor globals
         Terminal: 'readonly',
@@ -45,7 +44,7 @@ export default [
       'no-redeclare': ['error', { builtinGlobals: false }],
       'no-unused-vars': ['warn', {
         argsIgnorePattern: '^_',
-        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|TerminalAdapter|DenChat)$',
+        varsIgnorePattern: '^(Auth|DenTerminal|Keybar|DenMarkdown|DenSettings|TerminalAdapter)$',
         caughtErrorsIgnorePattern: '^_',
       }],
       'no-console': 'off',

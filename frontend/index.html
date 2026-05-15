@@ -30,7 +30,6 @@
     <div id="tab-bar" role="tablist" aria-label="Main navigation">
       <button class="tab active" data-tab="terminal" role="tab" aria-selected="true">Terminal</button>
       <button class="tab" data-tab="filer" role="tab" aria-selected="false">Files</button>
-      <button class="tab" data-tab="chat" role="tab" aria-selected="false">Chat</button>
       <div class="tab-spacer"></div>
       <button id="clipboard-history-btn" class="tab-icon-btn" data-tooltip="Clipboard History" aria-label="Clipboard history"></button>
       <button id="snippet-btn" class="tab-icon-btn" data-tooltip="Snippets" aria-label="Snippets"></button>
@@ -104,93 +103,6 @@
             <span id="filer-status-size" class="filer-status-item"></span>
             <span id="filer-status-encoding" class="filer-status-item">UTF-8</span>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- チャット (Channel API) -->
-    <div id="chat-pane" class="pane" hidden role="tabpanel" aria-label="Chat">
-      <div class="chat-layout">
-        <!-- Session sidebar -->
-        <div class="chat-sidebar" id="chat-sidebar">
-          <button class="sidebar-toggle chat-sidebar-toggle" data-tooltip="Toggle Sidebar" aria-label="Toggle sidebar"></button>
-          <div class="chat-sidebar-header">
-            <span>Sessions</span>
-            <button id="chat-new-session-btn" class="chat-sidebar-btn" type="button" aria-label="New session" data-tooltip="New Session">+</button>
-          </div>
-          <div id="chat-session-list" class="chat-session-list"></div>
-        </div>
-        <!-- Main chat area -->
-        <div class="chat-main">
-          <div class="chat-main-header">
-            <span id="chat-main-title" class="chat-main-title">Chat</span>
-            <span class="chat-bar-spacer"></span>
-            <button class="chat-bar-btn" type="button" aria-label="Stop session" data-tooltip="Stop" id="chat-stop-btn" hidden>Stop</button>
-            <button class="chat-bar-btn" type="button" aria-label="Clear chat" data-tooltip="Clear" id="chat-clear-btn">Clear</button>
-          </div>
-          <div id="chat-messages" class="chat-messages"></div>
-          <div class="chat-input-area" id="chat-input-area">
-            <div class="chat-input-row">
-              <textarea id="chat-input" class="chat-input" rows="2" placeholder="Ask Claude..." disabled></textarea>
-              <button id="chat-send" class="chat-send-btn" type="button" aria-label="Send" disabled>Send</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- New Chat Session Modal -->
-    <div id="chat-new-session-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="New Chat Session">
-      <div class="modal-content">
-        <h3>New Chat Session</h3>
-        <div class="modal-section">
-          <label for="chat-permission-mode">Permission Mode</label>
-          <select id="chat-permission-mode" class="settings-input">
-            <option value="default">Default (ask for all)</option>
-            <option value="acceptEdits">Accept Edits (auto-approve file edits)</option>
-            <option value="bypassPermissions">Bypass (auto-approve everything)</option>
-          </select>
-        </div>
-        <div class="modal-section">
-          <label>Working Directory</label>
-          <div class="chat-cwd-row">
-            <button type="button" id="chat-cwd-browse" class="chat-cwd-display" aria-label="Choose working directory">
-              <span class="chat-cwd-display-icon" aria-hidden="true">&#128193;</span>
-              <span id="chat-cwd-display-text" class="chat-cwd-display-text">Home directory (default)</span>
-            </button>
-            <button type="button" id="chat-cwd-use-filer" class="modal-btn" title="Use the folder currently open in the Files tab">Use current folder</button>
-          </div>
-          <span class="setting-hint">Click the folder above to browse. Leave empty to start in the user home directory.</span>
-        </div>
-        <details class="modal-section chat-advanced-section">
-          <summary>Advanced: auto / escalate tools</summary>
-          <span class="setting-hint">Comma-separated tool names. When either list is filled in, it overrides the Permission Mode above. Use <code>*</code> in Auto to mean &ldquo;every built-in not in Escalate&rdquo;.</span>
-          <label for="chat-auto-tools">Auto (skip permission prompt)</label>
-          <textarea id="chat-auto-tools" class="settings-input chat-tool-list" rows="2" placeholder="Edit, Write, MultiEdit"></textarea>
-          <label for="chat-escalate-tools">Escalate (always ask UI)</label>
-          <textarea id="chat-escalate-tools" class="settings-input chat-tool-list" rows="2" placeholder="Bash"></textarea>
-        </details>
-        <div class="modal-actions">
-          <button id="chat-session-cancel" class="modal-btn">Cancel</button>
-          <button id="chat-session-create" class="modal-btn primary">Create</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Working Directory picker (used by chat-new-session-modal) -->
-    <div id="chat-cwd-picker-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Select working directory">
-      <div class="modal-content cwd-picker-content">
-        <h3>Select Working Directory</h3>
-        <div id="cwd-picker-drives" class="cwd-picker-drives" hidden></div>
-        <div class="cwd-picker-path-bar">
-          <button id="cwd-picker-up" class="cwd-picker-up-btn" type="button" aria-label="Go up" data-tooltip="Parent directory">&#8679; Up</button>
-          <span id="cwd-picker-current" class="cwd-picker-current"></span>
-        </div>
-        <div id="cwd-picker-list" class="cwd-picker-list" role="listbox" aria-label="Directories"></div>
-        <div class="cwd-picker-actions">
-          <button id="cwd-picker-clear" class="modal-btn" type="button" title="Use home directory">Home</button>
-          <button id="cwd-picker-cancel" class="modal-btn" type="button">Cancel</button>
-          <button id="cwd-picker-select" class="modal-btn primary" type="button">Select This Folder</button>
         </div>
       </div>
     </div>
@@ -388,7 +300,6 @@
           <button class="settings-tab" role="tab" data-tab="sg-terminal">Terminal</button>
           <button class="settings-tab" role="tab" data-tab="sg-keybar">Keybar</button>
           <button class="settings-tab" role="tab" data-tab="sg-snippets">Snippets</button>
-          <button class="settings-tab" role="tab" data-tab="sg-mcp">MCP</button>
           <button class="settings-tab" role="tab" data-tab="sg-tls">TLS</button>
         </div>
         <div class="settings-tab-panel active" id="sg-appearance" role="tabpanel">
@@ -415,8 +326,6 @@
               <div class="per-tab-theme-grid">
                 <label>Terminal</label>
                 <select id="setting-theme-terminal" class="settings-input settings-input-sm"></select>
-                <label>Chat</label>
-                <select id="setting-theme-chat" class="settings-input settings-input-sm"></select>
                 <label>Files</label>
                 <select id="setting-theme-files" class="settings-input settings-input-sm"></select>
               </div>
@@ -425,13 +334,6 @@
           <div class="modal-section">
             <label>Font Size</label>
             <input type="number" id="setting-font-size" class="settings-input" min="8" max="32" value="14">
-          </div>
-          <div class="modal-section">
-            <label>Chat Input Position</label>
-            <select id="setting-chat-input-position" class="settings-input">
-              <option value="bottom">Bottom</option>
-              <option value="top">Top</option>
-            </select>
           </div>
         </div>
         <div class="settings-tab-panel" id="sg-terminal" role="tabpanel" hidden>
@@ -590,39 +492,6 @@
             </div>
           </div>
         </div>
-        <div class="settings-tab-panel" id="sg-mcp" role="tabpanel" hidden>
-          <div class="modal-section">
-            <p class="setting-hint">Configure MCP servers for Chat sessions. Enabled servers are automatically included when creating new sessions.</p>
-            <div class="mcp-editor">
-              <div id="mcp-server-list" class="mcp-server-list"></div>
-              <div class="keybar-editor-actions">
-                <button id="mcp-add-btn" class="modal-btn" type="button">Add Server</button>
-              </div>
-              <div id="mcp-add-form" class="mcp-add-form" hidden>
-                <div class="keybar-form-row">
-                  <label>Name</label>
-                  <input type="text" id="mcp-new-name" class="settings-input" placeholder="e.g. my-server" maxlength="64">
-                </div>
-                <div class="keybar-form-row">
-                  <label>Command</label>
-                  <input type="text" id="mcp-new-command" class="settings-input" placeholder="e.g. npx -y @example/mcp-server">
-                </div>
-                <div class="keybar-form-row">
-                  <label>Arguments</label>
-                  <input type="text" id="mcp-new-args" class="settings-input" placeholder="e.g. --port 3000 (space-separated)">
-                </div>
-                <div class="keybar-form-row">
-                  <label>Environment</label>
-                  <textarea id="mcp-new-env" class="settings-input mcp-env-textarea" rows="2" placeholder="KEY=VALUE (one per line)"></textarea>
-                </div>
-                <div class="keybar-form-actions">
-                  <button id="mcp-add-confirm" class="modal-btn primary" type="button">Add</button>
-                  <button id="mcp-add-cancel" class="modal-btn" type="button">Cancel</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
         <div class="settings-tab-panel" id="sg-tls" role="tabpanel" hidden>
           <div class="modal-section">
             <label>Status</label>
@@ -714,7 +583,6 @@
   <script src="/js/filer-tree.js"></script>
   <script src="/js/filer-editor.js"></script>
   <script src="/js/filer.js"></script>
-  <script src="/js/chat.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

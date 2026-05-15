@@ -346,7 +346,7 @@ const DenTerminal = (() => {
         if (_suppressTimer) { clearTimeout(_suppressTimer); _suppressTimer = null; }
         return;
       }
-      // Do not send input when terminal pane is hidden (e.g. Chat/Files tab active)
+      // Do not send input when terminal pane is hidden (e.g. Files tab active)
       if (document.getElementById('terminal-pane').hidden) return;
       if (isRestty && _resttyDedupActive) return;
       if (isRestty) {
@@ -372,7 +372,7 @@ const DenTerminal = (() => {
       }
     });
 
-    // Context menu: "Send to Chat" when text is selected
+    // Context menu (Copy) when text is selected
     container.addEventListener('contextmenu', (e) => {
       const sel = term.getSelection();
       if (!sel) return; // no selection — let default menu through
@@ -392,17 +392,6 @@ const DenTerminal = (() => {
     ctxMenu.className = 'context-menu';
     ctxMenu.style.left = x + 'px';
     ctxMenu.style.top = y + 'px';
-
-    const sendItem = document.createElement('div');
-    sendItem.className = 'context-menu-item';
-    sendItem.textContent = 'Send to Chat';
-    sendItem.addEventListener('click', () => {
-      document.dispatchEvent(new CustomEvent('den:send-to-chat', {
-        detail: { text: selectedText, source: 'terminal' },
-      }));
-      hideTerminalContextMenu();
-    });
-    ctxMenu.appendChild(sendItem);
 
     const copyItem = document.createElement('div');
     copyItem.className = 'context-menu-item';
@@ -1480,18 +1469,6 @@ const DenTerminal = (() => {
   document.addEventListener('den:theme-changed', () => {
     if (!term) return;
     term.options.theme = getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane'));
-  });
-
-  // Listen for "Run in Terminal" requests from Chat (module-scope, registered once)
-  document.addEventListener('den:run-in-terminal', (e) => {
-    const cmd = e.detail?.command;
-    if (!cmd) return;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      if (typeof Toast !== 'undefined') Toast.error('Terminal not connected');
-      return;
-    }
-    // Paste command without executing — user presses Enter to confirm
-    sendInput(cmd);
   });
 
   return {

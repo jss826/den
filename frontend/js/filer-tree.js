@@ -110,15 +110,6 @@ const FilerTree = (() => {
       name.title = entry.name;
       row.appendChild(name);
 
-      // Drag support for files (used by Chat attach)
-      if (!entry.is_dir) {
-        row.draggable = true;
-        row.addEventListener('dragstart', (e) => {
-          e.dataTransfer.setData('text/x-den-path', fullPath);
-          e.dataTransfer.effectAllowed = 'copy';
-        });
-      }
-
       // ツールチップ: サイズ・更新日時
       if (!entry.is_dir && entry.size !== undefined) {
         const tooltip = formatSize(entry.size) + (entry.modified ? '  ' + formatDate(entry.modified) : '');

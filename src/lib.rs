@@ -2,9 +2,6 @@ use tokio::net::TcpListener;
 
 pub mod assets;
 pub mod auth;
-pub mod channel;
-pub mod chat;
-pub mod chat_hook;
 pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
@@ -39,7 +36,6 @@ pub struct AppState {
     pub remote_manager: Arc<remote::RemoteManager>,
     pub tls_info: Option<tls::TlsInfo>,
     pub tls_certificate_der: Option<Vec<u8>>,
-    pub chat_sessions: chat::session::ChatSessionManager,
     pub preview_store: filer::preview::PreviewStore,
 }
 
@@ -71,7 +67,6 @@ pub fn create_app_with_secret(
     let sftp_manager = sftp::client::SftpManager::new(store.clone());
 
     let remote_manager = Arc::new(remote::RemoteManager::default());
-    let server_port = config.port;
 
     let state = Arc::new(AppState {
         config,
@@ -83,29 +78,8 @@ pub fn create_app_with_secret(
         remote_manager,
         tls_info: tls_runtime.map(|tls| tls.info.clone()),
         tls_certificate_der: tls_runtime.map(|tls| tls.certificate_der.clone()),
-        chat_sessions: chat::session::ChatSessionManager::new(server_port),
         preview_store: filer::preview::PreviewStore::new(),
     });
-
-    // Channel server routes — loopback-only, token auth in handler
-    let channel_server_routes = Router::new()
-        .route("/api/channel/poll", get(chat::channel_api::poll_message))
-        .route("/api/channel/reply", post(chat::channel_api::post_reply))
-        .route(
-            "/api/channel/permission",
-            post(chat::channel_api::post_permission),
-        )
-        .route("/api/channel/verdict", get(chat::channel_api::poll_verdict))
-        .route("/api/channel/status", post(chat::channel_api::post_status))
-        .route(
-            "/api/channel/notification",
-            post(chat::channel_api::post_notification),
-        )
-        .route(
-            "/api/channel/directive",
-            get(chat::channel_api::get_directive),
-        )
-        .layer(axum::middleware::from_fn(auth::loopback_only_middleware));
 
     // 認証不要のルート
     let public_routes = Router::new()
@@ -120,7 +94,6 @@ pub fn create_app_with_secret(
             "/api/filer/preview/{token}/{*path}",
             get(filer::preview::serve),
         )
-        .merge(channel_server_routes)
         .route("/", get(assets::serve_index))
         .route("/{*path}", get(assets::serve_static));
 
@@ -136,10 +109,6 @@ pub fn create_app_with_secret(
         .route("/api/remote/connections", get(remote::list_connections))
         .route("/api/remote/{id}/disconnect", post(remote::disconnect))
         .route("/api/remote/{id}/ws", get(remote::remote_ws_handler))
-        .route(
-            "/api/remote/{id}/chat-ws",
-            get(remote::remote_chat_ws_handler),
-        )
         .route(
             "/api/remote/{id}/{*rest}",
             any(remote::remote_proxy_catch_all),
@@ -209,32 +178,6 @@ pub fn create_app_with_secret(
         .route("/api/sftp/download", get(sftp::api::download))
         .route("/api/sftp/upload", post(sftp::api::upload))
         .route("/api/sftp/search", get(sftp::api::search))
-        // Channel API (Chat v2) — session management
-        .route(
-            "/api/channel/sessions",
-            get(chat::channel_api::list_sessions).post(chat::channel_api::create_session),
-        )
-        .route(
-            "/api/channel/sessions/{id}",
-            delete(chat::channel_api::stop_session),
-        )
-        // Channel API (Chat v2) — messaging
-        .route(
-            "/api/channel/message",
-            post(chat::channel_api::send_message),
-        )
-        .route(
-            "/api/channel/verdict",
-            post(chat::channel_api::send_verdict),
-        )
-        .route(
-            "/api/channel/directive",
-            post(chat::channel_api::send_directive),
-        )
-        .route(
-            "/api/channel/ws",
-            get(chat::channel_api::channel_ws_handler),
-        )
         // System update API
         .route("/api/system/version", get(update::get_version))
         .route("/api/system/update", post(update::do_update))

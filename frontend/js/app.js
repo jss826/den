@@ -8,7 +8,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginError = document.getElementById('login-error');
 
   let filerInitialized = false;
-  let chatInitialized = false;
 
   // ログイン処理
   loginForm.addEventListener('submit', async (e) => {
@@ -56,10 +55,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // モーダル ID 配列（keydown ハンドラで毎回再生成しないよう外に定義）
   // confirm-modal, prompt-modal は Toast 内で独自にハンドルするので Esc 対象外
-  // Order matters: when multiple are open, Esc closes the first match — list
-  // nested pickers (chat-cwd-picker-modal) before their parent modal
-  // (chat-new-session-modal).
-  const escModals = ['chat-cwd-picker-modal', 'chat-new-session-modal', 'settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
+  const escModals = ['settings-modal', 'filer-upload-modal', 'filer-search-modal', 'filer-quickopen-modal', 'sftp-connect-modal', 'den-connect-modal', 'connections-modal'];
   // ショートカット抑止にはすべてのモーダルを含める
   // hostkey-modal / tls-cert-modal are Promise-based (like confirm-modal) — Esc handled internally
   const allModals = ['confirm-modal', 'prompt-modal', 'choose-modal', 'hostkey-modal', 'tls-cert-modal', ...escModals];
@@ -91,21 +87,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const modal = document.getElementById(id);
         if (modal && !modal.hidden) {
           modal.hidden = true;
-          return;
-        }
-      }
-    }
-
-    // Ctrl+Shift+Enter: Send terminal selection to Chat（モーダル中はスキップ）
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key === 'Enter' && !anyModalOpen) {
-      const t = DenTerminal.getTerminal();
-      if (t) {
-        const sel = t.getSelection();
-        if (sel) {
-          e.preventDefault();
-          document.dispatchEvent(new CustomEvent('den:send-to-chat', {
-            detail: { text: sel, source: 'terminal' },
-          }));
           return;
         }
       }
@@ -143,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Ctrl+1/2 タブ切替（モーダル中はスキップ）
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !anyModalOpen) {
-      const tabs = { '1': 'terminal', '2': 'filer', '3': 'chat' };
+      const tabs = { '1': 'terminal', '2': 'filer' };
       const tab = tabs[e.key];
       if (tab) {
         e.preventDefault();
@@ -304,14 +285,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (initialHash.tab !== 'terminal') switchTab(initialHash.tab);
     window.addEventListener('hashchange', applyHash);
 
-    // Listen for "Send to Chat" — handles Chat lazy init (F003)
-    document.addEventListener('den:send-to-chat', (e) => {
-      const text = e.detail?.text;
-      if (!text) return;
-      switchTab('chat'); // triggers DenChat.init() if not yet initialized
-      DenChat.prefillInput(text);
-    });
-
     // iPad Safari: visualViewport でキーボード表示時のビューポート高さを追従
     // Safari はキーボード表示時にページ自体をスクロールする（overflow:hidden でも）
     // → scrollTo(0,0) でリセットし、offsetTop を補正する
@@ -374,7 +347,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // ペイン表示切り替え
     document.getElementById('terminal-pane').hidden = tabName !== 'terminal';
     document.getElementById('filer-pane').hidden = tabName !== 'filer';
-    document.getElementById('chat-pane').hidden = tabName !== 'chat';
 
     if (tabName === 'terminal') {
       DenTerminal.fitAndRefresh();
@@ -391,12 +363,6 @@ document.addEventListener('DOMContentLoaded', () => {
       DenFiler.init();
     }
 
-    // Chat 初期化（初回のみ）
-    if (tabName === 'chat' && !chatInitialized) {
-      chatInitialized = true;
-      DenChat.init();
-    }
-
     // ハッシュ更新
     setHash(buildHash(tabName, tabName === 'terminal' ? DenTerminal.getCurrentSession() : null));
   }
@@ -404,7 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Hash routing ---
   let lastSetHash = '';
 
-  const TAB_MAP = { files: 'filer', terminal: 'terminal', chat: 'chat' };
+  const TAB_MAP = { files: 'filer', terminal: 'terminal' };
 
   function parseHash() {
     const hash = location.hash.replace(/^#/, '');
@@ -443,7 +409,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function initSidebarToggles() {
     setupSidebarToggle('.filer-sidebar-toggle', '.filer-sidebar', '.filer-layout');
-    setupSidebarToggle('.chat-sidebar-toggle', '.chat-sidebar', '.chat-layout');
   }
 
   function setupSidebarToggle(toggleSel, sidebarSel, layoutSel) {

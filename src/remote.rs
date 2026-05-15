@@ -413,24 +413,6 @@ pub async fn remote_ws_handler(
         .into_response())
 }
 
-/// GET /api/remote/{id}/chat-ws — WebSocket proxy to remote Den's /api/channel/ws
-pub async fn remote_chat_ws_handler(
-    ws: WebSocketUpgrade,
-    Path(id): Path<String>,
-    RawQuery(query): RawQuery,
-    State(state): State<Arc<AppState>>,
-) -> Result<Response, StatusCode> {
-    let remote = state.remote_manager.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let path = if let Some(q) = &query {
-        format!("/api/channel/ws?{q}")
-    } else {
-        "/api/channel/ws".to_string()
-    };
-    Ok(ws
-        .on_upgrade(move |socket| handle_remote_ws_path(socket, remote, path))
-        .into_response())
-}
-
 /// Catch-all proxy for /api/remote/{id}/{*rest}
 ///
 /// Routes `rest` to `/api/{rest}` on the remote Den.
@@ -446,11 +428,7 @@ pub async fn remote_proxy_catch_all(
     let rest = sanitize_proxy_path(&rest);
 
     // Allowlist: only proxy known API paths to the remote Den
-    let path = if rest.starts_with("terminal/")
-        || rest.starts_with("filer/")
-        || rest.starts_with("chat/")
-        || rest.starts_with("channel/")
-    {
+    let path = if rest.starts_with("terminal/") || rest.starts_with("filer/") {
         format!("/api/{rest}")
     } else {
         return Err(StatusCode::FORBIDDEN);
@@ -465,37 +443,6 @@ pub async fn remote_proxy_catch_all(
         body.to_vec(),
     )
     .await
-}
-
-/// Generic WebSocket relay to a specific path on the remote Den.
-async fn handle_remote_ws_path(browser_ws: WebSocket, remote: RemoteSession, path: String) {
-    let ws_base = to_ws_base(&remote.base_url);
-    let remote_url = format!("{}{path}", ws_base.trim_end_matches('/'));
-
-    let mut request = match remote_url.into_client_request() {
-        Ok(request) => request,
-        Err(e) => {
-            tracing::warn!("remote fwd ws: invalid URL: {e}");
-            return;
-        }
-    };
-    if let Ok(cookie) = remote.cookie_header.parse() {
-        request.headers_mut().insert(header::COOKIE, cookie);
-    }
-
-    let connect_result = connect_remote_ws_client(request, remote.ws_client_config.clone()).await;
-
-    let (remote_ws, _) = match connect_result {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::warn!("remote fwd ws connect failed: {e}");
-            let (mut browser_tx, _) = browser_ws.split();
-            let _ = browser_tx.send(AxumWsMessage::Close(None)).await;
-            return;
-        }
-    };
-
-    proxy_ws_bidirectional(browser_ws, remote_ws).await;
 }
 
 /// Convert an HTTP(S) base URL to its WebSocket equivalent.

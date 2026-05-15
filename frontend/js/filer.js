@@ -1483,14 +1483,5 @@ const DenFiler = (() => {
     return div.innerHTML;
   }
 
-  /**
-   * Expose the current directory to other modules (e.g. the chat tab's
-   * "Use current folder" button). Returns whatever `currentDir` holds —
-   * the caller is responsible for filtering sentinel values like `~`.
-   */
-  function getCurrentDir() {
-    return currentDir;
-  }
-
-  return { init, initDenConnectModal, initConnectionsButton, showDenModal, focusSearch, showQuickOpen, getCurrentDir };
+  return { init, initDenConnectModal, initConnectionsButton, showDenModal, focusSearch, showQuickOpen };
 })();

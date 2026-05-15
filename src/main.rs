@@ -9,18 +9,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() {
-    // Channel server mode: MCP channel server for Claude Code Channels API
-    if std::env::args().nth(1).as_deref() == Some("--channel-server") {
-        den::channel::run();
-        return;
-    }
-    // Chat hook relay: forwards Claude Code hook payloads to the den backend.
-    // Takes an event name as the second arg, reads the hook JSON on stdin.
-    if std::env::args().nth(1).as_deref() == Some("--chat-hook") {
-        let event = std::env::args().nth(2).unwrap_or_default();
-        den::chat_hook::run(&event);
-        return;
-    }
     // Load .env: CWD first, then platform-specific config directory as fallback.
     // Later values do NOT override earlier ones, so CWD takes precedence.
     let _ = dotenvy::dotenv();

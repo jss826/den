@@ -168,18 +168,6 @@ fn default_orientation() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpServer {
-    pub name: String,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_font_size")]
     pub font_size: u8,
@@ -211,13 +199,7 @@ pub struct Settings {
     #[serde(default)]
     pub theme_terminal: Option<String>,
     #[serde(default)]
-    pub theme_chat: Option<String>,
-    #[serde(default)]
     pub theme_files: Option<String>,
-    #[serde(default)]
-    pub mcp_servers: Option<Vec<McpServer>>,
-    #[serde(default)]
-    pub chat_input_position: Option<String>,
     #[serde(default)]
     pub terminal_renderer: Option<String>,
     #[serde(default)]
@@ -258,10 +240,7 @@ impl Default for Settings {
             sleep_prevention_timeout: default_sleep_prevention_timeout(),
             group_remote_sessions: true,
             theme_terminal: None,
-            theme_chat: None,
             theme_files: None,
-            mcp_servers: None,
-            chat_input_position: None,
             terminal_renderer: None,
             restty_font: None,
             version: String::new(),

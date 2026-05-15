@@ -19,9 +19,7 @@ const DenSettings = (() => {
     sleep_prevention_mode: 'user-activity',
     sleep_prevention_timeout: 30,
     theme_terminal: null,
-    theme_chat: null,
     theme_files: null,
-    mcp_servers: null,
     terminal_renderer: null,
     restty_font: null,
   };
@@ -55,8 +53,6 @@ const DenSettings = (() => {
 
   // スニペット設定で使用する一時配列
   let editingSnippets = [];
-  // MCP サーバー設定で使用する一時配列
-  let editingMcpServers = [];
   let tlsStatus = null;
   let trustedTlsCerts = {};
   let latestVersion = null;
@@ -351,14 +347,7 @@ const DenSettings = (() => {
   function apply() {
     document.documentElement.style.setProperty('--den-font-size', current.font_size + 'px');
     applyTheme();
-    applyChatInputPosition();
     updateDocumentTitle();
-  }
-
-  function applyChatInputPosition() {
-    const chatMain = document.querySelector('.chat-main');
-    if (!chatMain) return;
-    chatMain.classList.toggle('chat-input-top', current.chat_input_position === 'top');
   }
 
   /** Resolve 'system' theme to actual value */
@@ -403,7 +392,6 @@ const DenSettings = (() => {
   function applyPaneThemes() {
     const panes = [
       ['terminal-pane', current.theme_terminal],
-      ['chat-pane', current.theme_chat],
       ['filer-pane', current.theme_files],
     ];
     for (const [id, override] of panes) {
@@ -423,7 +411,6 @@ const DenSettings = (() => {
   function getPaneTheme(paneId) {
     const map = {
       'terminal-pane': current.theme_terminal,
-      'chat-pane': current.theme_chat,
       'filer-pane': current.theme_files,
     };
     const override = map[paneId];
@@ -583,65 +570,6 @@ const DenSettings = (() => {
     });
   }
 
-  // --- MCP サーバー設定 UI ---
-
-  function renderMcpServerList() {
-    const list = document.getElementById('mcp-server-list');
-    if (!list) return;
-    list.innerHTML = '';
-
-    editingMcpServers.forEach((srv, idx) => {
-      const item = document.createElement('div');
-      item.className = 'mcp-server-item';
-      item.dataset.index = idx;
-
-      const toggle = document.createElement('input');
-      toggle.type = 'checkbox';
-      toggle.checked = srv.enabled !== false;
-      toggle.className = 'mcp-server-toggle';
-      toggle.setAttribute('aria-label', 'Enable server');
-      toggle.addEventListener('change', () => {
-        editingMcpServers[idx].enabled = toggle.checked;
-      });
-      item.appendChild(toggle);
-
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'mcp-server-name';
-      nameSpan.textContent = srv.name;
-      item.appendChild(nameSpan);
-
-      const cmdSpan = document.createElement('span');
-      cmdSpan.className = 'mcp-server-cmd';
-      cmdSpan.textContent = srv.command + (srv.args && srv.args.length ? ' ' + srv.args.join(' ') : '');
-      item.appendChild(cmdSpan);
-
-      const envKeys = Object.keys(srv.env || {});
-      if (envKeys.length > 0) {
-        const envSpan = document.createElement('span');
-        envSpan.className = 'mcp-server-env';
-        envSpan.textContent = envKeys.join(', ');
-        envSpan.title = envKeys.length + ' env variable(s)';
-        item.appendChild(envSpan);
-      }
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'mcp-server-remove';
-      removeBtn.textContent = '\u00d7';
-      removeBtn.type = 'button';
-      removeBtn.setAttribute('data-tooltip', 'Remove');
-      removeBtn.setAttribute('aria-label', 'Remove server');
-      item.appendChild(removeBtn);
-
-      list.appendChild(item);
-    });
-
-    DenDragList.init(list, {
-      itemSelector: '.mcp-server-item',
-      removeSelector: '.mcp-server-remove',
-      getState: () => ({ array: editingMcpServers, render: renderMcpServerList }),
-    });
-  }
-
   /**
    * 設定モーダルを開く。現在の設定値をフォームに反映する。
    */
@@ -686,7 +614,7 @@ const DenSettings = (() => {
     if (themeSelect) themeSelect.value = current.theme || 'dark';
 
     // Populate per-tab theme dropdowns
-    for (const suffix of ['terminal', 'chat', 'files']) {
+    for (const suffix of ['terminal', 'files']) {
       const sel = document.getElementById('setting-theme-' + suffix);
       if (!sel) continue;
       if (sel.options.length === 0) {
@@ -697,9 +625,6 @@ const DenSettings = (() => {
       }
       sel.value = current['theme_' + suffix] || '';
     }
-
-    const chatInputPosSelect = document.getElementById('setting-chat-input-position');
-    if (chatInputPosSelect) chatInputPosSelect.value = current.chat_input_position || 'bottom';
 
     const agentFwdCheck = document.getElementById('setting-ssh-agent-fwd');
     if (agentFwdCheck) agentFwdCheck.checked = !!current.ssh_agent_forwarding;
@@ -772,14 +697,6 @@ const DenSettings = (() => {
     const snippetAddForm = document.getElementById('snippet-add-form');
     if (snippetAddForm) snippetAddForm.hidden = true;
 
-    // MCP サーバー設定の初期化
-    editingMcpServers = current.mcp_servers
-      ? current.mcp_servers.map(s => ({ ...s, args: [...(s.args || [])], env: { ...(s.env || {}) } }))
-      : [];
-    renderMcpServerList();
-    const mcpAddForm = document.getElementById('mcp-add-form');
-    if (mcpAddForm) mcpAddForm.hidden = true;
-
     latestVersion = null; // refetch on each modal open
 
     const verText = document.getElementById('settings-version-text');
@@ -839,10 +756,6 @@ const DenSettings = (() => {
 
       const snippets = editingSnippets.length > 0 ? editingSnippets.map(s => ({ ...s })) : null;
 
-      const mcpServers = editingMcpServers.length > 0
-        ? editingMcpServers.map(s => ({ ...s, args: [...(s.args || [])], env: { ...(s.env || {}) } }))
-        : null;
-
       const sleepModeEl = document.getElementById('setting-sleep-mode');
       const sleepMode = sleepModeEl ? sleepModeEl.value : 'user-activity';
       const sleepTimeoutEl = document.getElementById('setting-sleep-timeout');
@@ -853,11 +766,7 @@ const DenSettings = (() => {
 
       // Per-tab theme overrides (empty string → null)
       const themeTerminal = document.getElementById('setting-theme-terminal')?.value || null;
-      const themeChat = document.getElementById('setting-theme-chat')?.value || null;
       const themeFiles = document.getElementById('setting-theme-files')?.value || null;
-
-      const chatInputPosEl = document.getElementById('setting-chat-input-position');
-      const chatInputPosition = chatInputPosEl ? chatInputPosEl.value : 'bottom';
 
       const rendererEl = document.getElementById('setting-terminal-renderer');
       const terminalRenderer = rendererEl ? rendererEl.value : null;
@@ -869,17 +778,14 @@ const DenSettings = (() => {
           terminal_scrollback: Math.max(100, Math.min(50000, scrollback)),
           theme: theme,
           theme_terminal: themeTerminal,
-          theme_chat: themeChat,
           theme_files: themeFiles,
           keybar_buttons: keybarButtons,
           keybar_secondary_buttons: keybarSecondaryButtons,
           ssh_agent_forwarding: sshAgentFwd,
           snippets: snippets,
-          mcp_servers: mcpServers,
           sleep_prevention_mode: sleepMode,
           sleep_prevention_timeout: sleepTimeout,
           group_remote_sessions: groupRemote,
-          chat_input_position: chatInputPosition === 'bottom' ? null : chatInputPosition,
           terminal_renderer: terminalRenderer === 'xterm' ? null : terminalRenderer,
           restty_font: document.getElementById('setting-restty-font')?.value || null,
         });
@@ -1267,67 +1173,6 @@ const DenSettings = (() => {
     if (snippetAddCancel) snippetAddCancel.addEventListener('click', () => {
       snippetAddForm.hidden = true;
     });
-
-    // --- MCP server editor ---
-    const mcpAddBtn = document.getElementById('mcp-add-btn');
-    const mcpAddForm = document.getElementById('mcp-add-form');
-    const mcpAddConfirm = document.getElementById('mcp-add-confirm');
-    const mcpAddCancel = document.getElementById('mcp-add-cancel');
-    const mcpNewName = document.getElementById('mcp-new-name');
-    const mcpNewCommand = document.getElementById('mcp-new-command');
-    const mcpNewArgs = document.getElementById('mcp-new-args');
-    const mcpNewEnv = document.getElementById('mcp-new-env');
-
-    if (mcpAddBtn) mcpAddBtn.addEventListener('click', () => {
-      mcpAddForm.hidden = false;
-      mcpNewName.value = '';
-      mcpNewCommand.value = '';
-      mcpNewArgs.value = '';
-      mcpNewEnv.value = '';
-      mcpNewName.focus();
-    });
-
-    if (mcpAddConfirm) mcpAddConfirm.addEventListener('click', () => {
-      const name = mcpNewName.value.trim();
-      const command = mcpNewCommand.value.trim();
-      if (!name) { mcpNewName.focus(); return; }
-      if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-        Toast.error('Name must be alphanumeric, hyphens, or underscores only');
-        mcpNewName.focus();
-        return;
-      }
-      if (name.startsWith('den-')) {
-        Toast.error('Name must not start with "den-" (reserved)');
-        mcpNewName.focus();
-        return;
-      }
-      if (!command) { mcpNewCommand.focus(); return; }
-      if (editingMcpServers.some(s => s.name === name)) {
-        Toast.error('Server name already exists: ' + name);
-        mcpNewName.focus();
-        return;
-      }
-
-      const args = mcpNewArgs.value.trim() ? mcpNewArgs.value.trim().split(/\s+/) : [];
-      const env = {};
-      for (const line of mcpNewEnv.value.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx > 0) {
-          env[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
-        }
-      }
-
-      editingMcpServers.push({ name, command, args, env, enabled: true });
-      renderMcpServerList();
-      mcpAddForm.hidden = true;
-    });
-
-    if (mcpAddCancel) mcpAddCancel.addEventListener('click', () => {
-      mcpAddForm.hidden = true;
-    });
-
   }
 
   return { load, save, apply, get, getAll, bindUI, openModal, setTitleTab, setOscTitle, getPaneTheme, LIGHT_THEMES };
