@@ -26,7 +26,10 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ## Phase 2: リリース
 
 1. `Cargo.toml` の `version` フィールドを新バージョン番号に更新（`v` prefix なし）
-2. `cargo generate-lockfile` で Cargo.lock を更新（Cargo.toml の version 変更を反映）
+2. Cargo.lock の `den` パッケージ version を新バージョンに反映する
+   - **⚠️ `cargo generate-lockfile` を使わない**: version 反映だけのつもりが**全依存を latest 互換版に再解決**し、未検証の transitive bump（例: aead final 化・aes-gcm rc 繰り上げ・windows-sys 統合）がリリース直前に紛れ込む
+   - 推奨: Cargo.lock の `[[package]] name = "den"` 直下の `version` 行のみを Edit で手書き更新 → `cargo metadata --locked --format-version 1 >/dev/null` で「再解決不要」を検証（lock が古いと `--locked` がエラーになる）
+   - もし `generate-lockfile` を使ってしまったら `git diff Cargo.lock` で den version 以外の差分が無いか確認し、あれば `git checkout Cargo.lock` で巻き戻してから version 行のみ手動更新する
 3. バージョン更新をコミット＆プッシュ: `git add Cargo.toml Cargo.lock && git commit -m "chore: bump version to <version>" && git push`
    - SSH 失敗時は HTTPS フォールバック: `GH_TOKEN=$(gh auth token) && git push https://<owner>:${GH_TOKEN}@github.com/<owner>/<repo>.git <branch>`
    - **push が成功したことを確認してから次のステップへ進む**（失敗した場合、リリース作成でタグが古いコミットを指す）
