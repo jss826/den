@@ -22,3 +22,6 @@ den-loop-tasks.json
 
 # DEN_DATA_DIR=./data-dev artifacts can land anywhere relative to cwd
 data-dev/
+
+# orch:develop の作業ゴミ（flow 移行で廃止）
+.orch-develop/

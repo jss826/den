@@ -19,6 +19,31 @@ cargo test --target-dir target-test
 
 **`--target-dir target-test`**: dev サーバー実行中でもバイナリロックを回避してテスト可能。
 
+## 開発フロー（flow 前提）
+
+Den の標準開発入口は **`/flow`**。
+
+- `/flow <やりたいこと>` — 司会者層（受付→コンサル→分類→委譲→報告）
+- `/flow #N` — Issue を 1 件実装（対話モード、7 フェーズ）
+- `/flow auto #N` — headless 実装（`/loop` 用、status JSON 出力）
+
+flow の実装エンジンはプロジェクト固有事項を以下の **4 スロット**から読む。詳細は各 rules を参照。
+
+| スロット | Den の内容 |
+|---|---|
+| ① 品質ゲート | `cargo fmt -- --check` / `cargo clippy -- -D warnings` / `cargo test --target-dir target-test` /（UI 変更時）`npx playwright test tests/e2e/filer-ui.e2e.ts` |
+| ② security-review 対象差分 | `src/auth.rs`・`src/tls.rs`・`src/remote.rs` 等、認証/セッション/トークン/TLS 境界に触れる差分は `/security-review` を併用 |
+| ③ 実行上の罠 | `DEN_DATA_DIR=./data-dev` 厳守（`./data` 上書き禁止）/ `--target-dir target-test` でロック回避 / 長時間コマンドは background 実行 / ConPTY conhost ゾンビの後始末 / PTY テストは `#[tokio::test]` 禁止（`.claude/rules/development.md`）/ 本番 :3939 と並行時は別ポート |
+| ④ フェーズ内追加チェック | 設計時=`frontend/DESIGN.md` が UI の正（先に更新）/ UI 変更時=e2e 必須＋vendor bump・adapter 修正なら renderer 切替スモーク（`.claude/rules/workflow.md`） |
+
+**flow デフォルト（`main`）の Den 向け上書き:**
+
+- ブランチ命名: `feat|fix|chore/<N>-<説明>`
+- マージ先 = **`master`**（`main` ではない）、**squash merge**
+- Phase 6 コードレビュー = **`/code-review`**（effort: 軽微 medium / 通常 high / 本丸 max）。finding の対応判断は `.claude/rules/review-judgement.md`
+- リリース（tag + GitHub Release）は flow 範囲外 → **`/release`**
+- Issue 外の単発コミット → **`/ship`**
+
 ## 技術スタック
 
 - バックエンド: Rust (axum + portable-pty + tokio)
