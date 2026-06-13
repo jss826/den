@@ -1,15 +1,29 @@
 // Den - ターミナルモジュール
 const DenTerminal = (() => {
-  let term = null;
-  let fitAddon = null;
-  let ws = null;
+  // #115 PoC: per-session term retention. Each session owns its own term + WS
+  // (SessionTerm), kept live in a hidden host div so switching never resets the
+  // terminal — client scrollback is preserved and #114-style interleaving is
+  // structurally impossible. `term`/`fitAddon` MIRROR the active session so the
+  // active-terminal helpers (fit, select mode, context menu, focus, theme)
+  // keep operating on a single reference. Connection state lives per SessionTerm.
+  let term = null;            // === active?.term
+  let fitAddon = null;        // === active?.fitAddon
+  let rootContainer = null;   // #terminal-container (set in init)
+  let active = null;          // active SessionTerm or null
+  const sessionTerms = new Map(); // id -> SessionTerm
+  const lruOrder = [];        // session ids, least-recent first, most-recent last
+  const MAX_RETAINED = 2;     // PoC: keep at most K=2 live terms (LRU)
+  let activateSeq = 0;        // guards against stale async activation
   let currentSession = null;
   let currentRemote = null; // null for local, connectionId for remote Den
-  let connectGeneration = 0; // doConnect の世代カウンタ（高速切り替え時の race 防止）
-  let pingTimer = null; // WS keepalive ping interval
   const WS_PING_INTERVAL_MS = 30000;
   const WS_PING_MSG = JSON.stringify({ type: 'ping' });
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
+
+  /** Stable identity key for a (name, remote) session. */
+  function sessionId(name, remote) {
+    return (remote || '') + ' ' + name;
+  }
 
   /** Strip port from host:port string, returning just hostname */
   function stripPort(hp) {
@@ -25,11 +39,6 @@ const DenTerminal = (() => {
     return conn?.displayName || stripPort(conn?.hostPort) || remote;
   }
 
-  function getWsPath() {
-    if (!currentRemote) return '/api/ws';
-    return `/api/remote/${currentRemote}/ws`;
-  }
-
   /** Merge multiple Uint8Array chunks into one to reduce xterm.js parser invocations. */
   function mergeChunks(chunks) {
     let total = 0;
@@ -39,8 +48,6 @@ const DenTerminal = (() => {
     for (const c of chunks) { merged.set(c, offset); offset += c.length; }
     return merged;
   }
-  let lastSentCols = 0;
-  let lastSentRows = 0;
 
   // Mouse sequence filters — strip SGR/URXVT/X10 mouse reports before sending to PTY
   // eslint-disable-next-line no-control-regex
@@ -228,27 +235,50 @@ const DenTerminal = (() => {
     }
   }
 
-  async function init(container) {
+  function init(container) {
+    rootContainer = container;
+    // フォント読み込み完了後に active term を再 fit
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => fitAndRefresh());
+    }
+    window.addEventListener('pageshow', () => fitAndRefresh());
+    const resizeObserver = new ResizeObserver(() => scheduleFit());
+    resizeObserver.observe(container);
+  }
+
+  /**
+   * Build the xterm/restty/wterm instance for a SessionTerm and wire all its
+   * per-term handlers (input → its OWN ws, OSC52, keybar, context menu).
+   * The term renders into the session's hidden host div.
+   */
+  async function buildTerm(st) {
     const { TerminalClass, FitAddonClass, needsWebgl, isRestty } = await TerminalAdapter.ready();
     const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
     const fontSize = DenSettings.get('font_size') ?? 15;
-    term = new TerminalClass({
+    const t = new TerminalClass({
       cursorBlink: true,
       fontSize,
       fontFamily: FONT_FAMILY,
       scrollback,
       theme: getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane')),
     });
+    const fit = new FitAddonClass();
+    t.loadAddon(fit);
 
-    fitAddon = new FitAddonClass();
-    term.loadAddon(fitAddon);
+    if (needsWebgl) selectRenderer(t);
 
-    if (needsWebgl) selectRenderer(term);
+    // The await above yields; the session may have been evicted/disposed in the
+    // meantime (its host removed from the DOM). Don't open into a detached node.
+    if (st.disposed) { try { t.dispose(); } catch (_) { /* ignore */ } return; }
 
-    term.open(container);
+    st.term = t;
+    st.isRestty = isRestty;
+    st.fitAddon = fit;
+
+    t.open(st.host);
 
     // OSC 52: clipboard write from terminal programs
-    term.parser.registerOscHandler(52, (data) => {
+    t.parser.registerOscHandler(52, (data) => {
       // Format: "c;base64data" or just "base64data"
       const parts = data.split(';');
       const b64 = parts.length > 1 ? parts[parts.length - 1] : parts[0];
@@ -260,20 +290,11 @@ const DenTerminal = (() => {
       return true;
     });
 
-    term.onTitleChange((title) => { DenSettings.setOscTitle(title); });
-
-    fitAndRefresh();
-
-    // フォント読み込み完了後に再 fit
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(() => fitAndRefresh());
-    }
-    window.addEventListener('pageshow', () => fitAndRefresh());
-    const resizeObserver = new ResizeObserver(() => scheduleFit());
-    resizeObserver.observe(container);
+    // Only the active session may drive the window/tab title.
+    t.onTitleChange((title) => { if (active === st) DenSettings.setOscTitle(title); });
 
     // restty auto-resize: onGridSize fires onResize — sync PTY server
-    term.onResize(() => sendResize());
+    t.onResize(() => stSendResize(st));
 
     // キーバー修飾キーが ON のとき、物理キーと組み合わせて修飾付きシーケンスを送信
     const PHYSICAL_KEY_MAP = {
@@ -287,7 +308,7 @@ const DenTerminal = (() => {
     let _suppressLeakedChar = null;
     let _suppressTimer = null;
 
-    term.attachCustomKeyEventHandler((ev) => {
+    t.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
       // ハードウェア修飾キー自体や単独の Meta は無視
       if (ev.key === 'Control' || ev.key === 'Alt' || ev.key === 'Shift' || ev.key === 'Meta') return true;
@@ -332,14 +353,16 @@ const DenTerminal = (() => {
       return true;
     });
 
-    // キー入力 → WebSocket
+    // キー入力 → このセッションの WebSocket
     // restty dedup: restty fires onData multiple times per keystroke
     // (keydown + beforeinput events, each triggering emitData + ptyTransport).
     // Allow only the first send per browser task; clear with setTimeout(0)
     // which fires after all events in the current task are processed.
     let _resttyDedupActive = false;
 
-    term.onData((data) => {
+    t.onData((data) => {
+      // Background (non-active) terms never send input.
+      if (active !== st) return;
       // Suppress leaked character from keybar modifier combo (iPad soft keyboard workaround)
       if (_suppressLeakedChar !== null && data === _suppressLeakedChar) {
         _suppressLeakedChar = null;
@@ -353,14 +376,15 @@ const DenTerminal = (() => {
         _resttyDedupActive = true;
         setTimeout(() => { _resttyDedupActive = false; }, 0);
       }
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (st.ws && st.ws.readyState === WebSocket.OPEN) {
         const filtered = filterMouseSeqs(data);
-        if (filtered) ws.send(textEncoder.encode(filtered));
+        if (filtered) st.ws.send(textEncoder.encode(filtered));
       }
     });
 
-    term.onBinary((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
+    t.onBinary((data) => {
+      if (active !== st) return;
+      if (st.ws && st.ws.readyState === WebSocket.OPEN) {
         if (isX10Mouse(data)) return;
         const filtered = filterMouseSeqs(data);
         if (!filtered) return;
@@ -368,19 +392,17 @@ const DenTerminal = (() => {
         for (let i = 0; i < filtered.length; i++) {
           bytes[i] = filtered.charCodeAt(i) & 0xff;
         }
-        ws.send(bytes);
+        st.ws.send(bytes);
       }
     });
 
     // Context menu (Copy) when text is selected
-    container.addEventListener('contextmenu', (e) => {
-      const sel = term.getSelection();
+    st.host.addEventListener('contextmenu', (e) => {
+      const sel = t.getSelection();
       if (!sel) return; // no selection — let default menu through
       e.preventDefault();
       showTerminalContextMenu(e.clientX, e.clientY, sel);
     });
-
-    return term;
   }
 
   // ── Terminal context menu ──
@@ -429,21 +451,6 @@ const DenTerminal = (() => {
     }
   }
 
-  function connect(sessionName, remoteName) {
-    currentSession = sessionName || null;
-    currentRemote = remoteName || null;
-    if (!currentSession) {
-      disconnect();
-      showEmptyState();
-      DenSettings.setTitleTab('terminal', null);
-      return;
-    }
-    hideEmptyState();
-    const displayName = currentRemote ? `${getRemoteLabel(currentRemote)}:${currentSession}` : currentSession;
-    DenSettings.setTitleTab('terminal', displayName);
-    doConnect();
-  }
-
   let emptyStateEl = null;
 
   function showEmptyState() {
@@ -461,126 +468,122 @@ const DenTerminal = (() => {
     if (emptyStateEl) { emptyStateEl.remove(); emptyStateEl = null; }
   }
 
-  /** Transition to sessionless (null) state */
-  function enterNullState() {
-    currentSession = null;
-    currentRemote = null;
-    DenSettings.setOscTitle('');
-    DenSettings.setTitleTab('terminal', null);
-    disconnect();
-    if (term) term.reset();
-    showEmptyState();
-    window.DenApp?.updateSessionHash(null);
+  const MAX_RECONNECT = 3;
+
+  /** Reset module-level fit memo so the next fit re-measures the shown host. */
+  function resetFitState() {
+    lastFitContainerWidth = 0;
+    lastFitContainerHeight = 0;
+    fitRetryCount = 0;
   }
 
-  function disconnect() {
-    connectGeneration++;
-    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-    if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
-    if (ws) {
-      ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
-      ws.close();
-      ws = null;
-    }
+  // ── SessionTerm: one term + WS per session, retained across switches ──
+
+  /** Create a SessionTerm and kick off its async term build. */
+  function createSessionTerm(name, remote) {
+    const host = document.createElement('div');
+    host.className = 'term-session-host';
+    host.hidden = true;
+    rootContainer.appendChild(host);
+    const st = {
+      id: sessionId(name, remote), name, remote: remote || null,
+      host, term: null, fitAddon: null, isRestty: false,
+      ws: null, pingTimer: null, connectGeneration: 0,
+      reconnectAttempts: 0, manualReconnectDisposable: null,
+      lastSentCols: 0, lastSentRows: 0,
+      disposed: false, ready: null,
+    };
+    // Never reject: a failed build (adapter load error) leaves st.term null,
+    // which activateSession/showSessionTerm guard against. This keeps callers
+    // (which don't await activateSession) free of unhandled rejections.
+    st.ready = buildTerm(st).catch((e) => {
+      console.error('[DenTerminal] terminal build failed', e);
+    });
+    return st;
   }
 
-  function doConnect() {
-    const generation = ++connectGeneration;
-    reconnectAttempts = 0;
-    lastSentCols = 0;
-    lastSentRows = 0;
-    if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
-    const cols = term.cols;
-    const rows = term.rows;
+  function stWsPath(st) {
+    return st.remote ? `/api/remote/${st.remote}/ws` : '/api/ws';
+  }
+
+  async function stConnect(st) {
+    await st.ready;
+    if (st.disposed || !st.term) return; // build failed or evicted mid-flight
+    const generation = ++st.connectGeneration;
+    st.reconnectAttempts = 0;
+    st.lastSentCols = 0;
+    st.lastSentRows = 0;
+    if (st.manualReconnectDisposable) { st.manualReconnectDisposable.dispose(); st.manualReconnectDisposable = null; }
+    const cols = st.term.cols;
+    const rows = st.term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Route WS through remote proxy if connected to another Den
-    const wsPath = getWsPath();
-    const url = `${proto}//${location.host}${wsPath}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(currentSession)}`;
+    const url = `${proto}//${location.host}${stWsPath(st)}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(st.name)}`;
 
     let retries = 0;
 
     const attemptConnect = () => {
-      // 世代チェック: 新しい doConnect() が呼ばれていたら中断
-      if (generation !== connectGeneration) return;
-      // 古い接続を破棄
-      if (ws) {
-        ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
-        ws.close();
-        ws = null;
+      // 世代チェック: 新しい接続が始まっていたら中断
+      if (generation !== st.connectGeneration) return;
+      if (st.ws) {
+        st.ws.onopen = st.ws.onclose = st.ws.onerror = st.ws.onmessage = null;
+        st.ws.close();
+        st.ws = null;
       }
 
-      ws = new WebSocket(url);
+      const ws = new WebSocket(url);
+      st.ws = ws;
       ws.binaryType = 'arraybuffer';
       let sessionEnded = false;
 
       // rAF batching: buffer incoming WS binary data and flush once per frame.
-      // null sentinel is used instead of 0 because requestAnimationFrame() is
-      // specified to return a positive integer, but null unambiguously means
-      // "no pending rAF".
+      // null sentinel means "no pending rAF" (rAF returns a positive integer).
       let writeBuf = [];
       let writeRaf = null;
 
+      const flushWrite = () => {
+        const chunks = writeBuf;
+        writeBuf = [];
+        st.term.write(chunks.length === 1 ? chunks[0] : mergeChunks(chunks));
+      };
+
       ws.onopen = () => {
         retries = 0;
-        if (pingTimer) clearInterval(pingTimer);
-        pingTimer = setInterval(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(WS_PING_MSG);
-          }
+        if (st.pingTimer) clearInterval(st.pingTimer);
+        st.pingTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(WS_PING_MSG);
         }, WS_PING_INTERVAL_MS);
-        term.focus();
-        fitAndRefresh();
+        if (active === st) { st.term.focus(); fitAndRefresh(); }
       };
 
       ws.onmessage = (event) => {
-        // Ignore messages from a connection that has been superseded by a
-        // session switch or reconnect (issue #114).
-        if (generation !== connectGeneration) return;
+        if (generation !== st.connectGeneration) return;
         if (typeof event.data === 'string') {
-          // Text branch carries only JSON control messages (e.g. session_ended);
-          // written immediately since batching is not needed here.
+          // Text branch carries only JSON control messages (e.g. session_ended).
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'session_ended') {
               sessionEnded = true;
-              term.writeln('\r\n\x1b[33mSession ended.\x1b[0m');
+              st.term.writeln('\r\n\x1b[33mSession ended.\x1b[0m');
               refreshSessionList();
               return;
             }
           } catch (_) {
             // テキストデータとして扱う
           }
-          term.write(event.data);
+          st.term.write(event.data);
         } else if (event.data instanceof ArrayBuffer) {
           writeBuf.push(new Uint8Array(event.data));
           if (writeRaf === null) {
-            // When the tab is hidden, rAF callbacks are suspended by the browser,
-            // which would cause writeBuf to grow without bound. Fall back to
-            // direct write so data is consumed immediately.
-            if (document.hidden) {
-              const chunks = writeBuf;
-              writeBuf = [];
-              if (chunks.length === 1) {
-                term.write(chunks[0]);
-              } else {
-                const merged = mergeChunks(chunks);
-                term.write(merged);
-              }
+            // rAF is throttled when the tab is hidden AND for background
+            // (non-active) sessions whose host is display:none. Write directly
+            // in those cases so the term keeps an accurate live scrollback.
+            if (document.hidden || active !== st) {
+              flushWrite();
             } else {
               writeRaf = requestAnimationFrame(() => {
                 writeRaf = null;
-                // The connection may have been superseded after this frame was
-                // scheduled; drop its buffered output instead of writing it to
-                // the now-reset shared terminal (issue #114).
-                if (generation !== connectGeneration) return;
-                const chunks = writeBuf;
-                writeBuf = [];
-                if (chunks.length === 1) {
-                  term.write(chunks[0]);
-                } else {
-                  const merged = mergeChunks(chunks);
-                  term.write(merged);
-                }
+                if (generation !== st.connectGeneration) return;
+                flushWrite();
               });
             }
           }
@@ -588,15 +591,12 @@ const DenTerminal = (() => {
       };
 
       ws.onclose = () => {
-        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-        // Cancel any pending rAF to prevent stale data from a closed connection
-        // being written to the terminal after reconnect.
+        if (st.pingTimer) { clearInterval(st.pingTimer); st.pingTimer = null; }
         if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
         writeBuf = [];
-        if (generation !== connectGeneration) return;
-        // session_ended 後の切断は再接続不要
+        if (generation !== st.connectGeneration) return;
         if (sessionEnded) return;
-        startReconnect(generation);
+        stStartReconnect(st, generation);
       };
 
       ws.onerror = (event) => {
@@ -605,8 +605,8 @@ const DenTerminal = (() => {
 
       // Safari: WebSocket が CONNECTING のまま stall する問題のリトライ
       setTimeout(() => {
-        if (generation !== connectGeneration) return;
-        if (ws && ws.readyState === WebSocket.CONNECTING && retries < 3) {
+        if (generation !== st.connectGeneration) return;
+        if (st.ws === ws && ws.readyState === WebSocket.CONNECTING && retries < 3) {
           retries++;
           attemptConnect();
         }
@@ -617,76 +617,208 @@ const DenTerminal = (() => {
     setTimeout(attemptConnect, 200);
   }
 
-  let reconnectAttempts = 0;
-  const MAX_RECONNECT = 3;
-  let manualReconnectDisposable = null;
-
-  function startReconnect(generation) {
-    reconnectAttempts++;
-    if (reconnectAttempts > MAX_RECONNECT) {
-      term.writeln('\r\n\x1b[31mConnection lost. Press Enter to reconnect.\x1b[0m');
-      manualReconnectDisposable = term.onData((data) => {
+  function stStartReconnect(st, generation) {
+    st.reconnectAttempts++;
+    if (st.reconnectAttempts > MAX_RECONNECT) {
+      st.term.writeln('\r\n\x1b[31mConnection lost. Press Enter to reconnect.\x1b[0m');
+      st.manualReconnectDisposable = st.term.onData((data) => {
         if (data === '\r' || data === '\n') {
-          if (manualReconnectDisposable) { manualReconnectDisposable.dispose(); manualReconnectDisposable = null; }
-          reconnectAttempts = 0;
-          term.writeln('\r\n\x1b[33mReconnecting...\x1b[0m');
-          doConnect();
+          if (st.manualReconnectDisposable) { st.manualReconnectDisposable.dispose(); st.manualReconnectDisposable = null; }
+          st.reconnectAttempts = 0;
+          st.term.writeln('\r\n\x1b[33mReconnecting...\x1b[0m');
+          stConnect(st);
         }
       });
       return;
     }
 
     let countdown = 1;
-    term.write(`\r\n\x1b[31mDisconnected.\x1b[0m Reconnecting in \x1b[33m${countdown}\x1b[0m...`);
+    st.term.write(`\r\n\x1b[31mDisconnected.\x1b[0m Reconnecting in \x1b[33m${countdown}\x1b[0m...`);
     const timer = setInterval(() => {
-      if (generation !== connectGeneration) { clearInterval(timer); return; }
+      if (generation !== st.connectGeneration) { clearInterval(timer); return; }
       countdown--;
       if (countdown > 0) {
-        term.write(`\x1b[33m${countdown}\x1b[0m...`);
+        st.term.write(`\x1b[33m${countdown}\x1b[0m...`);
       } else {
         clearInterval(timer);
-        term.writeln('');
-        if (generation === connectGeneration) doConnect();
+        st.term.writeln('');
+        if (generation === st.connectGeneration) stConnect(st);
       }
     }, 1000);
+  }
+
+  function stDisconnect(st) {
+    st.connectGeneration++;
+    if (st.pingTimer) { clearInterval(st.pingTimer); st.pingTimer = null; }
+    if (st.manualReconnectDisposable) { st.manualReconnectDisposable.dispose(); st.manualReconnectDisposable = null; }
+    if (st.ws) {
+      st.ws.onopen = st.ws.onclose = st.ws.onerror = st.ws.onmessage = null;
+      st.ws.close();
+      st.ws = null;
+    }
+  }
+
+  function stSendResize(st) {
+    if (st.ws && st.ws.readyState === WebSocket.OPEN && st.term) {
+      const { cols, rows } = st.term;
+      if (cols === 0 || rows === 0) return;
+      if (cols === st.lastSentCols && rows === st.lastSentRows) return;
+      st.lastSentCols = cols;
+      st.lastSentRows = rows;
+      st.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    }
+  }
+
+  function stSendInput(st, data) {
+    if (st.ws && st.ws.readyState === WebSocket.OPEN) {
+      st.ws.send(textEncoder.encode(data));
+    }
+  }
+
+  function stDispose(st) {
+    st.disposed = true; // signal an in-flight buildTerm to abort before t.open
+    stDisconnect(st);
+    try { st.term?.dispose(); } catch (_) { /* ignore */ }
+    st.host?.remove();
+  }
+
+  // ── LRU retention (PoC: K=2) ──
+
+  function touchLru(id) {
+    const i = lruOrder.indexOf(id);
+    if (i !== -1) lruOrder.splice(i, 1);
+    lruOrder.push(id); // most-recent last
+  }
+
+  function forgetLru(id) {
+    const i = lruOrder.indexOf(id);
+    if (i !== -1) lruOrder.splice(i, 1);
+  }
+
+  /** Dispose and forget a retained session term. */
+  function removeSessionTerm(id) {
+    const st = sessionTerms.get(id);
+    if (st) stDispose(st);
+    sessionTerms.delete(id);
+    forgetLru(id);
+  }
+
+  /** Evict least-recently-used terms beyond MAX_RETAINED (never the active). */
+  function evictLru() {
+    while (sessionTerms.size > MAX_RETAINED) {
+      let victimId = null;
+      for (const id of lruOrder) {
+        if (!active || id !== active.id) { victimId = id; break; }
+      }
+      if (victimId == null) break;
+      removeSessionTerm(victimId);
+    }
+  }
+
+  /** Show a retained session term: unhide, re-apply settings, fit, focus. */
+  async function showSessionTerm(st) {
+    await st.ready;
+    if (st.disposed || !st.term) return; // build failed or evicted mid-flight
+    st.host.hidden = false;
+    const t = st.term;
+    // Re-apply settings that may have changed while this term was hidden.
+    t.options.theme = getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane'));
+    t.options.fontSize = DenSettings.get('font_size') ?? 15;
+    t.options.scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
+    resetFitState();
+    fitAndRefresh();
+    t.focus();
+  }
+
+  /**
+   * Make (name, remote) the active session. Creates + connects the SessionTerm
+   * if not retained, otherwise just shows it (no reset, scrollback preserved).
+   */
+  async function activateSession(name, remote) {
+    remote = remote || null;
+    const id = sessionId(name, remote);
+    const seq = ++activateSeq;
+    currentSession = name;
+    currentRemote = remote;
+
+    let st = sessionTerms.get(id);
+    if (!st) {
+      st = createSessionTerm(name, remote);
+      sessionTerms.set(id, st);
+      stConnect(st);
+    }
+    touchLru(id);
+
+    await st.ready;
+    if (seq !== activateSeq) return; // superseded by a newer activation
+    if (st.disposed || !st.term) return; // build failed (e.g. adapter load error)
+
+    if (active && active !== st) active.host.hidden = true;
+    active = st;
+    term = st.term;
+    fitAddon = st.fitAddon;
+    await showSessionTerm(st);
+    if (seq !== activateSeq) return;
+    evictLru();
+  }
+
+  function connect(sessionName, remoteName) {
+    const name = sessionName || null;
+    const remote = remoteName || null;
+    if (!name) {
+      enterNullState();
+      return;
+    }
+    hideEmptyState();
+    const displayName = remote ? `${getRemoteLabel(remote)}:${name}` : name;
+    DenSettings.setTitleTab('terminal', displayName);
+    activateSession(name, remote);
+  }
+
+  /** Transition to sessionless (null) state */
+  function enterNullState() {
+    currentSession = null;
+    currentRemote = null;
+    DenSettings.setOscTitle('');
+    DenSettings.setTitleTab('terminal', null);
+    // Abandon (dispose) the active session's term; other retained sessions
+    // keep their live scrollback in case we switch back to them.
+    if (active) {
+      removeSessionTerm(active.id);
+      active = null;
+      term = null;
+      fitAddon = null;
+    }
+    showEmptyState();
+    window.DenApp?.updateSessionHash(null);
+  }
+
+  /** Disconnect the active session's WS (kept for API compatibility). */
+  function disconnect() {
+    if (active) stDisconnect(active);
   }
 
   /** セッションを切り替え */
   function switchSession(name, remote) {
     remote = remote || null;
     if (!name || (name === currentSession && remote === currentRemote)) return;
-    currentSession = name;
-    currentRemote = remote;
     hideEmptyState();
     DenSettings.setOscTitle('');
     const displayName = remote ? `${getRemoteLabel(remote)}:${name}` : name;
     DenSettings.setTitleTab('terminal', displayName);
     scheduleSessionTabsLayout({ scrollActive: true });
-    // Tear down the previous connection synchronously before resetting the
-    // shared terminal. Without this the old WebSocket stays alive during the
-    // reconnect window and keeps writing the previous session's output into the
-    // freshly reset term, interleaving it with the new session (issue #114).
-    disconnect();
-    term.reset();
-    doConnect();
+    // No reset / no full replay: the retained term keeps its scrollback (#115),
+    // and there is no shared term for a stale connection to bleed into (#114).
+    activateSession(name, remote);
     window.DenApp?.updateSessionHash(remote ? `${remote}:${name}` : name);
   }
 
   function sendResize() {
-    if (ws && ws.readyState === WebSocket.OPEN && term) {
-      const { cols, rows } = term;
-      if (cols === 0 || rows === 0) return;
-      if (cols === lastSentCols && rows === lastSentRows) return;
-      lastSentCols = cols;
-      lastSentRows = rows;
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-    }
+    if (active) stSendResize(active);
   }
 
   function sendInput(data) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(textEncoder.encode(data));
-    }
+    if (active) stSendInput(active, data);
   }
 
   // --- Select Mode ---
@@ -1102,6 +1234,9 @@ const DenTerminal = (() => {
           }
           if (name === currentSession && remote === currentRemote) {
             enterNullState();
+          } else {
+            // Dispose the killed session's retained term if kept in the background.
+            removeSessionTerm(sessionId(name, remote));
           }
           lastSessionsKey = ''; // Force refresh
           await refreshSessionList();
@@ -1282,8 +1417,8 @@ const DenTerminal = (() => {
     const redrawBtn = document.getElementById('session-redraw-btn');
     if (redrawBtn) {
       redrawBtn.addEventListener('click', () => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'nudge' }));
+        if (active?.ws && active.ws.readyState === WebSocket.OPEN) {
+          active.ws.send(JSON.stringify({ type: 'nudge' }));
         }
       });
     }
@@ -1477,10 +1612,12 @@ const DenTerminal = (() => {
     return currentRemote;
   }
 
-  // Update xterm theme when Den theme changes
+  // Update xterm theme when Den theme changes — apply to ALL retained terms.
   document.addEventListener('den:theme-changed', () => {
-    if (!term) return;
-    term.options.theme = getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane'));
+    const theme = getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane'));
+    for (const st of sessionTerms.values()) {
+      if (st.term) st.term.options.theme = theme;
+    }
   });
 
   return {

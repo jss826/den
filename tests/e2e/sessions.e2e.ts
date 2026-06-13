@@ -1,5 +1,25 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { login, createSession } from './helpers';
+
+// Lexical global exposed by the terminal module (not on window — see CLAUDE.md).
+declare const DenTerminal: {
+  getTerminal(): { buffer: { active: { length: number; getLine(i: number): { translateToString(trim: boolean): string } | undefined } }; write(d: string, cb?: () => void): void } | null;
+  getCurrentSession(): string | null;
+};
+
+/** True if the ACTIVE terminal's buffer (scrollback included) contains `marker`. */
+async function activeTermContains(page: Page, marker: string): Promise<boolean> {
+  return page.evaluate((m) => {
+    const t = DenTerminal.getTerminal();
+    if (!t) return false;
+    const buf = t.buffer.active;
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line && line.translateToString(true).includes(m)) return true;
+    }
+    return false;
+  }, marker);
+}
 
 test.describe('Session Management', () => {
   test('session bar and + button are visible after login', async ({ page }) => {
@@ -69,6 +89,43 @@ test.describe('Session Management', () => {
     await page.locator(`.session-tab[data-session="${nameA}"]`).click();
     await expect(page.locator(`.session-tab[data-session="${nameA}"]`)).toHaveClass(/active/);
     await expect(page.locator(`.session-tab[data-session="${nameB}"]`)).not.toHaveClass(/active/);
+  });
+
+  test('scrollback is preserved when switching sessions (#115)', async ({ page }) => {
+    await login(page);
+    const ts = Date.now();
+    const nameA = `pa-${ts}`;
+    const nameB = `pb-${ts}`;
+    await createSession(page, nameA);
+    await createSession(page, nameB);
+
+    // Switch to A and wait until it is the active terminal.
+    await page.locator(`.session-tab[data-session="${nameA}"]`).click();
+    await expect(page.locator(`.session-tab[data-session="${nameA}"]`)).toHaveClass(/active/);
+    // With per-session retention each session has its OWN host; only the active
+    // host is shown. Exactly one visible .xterm must be present.
+    await expect(page.locator('.term-session-host:not([hidden]) .xterm')).toBeVisible({ timeout: 10_000 });
+    await page.waitForFunction((n) => DenTerminal.getCurrentSession() === n && !!DenTerminal.getTerminal(), nameA);
+
+    // Write a client-side marker into A's buffer (not server scrollback). The old
+    // shared-term implementation reset the term on switch, which would drop it.
+    const marker = `MARKER-${ts}`;
+    await page.evaluate((m) => new Promise<void>((resolve) => {
+      DenTerminal.getTerminal()!.write(`${m}\r\n`, () => resolve());
+    }), marker);
+    expect(await activeTermContains(page, marker)).toBe(true);
+
+    // Switch away to B, then back to A.
+    await page.locator(`.session-tab[data-session="${nameB}"]`).click();
+    await expect(page.locator(`.session-tab[data-session="${nameB}"]`)).toHaveClass(/active/);
+    await page.waitForFunction((n) => DenTerminal.getCurrentSession() === n, nameB);
+    await page.locator(`.session-tab[data-session="${nameA}"]`).click();
+    await expect(page.locator(`.session-tab[data-session="${nameA}"]`)).toHaveClass(/active/);
+    await page.waitForFunction((n) => DenTerminal.getCurrentSession() === n && !!DenTerminal.getTerminal(), nameA);
+
+    // Per-session term retention keeps A's client-written scrollback across the
+    // round-trip (#115). With the old reset-on-switch, the marker would be gone.
+    await expect.poll(() => activeTermContains(page, marker), { timeout: 5000 }).toBe(true);
   });
 
   test('rename session via double-click', async ({ page }) => {

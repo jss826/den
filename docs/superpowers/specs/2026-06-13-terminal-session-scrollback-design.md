@@ -72,7 +72,38 @@
 
 ## 6. 次アクション
 
-- [ ] この方向性（案2 + PoC 先行）をユーザー承認
-- [ ] PoC ブランチで2セッション保持を実装し iPad mini 計測
+- [x] この方向性（案2 + PoC 先行）をユーザー承認
+- [x] PoC ブランチで2セッション保持を実装（`feat/115-multiterm-poc`）— デスクトップ検証済み
+- [ ] **iPad mini 実機で restty/wterm の WASM/canvas 初期化コスト・メモリ・切替体感を計測**（PoC のハンドオフ先）
 - [ ] 計測結果で K と WS モデルを確定 → 本実装 or サブ Issue 分割
 - [ ] （任意・独立）案1 replay bump の可否判断
+
+## 7. PoC 実装結果（2026-06-13, `feat/115-multiterm-poc`）
+
+案2 の最小形（K=2 固定・WS モデル(a)）を `frontend/js/terminal.js` + `frontend/css/style.css` に実装。
+
+### 採用した構造
+
+- **SessionTerm**（`createSessionTerm`）: セッション毎に term + fitAddon + WS + generation/ping/reconnect を保持。`#terminal-container` 配下の `.term-session-host`（`position:absolute; inset:0`、非アクティブは `[hidden]`）に `term.open()`。
+- `term`/`fitAddon` は **active のミラー**（fit / select mode / context menu / focus / theme / `getTerminal()` は単一 `term` 参照のまま動作）。接続状態は per-SessionTerm に移動。
+- **切替 = `activateSession()`**: `active.host.hidden=true` → 新 host を show + fit + focus。**`term.reset()` も full replay もしない** → client scrollback 保持（#115 根治）。共有 term が無いため #114 系の混在も構造的に排除。
+- **LRU 上限 `MAX_RETAINED=2`**: 溢れたら `stDispose`（WS close + `term.dispose()` + host 除去）。再表示時は replay 復元（現状デグレード）。active は決して evict しない。
+- **WS モデル(a)**: 保持中セッションは背景でも WS 維持。背景 term への書き込みは rAF を介さず直接 flush（hidden 要素の rAF スロットル回避）。背景 term は入力を送らない（`active!==st` ガード）。
+- 設定変更の追従: theme 変更は全保持 term に即時適用、font/scrollback は `showSessionTerm()` で表示時に再適用。
+
+### デスクトップ検証（全 PASS）
+
+- cargo fmt / clippy(-D warnings) / test（71+40+5）: PASS
+- ESLint（0 errors）/ frontend unit（89/89）: PASS
+- e2e terminal/sessions/filer-ui: 25 passed / 2 skipped
+- **新規 e2e `scrollback is preserved when switching sessions (#115)`**（`tests/e2e/sessions.e2e.ts`）: A の term にクライアント側マーカーを書き込み → B へ切替 → A へ戻ると **xterm バッファにマーカーが残存**することを assert（旧実装の reset-on-switch では消える）。PASS。
+  - 副次的に `#terminal-container .xterm` が 2 要素に解決する（A/B の term が DOM 共存）ことを確認 = PoC の保持構造が実際に効いている証跡。
+
+### iPad mini 計測で潰す未確定（§5 と同じ、PoC で土台は用意済み）
+
+- restty/wterm を **2インスタンス同時生成**した時の WASM/canvas メモリ・初期化時間（iPad mini 実機）。
+- 背景セッション WS 維持の CPU（高頻度出力セッションを hidden 保持した場合）。
+- LRU 破棄→再表示の replay 復元が現状と同等か。
+- `[hidden]` host show/hide と各 adapter の relayout/refresh の相性（#116 と重複領域）。
+
+> 注: デスクトップ e2e は **xterm レンダラーのみ**。restty/wterm 固有の初期描画・canvas コストは iPad mini 実機計測が本番（design 方針どおり PoC のハンドオフ先）。
