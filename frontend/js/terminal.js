@@ -533,6 +533,9 @@ const DenTerminal = (() => {
       };
 
       ws.onmessage = (event) => {
+        // Ignore messages from a connection that has been superseded by a
+        // session switch or reconnect (issue #114).
+        if (generation !== connectGeneration) return;
         if (typeof event.data === 'string') {
           // Text branch carries only JSON control messages (e.g. session_ended);
           // written immediately since batching is not needed here.
@@ -565,9 +568,13 @@ const DenTerminal = (() => {
               }
             } else {
               writeRaf = requestAnimationFrame(() => {
+                writeRaf = null;
+                // The connection may have been superseded after this frame was
+                // scheduled; drop its buffered output instead of writing it to
+                // the now-reset shared terminal (issue #114).
+                if (generation !== connectGeneration) return;
                 const chunks = writeBuf;
                 writeBuf = [];
-                writeRaf = null;
                 if (chunks.length === 1) {
                   term.write(chunks[0]);
                 } else {
@@ -655,6 +662,11 @@ const DenTerminal = (() => {
     const displayName = remote ? `${getRemoteLabel(remote)}:${name}` : name;
     DenSettings.setTitleTab('terminal', displayName);
     scheduleSessionTabsLayout({ scrollActive: true });
+    // Tear down the previous connection synchronously before resetting the
+    // shared terminal. Without this the old WebSocket stays alive during the
+    // reconnect window and keeps writing the previous session's output into the
+    // freshly reset term, interleaving it with the new session (issue #114).
+    disconnect();
     term.reset();
     doConnect();
     window.DenApp?.updateSessionHash(remote ? `${remote}:${name}` : name);
