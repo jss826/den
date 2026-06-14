@@ -7,7 +7,7 @@ import { WTerm } from './wterm.bundle.js';
 
 // Single source of truth for cache-busting the vendored bundle, CSS, and the
 // adapter's own dynamic import URL in terminal-adapter.js.
-const WTERM_VERSION = '18';
+const WTERM_VERSION = '19';
 
 // _doRelayout retry tuning. Init can land before `inner` has a non-zero box
 // (e.g. tab not yet visible) or before fonts have settled enough for the probe
@@ -243,6 +243,24 @@ class DenWtermTerminal {
       if (handled) { e.preventDefault(); e.stopImmediatePropagation(); }
     };
     ta.addEventListener('keydown', this._onScrollKey, true);
+
+    // IME composition guard (iOS soft keyboard). WTerm gates keydown/input on
+    // its own `composing` flag, set by the textarea's `compositionstart`. iOS
+    // soft keyboards can deliver keydown (keyCode 229) / input before
+    // `compositionstart` lands, so that flag is still false and the in-progress
+    // romaji leaks straight into the PTY — visible as stray latin chars while
+    // converting Japanese. WTerm registered its textarea listeners first, so a
+    // textarea-level listener of ours would run *after* them; intercept in the
+    // document capture phase instead (runs before any target listener) and drop
+    // the event so only WTerm's `compositionend` (the final string) is sent. We
+    // never preventDefault — the IME must keep composing in the textarea.
+    this._onCompositionGuard = (e) => {
+      if (e.target === this._externalTextarea && (e.isComposing || e.keyCode === 229)) {
+        e.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener('keydown', this._onCompositionGuard, true);
+    document.addEventListener('input', this._onCompositionGuard, true);
   }
 
   _setupParentObserver(parent) {
@@ -553,6 +571,11 @@ class DenWtermTerminal {
     this._titleListeners.clear();
     this._customKeyHandler = null;
     try { this._parentObserver?.disconnect(); } catch (_) { /* ignore */ }
+    if (this._onCompositionGuard) {
+      document.removeEventListener('keydown', this._onCompositionGuard, true);
+      document.removeEventListener('input', this._onCompositionGuard, true);
+      this._onCompositionGuard = null;
+    }
     try {
       const ta = this._externalTextarea;
       if (ta) {
