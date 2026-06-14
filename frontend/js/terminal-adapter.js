@@ -51,7 +51,7 @@ const TerminalAdapter = (() => {
 
   async function loadWterm() {
     try {
-      const { DenWtermTerminal, NoopFitAddon } = await import('/vendor/wterm/wterm-xterm-adapter.js?v=17');
+      const { DenWtermTerminal, NoopFitAddon } = await import('/vendor/wterm/wterm-xterm-adapter.js?v=18');
       return {
         TerminalClass: DenWtermTerminal,
         FitAddonClass: NoopFitAddon,

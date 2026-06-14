@@ -7,7 +7,7 @@ import { WTerm } from './wterm.bundle.js';
 
 // Single source of truth for cache-busting the vendored bundle, CSS, and the
 // adapter's own dynamic import URL in terminal-adapter.js.
-const WTERM_VERSION = '17';
+const WTERM_VERSION = '18';
 
 // _doRelayout retry tuning. Init can land before `inner` has a non-zero box
 // (e.g. tab not yet visible) or before fonts have settled enough for the probe
@@ -118,7 +118,13 @@ class DenWtermTerminal {
     ensureCss();
     this._element = parent;
 
-    if (!parent.style.position || parent.style.position === 'static') {
+    // Only establish a positioning context when the parent has none. Check the
+    // COMPUTED position (not just the inline style) so we respect a parent
+    // already positioned via CSS — e.g. Den's
+    // `.term-session-host { position: absolute; inset: 0 }`. Forcing inline
+    // `position: relative` there overrides that absolute anchoring, collapsing
+    // the host to zero height and clamping wterm to ~1 row (#107).
+    if (getComputedStyle(parent).position === 'static') {
       parent.style.position = 'relative';
     }
     const inner = document.createElement('div');
