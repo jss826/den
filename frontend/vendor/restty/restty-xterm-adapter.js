@@ -407,7 +407,21 @@ class DenResttyTerminal {
   getSelection() { return ''; }
   select(_col, _row, _length) {}
   clearSelection() {}
-  refresh(_start, _end) {}
+  refresh(_start, _end) {
+    // restty has no pure repaint API — its GPU renderer is rAF-driven and has no
+    // xterm-style row-range refresh. Den calls term.refresh() to force a repaint
+    // after fit / WS reconnect / tab switch (the same lever that fixes Safari's
+    // "canvas not painted" cases on the xterm renderer). Without an implementation
+    // those repaint requests were silently dropped on restty, so the last frame —
+    // notably the bottom row of a full-screen TUI like Claude Code, which redraws
+    // via DEC synchronized output — could stay stale on iPad until the next input.
+    // Re-issuing a resize at the current dimensions resets the canvas, re-syncs the
+    // grid (updateGrid) and marks the renderer dirty (markNeedsRender), so the next
+    // frame repaints every row.
+    if (this.cols > 0 && this.rows > 0) {
+      try { this._restty?.resize(this.cols, this.rows); } catch (_) {}
+    }
+  }
   setOption(_key, _value) {}
   getOption(key) {
     if (key === 'cols') return this.cols;
