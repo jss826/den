@@ -85,10 +85,16 @@ pub fn ensure_mux_layouts(
     data_dir: &std::path::Path,
     shell: &str,
 ) -> crate::pty::backend::MuxConfig {
-    // config 値（二重引用符内）へ安全に埋め込むためのエスケープ。
-    // KDL / tmux conf いずれも `\` と `"` を打ち消せば壊れない
-    // （shell が Windows のフルパスでバックスラッシュを含むケースに備える）。
-    let shell_escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
+    // config 値（二重引用符内）へ安全に埋め込む。
+    // shell は DEN_SHELL（operator 制御）由来だが、改行・制御文字が混じると
+    // クォートを抜けて KDL/tmux のディレクティブを注入し得るため、まず制御文字を
+    // 除去し、その上で `\` と `"` を打ち消す（Windows フルパスのバックスラッシュ対策）。
+    let shell_escaped = shell
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
 
     fn write_embedded(data_dir: &std::path::Path, embedded: &str, out_name: &str) -> String {
         write_rendered(data_dir, embedded, out_name, &|s| s.to_string())
@@ -215,6 +221,19 @@ mod mux_layout_tests {
         let mux = ensure_mux_layouts(&dir, r"C:\Win\pwsh.exe");
         let cfg_body = std::fs::read_to_string(&mux.zellij_config).expect("cfg readable");
         assert!(cfg_body.contains(r#"default_shell "C:\\Win\\pwsh.exe""#));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_mux_layouts_strips_control_chars_from_shell() {
+        // 改行/制御文字は除去され、クォートを抜けたディレクティブ注入を防ぐ
+        let dir = std::env::temp_dir().join("den-mux-layout-ctrl-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let mux = ensure_mux_layouts(&dir, "sh\"\nkeybinds { x }\npwsh");
+        let cfg_body = std::fs::read_to_string(&mux.zellij_config).expect("cfg readable");
+        // 制御文字（改行）が落ちて 1 行・1 ディレクティブに収まる
+        assert!(cfg_body.contains(r#"default_shell "sh\"keybinds { x }pwsh""#));
+        assert!(!cfg_body.contains("\nkeybinds { x }"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
