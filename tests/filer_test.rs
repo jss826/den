@@ -40,6 +40,8 @@ fn test_app() -> axum::Router {
         SleepPreventionMode::Off,
         30,
         None,
+        String::new(),
+        String::new(),
     );
     den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None).0
 }
@@ -58,6 +60,8 @@ fn test_app_with_dir() -> (axum::Router, tempfile::TempDir) {
         SleepPreventionMode::Off,
         30,
         None,
+        String::new(),
+        String::new(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);

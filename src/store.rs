@@ -114,6 +114,25 @@ pub struct SessionRecord {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<crate::pty::registry::SshSessionConfig>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_backend_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub backend: Option<crate::pty::backend::SessionBackend>,
+}
+
+/// Tolerate unknown backend strings (e.g. a record written by a newer Den, then
+/// loaded by an older one): map an unrecognized value to `None` instead of
+/// failing the whole `sessions.json` parse and dropping every saved session.
+fn deserialize_backend_lenient<'de, D>(
+    de: D,
+) -> Result<Option<crate::pty::backend::SessionBackend>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(de)?;
+    Ok(value.and_then(|v| crate::pty::backend::SessionBackend::deserialize(v).ok()))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +223,9 @@ pub struct Settings {
     pub terminal_renderer: Option<String>,
     #[serde(default)]
     pub restty_font: Option<String>,
+    /// Default session backend for new local sessions: "shell" | "zellij" | "tmux"
+    #[serde(default)]
+    pub default_backend: Option<String>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -243,6 +265,7 @@ impl Default for Settings {
             theme_files: None,
             terminal_renderer: None,
             restty_font: None,
+            default_backend: None,
             version: String::new(),
             hostname: String::new(),
         }
@@ -741,6 +764,55 @@ mod tests {
         assert_eq!(settings.font_size, 14);
         assert_eq!(settings.theme, "dark");
         assert_eq!(settings.terminal_scrollback, 1000);
+    }
+
+    #[test]
+    fn session_record_backend_defaults_to_none_when_absent() {
+        // backend キーが無い旧 JSON でもデシリアライズできる（後方互換）
+        let json = r#"{"name":"work"}"#;
+        let rec: SessionRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.name, "work");
+        assert!(rec.backend.is_none());
+    }
+
+    #[test]
+    fn session_record_backend_roundtrips() {
+        let rec = SessionRecord {
+            name: "work".to_string(),
+            ssh: None,
+            backend: Some(crate::pty::backend::SessionBackend::Zellij),
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        let back: SessionRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.backend,
+            Some(crate::pty::backend::SessionBackend::Zellij)
+        );
+    }
+
+    #[test]
+    fn session_record_unknown_backend_maps_to_none() {
+        // 未知の backend 文字列（新しい Den が書き、古い Den が読む等）でも
+        // レコード全体は壊れず backend だけ None になる
+        let json = r#"{"name":"work","backend":"screen"}"#;
+        let rec: SessionRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(rec.name, "work");
+        assert!(rec.backend.is_none());
+    }
+
+    #[test]
+    fn load_sessions_array_survives_one_unknown_backend() {
+        // 1 レコードの backend が未知でも、配列全体が空に落ちない
+        let (store, _tmp) = temp_store();
+        let json = r#"[{"name":"a","backend":"zellij"},{"name":"b","backend":"screen"}]"#;
+        std::fs::write(store.root.join("sessions.json"), json).unwrap();
+        let recs = store.load_sessions();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(
+            recs[0].backend,
+            Some(crate::pty::backend::SessionBackend::Zellij)
+        );
+        assert!(recs[1].backend.is_none());
     }
 
     #[test]

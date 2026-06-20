@@ -6,6 +6,7 @@ pub mod clipboard_api;
 pub mod clipboard_monitor;
 pub mod config;
 pub mod filer;
+pub mod multiplexer_api;
 pub mod pty;
 pub mod remote;
 pub mod sftp;
@@ -145,6 +146,8 @@ pub fn create_app_with_secret(
             "/api/terminal/sessions/{name}",
             put(ws::rename_session).delete(ws::destroy_session),
         )
+        // Multiplexer (tmux/zellij) availability + session list
+        .route("/api/multiplexer/status", get(multiplexer_api::status))
         // Filer API
         .route("/api/filer/list", get(filer::api::list))
         .route("/api/filer/read", get(filer::api::read))

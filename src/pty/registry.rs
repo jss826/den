@@ -30,6 +30,8 @@ pub enum RegistryError {
     InvalidName(String),
     /// セッションが既に存在する
     AlreadyExists(String),
+    /// 同名セッションが別 backend で既に存在する（attach 不可）
+    BackendMismatch(String),
     /// セッションが見つからない
     NotFound(String),
     /// セッションが終了済み
@@ -45,6 +47,12 @@ impl fmt::Display for RegistryError {
         match self {
             Self::InvalidName(name) => write!(f, "Invalid session name: {name}"),
             Self::AlreadyExists(name) => write!(f, "Session already exists: {name}"),
+            Self::BackendMismatch(name) => {
+                write!(
+                    f,
+                    "A session named '{name}' already exists with a different backend"
+                )
+            }
             Self::NotFound(name) => write!(f, "Session not found: {name}"),
             Self::SessionDead(name) => write!(f, "Session is dead: {name}"),
             Self::SpawnFailed(msg) => write!(f, "Spawn failed: {msg}"),
@@ -221,6 +229,10 @@ pub struct SessionRegistry {
     instance_id: String,
     /// Store for session persistence
     store: Option<crate::store::Store>,
+    /// zellij bare layout path (empty if materialization failed → no -l flag)
+    zellij_layout: String,
+    /// tmux conf path (empty if materialization failed → no -f flag)
+    tmux_conf: String,
 }
 
 /// 1 つの名前付き PTY セッション
@@ -239,6 +251,8 @@ pub struct SharedSession {
     last_activity: Arc<AtomicU64>,
     /// SSH connection config
     pub ssh_config: Option<SshSessionConfig>,
+    /// Session launch backend (Shell/Zellij/Tmux). None = plain shell/ssh.
+    pub backend: Option<crate::pty::backend::SessionBackend>,
 }
 
 pub struct SessionInner {
@@ -316,6 +330,22 @@ fn is_valid_session_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// 既存セッションと要求 backend を照合してエラーを決める。
+/// backend が一致すれば `AlreadyExists`（合流＝attach として 200 扱い）、
+/// 別 backend なら `BackendMismatch`（別種同名への誤 attach を防ぐ）。
+/// 既存の `backend` が `None`（素のシェル/ssh）は Shell とみなす。
+fn existing_conflict(
+    existing: &SharedSession,
+    name: &str,
+    requested: crate::pty::backend::SessionBackend,
+) -> RegistryError {
+    if existing.backend.unwrap_or_default() == requested {
+        RegistryError::AlreadyExists(name.to_string())
+    } else {
+        RegistryError::BackendMismatch(name.to_string())
+    }
+}
+
 /// 現在時刻を Unix epoch 秒で返す
 fn now_epoch_secs() -> u64 {
     std::time::SystemTime::now()
@@ -342,6 +372,7 @@ impl SessionRegistry {
         &self,
         name: &str,
         ssh: Option<SshSessionConfig>,
+        backend: Option<crate::pty::backend::SessionBackend>,
     ) -> Result<(), String> {
         let Some(ref store) = self.store else {
             return Ok(());
@@ -352,8 +383,9 @@ impl SessionRegistry {
             let mut records = store.load_sessions();
             if let Some(record) = records.iter_mut().find(|record| record.name == name) {
                 record.ssh = ssh;
+                record.backend = backend;
             } else {
-                records.push(crate::store::SessionRecord { name, ssh });
+                records.push(crate::store::SessionRecord { name, ssh, backend });
             }
             store.save_sessions(&records)
         })
@@ -406,6 +438,8 @@ impl SessionRegistry {
         sleep_mode: SleepPreventionMode,
         sleep_timeout: u16,
         store: Option<crate::store::Store>,
+        zellij_layout: String,
+        tmux_conf: String,
     ) -> Arc<Self> {
         let last_activity = Arc::new(AtomicU64::new(now_epoch_secs()));
         let sleep_config = Arc::new(std::sync::Mutex::new(SleepConfig {
@@ -432,6 +466,8 @@ impl SessionRegistry {
             last_activity,
             instance_id,
             store,
+            zellij_layout,
+            tmux_conf,
         });
 
         // always モードなら即座に ON
@@ -504,6 +540,7 @@ impl SessionRegistry {
         #[cfg(windows)] job: Option<super::job::PtyJobObject>,
         last_activity: Arc<AtomicU64>,
         ssh_config: Option<SshSessionConfig>,
+        backend: Option<crate::pty::backend::SessionBackend>,
     ) -> (
         Arc<SharedSession>,
         broadcast::Receiver<Arc<OutputChunk>>,
@@ -535,6 +572,7 @@ impl SessionRegistry {
             output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
             last_activity,
             ssh_config,
+            backend,
             inner: Mutex::new(SessionInner {
                 pty_writer,
                 resize_tx: Some(resize_tx),
@@ -664,7 +702,7 @@ impl SessionRegistry {
         let pty = tokio::task::spawn_blocking({
             let shell = self.shell.clone();
             let instance_id = self.instance_id.clone();
-            move || PtyManager::spawn(&shell, cols, rows, &instance_id)
+            move || PtyManager::spawn(&shell, &[], cols, rows, &instance_id)
         })
         .await
         .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?
@@ -680,6 +718,7 @@ impl SessionRegistry {
             pty.job,
             Arc::clone(&self.last_activity),
             ssh_config,
+            None,
         );
         session.inner.lock().await.monitor_handle = Some(monitor_handle);
 
@@ -724,9 +763,113 @@ impl SessionRegistry {
         self.evaluate_sleep_prevention(session_count);
         tracing::info!("Session created: {name}");
         if let Err(e) = self
-            .upsert_saved_record(name, session.ssh_config.clone())
+            .upsert_saved_record(name, session.ssh_config.clone(), session.backend)
             .await
         {
+            tracing::warn!("Failed to persist saved session '{name}': {e}");
+        }
+        Ok((session, first_rx))
+    }
+
+    /// backend（Shell/Zellij/Tmux）を指定してセッションを作成する。
+    /// multiplexer backend は attach-or-create コマンドを spawn するため、
+    /// mux セッションが既存なら合流（Den 再起動跨ぎの永続化）。
+    /// ssh パスは無改変。ssh は `create_with_ssh` を使う。
+    pub async fn create_with_backend(
+        &self,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        backend: crate::pty::backend::SessionBackend,
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Arc<OutputChunk>>), RegistryError> {
+        if !is_valid_session_name(name) {
+            return Err(RegistryError::InvalidName(name.to_string()));
+        }
+
+        // 高速チェック（不要な PTY spawn を回避）
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(existing) = sessions.get(name) {
+                return Err(existing_conflict(existing, name, backend));
+            }
+            if sessions.len() >= MAX_SESSIONS {
+                return Err(RegistryError::LimitExceeded);
+            }
+        }
+
+        // layout/conf パスが空（書き出し失敗）のときは build_launch_command 側で
+        // layout フラグを付けずに素の attach コマンドを返す。
+        let (program, args) = crate::pty::backend::build_launch_command(
+            backend,
+            &self.shell,
+            name,
+            &self.zellij_layout,
+            &self.tmux_conf,
+        );
+
+        // PTY を spawn（blocking）
+        let pty = tokio::task::spawn_blocking({
+            let instance_id = self.instance_id.clone();
+            move || PtyManager::spawn(&program, &args, cols, rows, &instance_id)
+        })
+        .await
+        .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?
+        .map_err(|e| RegistryError::SpawnFailed(e.to_string()))?;
+
+        let (session, first_rx, monitor_handle) = Self::setup_pty_session(
+            name,
+            pty.reader,
+            pty.writer,
+            pty.master,
+            pty.child,
+            #[cfg(windows)]
+            pty.job,
+            Arc::clone(&self.last_activity),
+            None,
+            Some(backend),
+        );
+        session.inner.lock().await.monitor_handle = Some(monitor_handle);
+
+        // 権威的な挿入: write lock で再チェック（TOCTOU 防止、create_with_ssh と同一）
+        let session_count = {
+            let mut sessions = self.sessions.write().await;
+            let race_err = if let Some(existing) = sessions.get(name) {
+                Some(existing_conflict(existing, name, backend))
+            } else if sessions.len() >= MAX_SESSIONS {
+                Some(RegistryError::LimitExceeded)
+            } else {
+                None
+            };
+            if let Some(err) = race_err {
+                session.alive.store(false, Ordering::Release);
+                let (resize_handle, monitor_handle) = {
+                    let mut inner = session.inner.lock().await;
+                    if let Some(mut child) = inner.child.take() {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        })
+                        .await;
+                    }
+                    inner.pty_writer = Box::new(std::io::sink());
+                    inner.resize_tx.take();
+                    (inner.resize_handle.take(), inner.monitor_handle.take())
+                };
+                if let Some(handle) = monitor_handle {
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
+                }
+                if let Some(handle) = resize_handle {
+                    let _ = tokio::time::timeout(TASK_JOIN_TIMEOUT, handle).await;
+                }
+                return Err(err);
+            }
+            sessions.insert(name.to_string(), Arc::clone(&session));
+            sessions.len()
+        };
+
+        self.evaluate_sleep_prevention(session_count);
+        tracing::info!("Session created: {name} (backend={backend:?})");
+        if let Err(e) = self.upsert_saved_record(name, None, session.backend).await {
             tracing::warn!("Failed to persist saved session '{name}': {e}");
         }
         Ok((session, first_rx))
@@ -841,8 +984,21 @@ impl SessionRegistry {
         }
 
         // create → inline attach
-        let saved_ssh = self.load_saved_record(name).and_then(|record| record.ssh);
-        match self.create_with_ssh(name, cols, rows, saved_ssh).await {
+        // 保存レコードに mux backend があれば create_with_backend で復元
+        // （生存中の zellij/tmux セッションへ attach-or-create で合流）。
+        let saved_record = self.load_saved_record(name);
+        let saved_backend = saved_record.as_ref().and_then(|r| r.backend);
+        let create_result = match saved_backend {
+            Some(
+                backend @ (crate::pty::backend::SessionBackend::Zellij
+                | crate::pty::backend::SessionBackend::Tmux),
+            ) => self.create_with_backend(name, cols, rows, backend).await,
+            _ => {
+                let saved_ssh = saved_record.and_then(|record| record.ssh);
+                self.create_with_ssh(name, cols, rows, saved_ssh).await
+            }
+        };
+        match create_result {
             Ok((session, first_rx)) => {
                 let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                 let mut inner = session.inner.lock().await;
@@ -877,8 +1033,9 @@ impl SessionRegistry {
                 tracing::info!("Client {client_id} ({kind:?}) created+attached to session {name}");
                 Ok((Arc::clone(&session), rx, replay, client_id))
             }
-            Err(RegistryError::AlreadyExists(_)) => {
-                // レース: attach と create の間に別クライアントが作成した → retry attach
+            Err(RegistryError::AlreadyExists(_) | RegistryError::BackendMismatch(_)) => {
+                // レース: attach と create の間に別クライアントが（別 backend で）作成した
+                // → 既存セッションへ retry attach（reconnect は名前で合流できれば良い）
                 self.attach(name, kind, cols, rows, since).await
             }
             Err(e) => Err(e),
@@ -1091,12 +1248,12 @@ impl SessionRegistry {
         let sessions = self.sessions.read().await;
         let snapshots: Vec<_> = sessions
             .iter()
-            .map(|(name, session)| (name.clone(), session.ssh_config.clone()))
+            .map(|(name, session)| (name.clone(), session.ssh_config.clone(), session.backend))
             .collect();
         drop(sessions);
 
-        for (name, ssh) in snapshots {
-            if let Err(e) = self.upsert_saved_record(&name, ssh).await {
+        for (name, ssh, backend) in snapshots {
+            if let Err(e) = self.upsert_saved_record(&name, ssh, backend).await {
                 tracing::warn!("Failed to persist saved session '{name}': {e}");
             }
         }
@@ -1372,14 +1529,28 @@ mod tests {
 
     #[tokio::test]
     async fn rename_session_not_found() {
-        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0, None);
+        let registry = SessionRegistry::new(
+            "cmd".into(),
+            SleepPreventionMode::Off,
+            0,
+            None,
+            String::new(),
+            String::new(),
+        );
         let err = registry.rename("nonexistent", "new").await.unwrap_err();
         assert!(matches!(err, RegistryError::NotFound(_)));
     }
 
     #[tokio::test]
     async fn rename_session_invalid_name() {
-        let registry = SessionRegistry::new("cmd".into(), SleepPreventionMode::Off, 0, None);
+        let registry = SessionRegistry::new(
+            "cmd".into(),
+            SleepPreventionMode::Off,
+            0,
+            None,
+            String::new(),
+            String::new(),
+        );
         // Not found takes precedence, but invalid name is checked first
         let err = registry.rename("x", "bad name!").await.unwrap_err();
         assert!(matches!(err, RegistryError::InvalidName(_)));

@@ -1009,6 +1009,9 @@ const DenTerminal = (() => {
   let sessionClientsEl = null;
   // F004: Skip DOM rebuild when sessions unchanged
   let lastSessionsKey = '';
+  // Guards against a second new-session menu being built while the first is
+  // still awaiting (connection refresh + multiplexer status fetch).
+  let newSessionMenuOpening = false;
   let sessionTabsLayoutRafId = null;
   let shouldScrollActiveSessionTab = false;
 
@@ -1105,10 +1108,16 @@ const DenTerminal = (() => {
     return `/api/remote/${remote}`;
   }
 
-  async function createSession(name, sshConfig, remote) {
+  /**
+   * Create or attach a session. Returns { ok, status, message }.
+   * On a backend-name conflict the server replies 409 with a message that
+   * callers can surface (e.g. "name already exists with a different backend").
+   */
+  async function createSession(name, sshConfig, remote, backend) {
     try {
       const body = { name };
       if (sshConfig) body.ssh = sshConfig;
+      if (backend && backend !== 'shell') body.backend = backend;
       const base = sessionApiBase(remote);
       const resp = await fetch(`${base}/terminal/sessions`, {
         method: 'POST',
@@ -1116,9 +1125,12 @@ const DenTerminal = (() => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      return resp.ok || resp.status === 201;
+      if (resp.ok || resp.status === 201) return { ok: true, status: resp.status, message: '' };
+      let message = '';
+      try { message = (await resp.text()).trim(); } catch (_) { /* ignore */ }
+      return { ok: false, status: resp.status, message };
     } catch (_) {
-      return false;
+      return { ok: false, status: 0, message: '' };
     }
   }
 
@@ -1489,12 +1501,98 @@ const DenTerminal = (() => {
     return `${base}-${Date.now()}`;
   }
 
+  /**
+   * Fetch multiplexer availability/sessions for local or a remote Den.
+   * Bounded by a timeout so an unreachable remote Den can never stall the
+   * new-session menu (returns null on timeout/error).
+   */
+  async function fetchMuxStatus(remoteConnId) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const base = remoteConnId ? `/api/remote/${remoteConnId}` : '/api';
+      const resp = await fetch(`${base}/multiplexer/status`, {
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Append backend (zellij/tmux) submenu entries for available multiplexers.
+   * status = { zellij:{available,sessions}, tmux:{available,sessions} }
+   */
+  function buildBackendSubmenu(menu, status, remoteConnId, closeMenu) {
+    if (!status) return;
+    for (const kind of ['zellij', 'tmux']) {
+      const bs = status[kind];
+      if (!bs || !bs.available) continue;
+
+      const sep = document.createElement('div');
+      sep.className = 'new-session-menu-separator';
+      sep.textContent = kind === 'zellij' ? 'Zellij' : 'tmux';
+      menu.appendChild(sep);
+
+      // Existing multiplexer sessions (attach)
+      for (const name of bs.sessions) {
+        const item = document.createElement('div');
+        item.className = 'new-session-menu-item';
+        item.textContent = name;
+        item.addEventListener('click', async () => {
+          closeMenu();
+          const res = await createSession(name, null, remoteConnId, kind);
+          if (!res.ok) { Toast.error(res.message || 'Failed to attach session'); return; }
+          lastSessionsKey = '';
+          await refreshSessionList();
+          switchSession(name, remoteConnId || undefined);
+        });
+        menu.appendChild(item);
+      }
+
+      // New backend session
+      const newItem = document.createElement('div');
+      newItem.className = 'new-session-menu-item';
+      newItem.textContent = `New ${kind} session…`;
+      newItem.addEventListener('click', async () => {
+        closeMenu();
+        const name = await Toast.prompt('Session name:');
+        if (!name || !name.trim()) return;
+        const trimmed = name.trim();
+        const validationError = validateSessionName(trimmed);
+        if (validationError) { Toast.error(validationError); return; }
+        const res = await createSession(trimmed, null, remoteConnId, kind);
+        if (!res.ok) { Toast.error(res.message || 'Failed to create session'); return; }
+        lastSessionsKey = '';
+        await refreshSessionList();
+        switchSession(trimmed, remoteConnId || undefined);
+      });
+      menu.appendChild(newItem);
+    }
+  }
+
   /** Show dropdown menu for new session creation (local + SSH bookmarks). */
   async function showNewSessionMenu(anchorEl) {
-    // Remove existing menu if any
+    // Remove existing menu if any (toggle behavior)
     const existing = document.getElementById('new-session-menu');
     if (existing) { existing.remove(); return; }
+    // A build may already be in flight (awaits below run before the menu is
+    // appended); ignore re-entry so we never create two menus.
+    if (newSessionMenuOpening) return;
+    newSessionMenuOpening = true;
+    try {
+      await buildNewSessionMenu(anchorEl);
+    } finally {
+      newSessionMenuOpening = false;
+    }
+  }
 
+  async function buildNewSessionMenu(anchorEl) {
     // Refresh connections to remove stale/disconnected entries
     if (typeof FilerRemote !== 'undefined' && FilerRemote.refreshDenConnections) {
       await FilerRemote.refreshDenConnections();
@@ -1518,16 +1616,32 @@ const DenTerminal = (() => {
       const trimmed = name.trim();
       const validationError = validateSessionName(trimmed);
       if (validationError) { Toast.error(validationError); return; }
-      const ok = await createSession(trimmed);
-      if (!ok) { Toast.error('Failed to create session'); return; }
+      const backend = (typeof DenSettings !== 'undefined'
+        ? DenSettings.get('default_backend') : 'shell') || 'shell';
+      const res = await createSession(trimmed, null, null, backend);
+      if (!res.ok) { Toast.error(res.message || 'Failed to create session'); return; }
       lastSessionsKey = '';
       await refreshSessionList();
       switchSession(trimmed);
     });
     menu.appendChild(localItem);
 
-    // Den connections (one section per connection)
+    // Prefetch multiplexer status for local + every remote Den concurrently.
+    // Serial awaits would make the menu open latency grow with each remote and
+    // let a single unreachable remote stall the whole (local) menu.
     const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+    const connIds = Object.keys(denConns);
+    const [localStatus, ...remoteStatuses] = await Promise.all([
+      fetchMuxStatus(null),
+      ...connIds.map(id => fetchMuxStatus(id)),
+    ]);
+    const remoteStatusById = {};
+    connIds.forEach((id, i) => { remoteStatusById[id] = remoteStatuses[i]; });
+
+    // Local multiplexer backends (zellij/tmux) when available
+    buildBackendSubmenu(menu, localStatus, null, () => closeMenu());
+
+    // Den connections (one section per connection)
     for (const [connId, info] of Object.entries(denConns)) {
       const sep = document.createElement('div');
       sep.className = 'new-session-menu-separator';
@@ -1544,13 +1658,16 @@ const DenTerminal = (() => {
         const trimmed = name.trim();
         const validationError = validateSessionName(trimmed);
         if (validationError) { Toast.error(validationError); return; }
-        const ok = await createSession(trimmed, null, connId);
-        if (!ok) { Toast.error('Failed to create remote session'); return; }
+        const res = await createSession(trimmed, null, connId);
+        if (!res.ok) { Toast.error(res.message || 'Failed to create remote session'); return; }
         lastSessionsKey = '';
         await refreshSessionList();
         switchSession(trimmed, connId);
       });
       menu.appendChild(newItem);
+
+      // Remote multiplexer backends (zellij/tmux) when available
+      buildBackendSubmenu(menu, remoteStatusById[connId], connId, () => closeMenu());
     }
 
     // Quick Connect option
@@ -1588,8 +1705,8 @@ const DenTerminal = (() => {
             key_path: b.key_path || null,
             initial_dir: b.initial_dir || null,
           };
-          const ok = await createSession(sessionName, sshConfig);
-          if (!ok) { Toast.error('Failed to create SSH session'); return; }
+          const res = await createSession(sessionName, sshConfig);
+          if (!res.ok) { Toast.error(res.message || 'Failed to create SSH session'); return; }
           lastSessionsKey = '';
           await refreshSessionList();
           switchSession(sessionName);

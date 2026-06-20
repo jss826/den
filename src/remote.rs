@@ -428,7 +428,7 @@ pub async fn remote_proxy_catch_all(
     let rest = sanitize_proxy_path(&rest);
 
     // Allowlist: only proxy known API paths to the remote Den
-    let path = if rest.starts_with("terminal/") || rest.starts_with("filer/") {
+    let path = if path_in_allowlist(&rest) {
         format!("/api/{rest}")
     } else {
         return Err(StatusCode::FORBIDDEN);
@@ -452,6 +452,12 @@ fn to_ws_base(base_url: &str) -> String {
     } else {
         base_url.replacen("http://", "ws://", 1)
     }
+}
+
+/// Allowlist for the remote (denA→denB) catch-all proxy.
+/// Only these API prefixes are forwarded to the remote Den; everything else 403s.
+fn path_in_allowlist(rest: &str) -> bool {
+    rest.starts_with("terminal/") || rest.starts_with("filer/") || rest.starts_with("multiplexer/")
 }
 
 /// Sanitize a proxy path to prevent path traversal attacks.
@@ -927,6 +933,15 @@ mod tests {
     fn normalize_remote_url_defaults_to_https() {
         let url = normalize_remote_url("den-a:8443").unwrap();
         assert_eq!(url.as_str(), "https://den-a:8443/");
+    }
+
+    #[test]
+    fn allowlist_permits_multiplexer() {
+        assert!(path_in_allowlist("multiplexer/status"));
+        assert!(path_in_allowlist("terminal/sessions"));
+        assert!(path_in_allowlist("filer/list"));
+        assert!(!path_in_allowlist("settings"));
+        assert!(!path_in_allowlist("multiplexerX/status"));
     }
 
     #[test]

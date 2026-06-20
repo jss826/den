@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod manager;
 pub mod registry;
 pub mod ring_buffer;

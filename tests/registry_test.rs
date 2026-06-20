@@ -12,6 +12,8 @@ fn new_registry() -> Arc<SessionRegistry> {
         SleepPreventionMode::Off,
         30,
         None,
+        String::new(),
+        String::new(),
     )
 }
 
@@ -435,6 +437,61 @@ fn pty_exit_and_recreate() {
             .await
             .unwrap();
         assert!(new_session.is_alive());
+
+        reg.destroy(&name).await;
+    });
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+}
+
+#[test]
+#[serial]
+fn create_with_backend_shell_spawns_session() {
+    let rt = build_test_runtime();
+    rt.block_on(async {
+        let reg = new_registry();
+        let name = session_name("backend-shell");
+        let res = reg
+            .create_with_backend(&name, 80, 24, den::pty::backend::SessionBackend::Shell)
+            .await;
+        assert!(res.is_ok(), "Shell backend create should succeed");
+        assert!(reg.exists(&name).await);
+        reg.destroy(&name).await;
+    });
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+}
+
+#[test]
+#[serial]
+fn create_with_backend_rejects_same_name_different_backend() {
+    // 同名・別 backend は BackendMismatch（別種同名への誤 attach を防ぐ）、
+    // 同名・同 backend は従来どおり AlreadyExists。
+    // 既存判定は spawn 前の fast-check なので zellij/tmux 未インストールでも成立する。
+    let rt = build_test_runtime();
+    rt.block_on(async {
+        let reg = new_registry();
+        let name = session_name("backend-conflict");
+        reg.create_with_backend(&name, 80, 24, den::pty::backend::SessionBackend::Shell)
+            .await
+            .expect("initial shell session should be created");
+
+        // Ok 側は Arc<SharedSession>（Debug 未実装）なので () に潰してから検査する
+        let mismatch = reg
+            .create_with_backend(&name, 80, 24, den::pty::backend::SessionBackend::Zellij)
+            .await
+            .map(|_| ());
+        assert!(
+            matches!(mismatch, Err(RegistryError::BackendMismatch(_))),
+            "different backend on same name must be BackendMismatch, got {mismatch:?}"
+        );
+
+        let same = reg
+            .create_with_backend(&name, 80, 24, den::pty::backend::SessionBackend::Shell)
+            .await
+            .map(|_| ());
+        assert!(
+            matches!(same, Err(RegistryError::AlreadyExists(_))),
+            "same backend on same name must be AlreadyExists, got {same:?}"
+        );
 
         reg.destroy(&name).await;
     });

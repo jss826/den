@@ -75,6 +75,31 @@ pub async fn serve_index() -> Response {
         .into_response()
 }
 
+/// multiplexer 用 layout/conf を `data_dir` に書き出し、絶対パス文字列を返す。
+/// 書き出し失敗・asset 欠落時は warn ログを出し、そのパスは空文字列を返す
+/// （呼び出し側は layout フラグ省略にフォールバックする）。
+pub fn ensure_mux_layouts(data_dir: &std::path::Path) -> (String, String) {
+    fn write_embedded(data_dir: &std::path::Path, embedded: &str, out_name: &str) -> String {
+        let path = data_dir.join(out_name);
+        match FrontendAssets::get(embedded) {
+            Some(file) => match std::fs::write(&path, file.data.as_ref()) {
+                Ok(()) => path.to_string_lossy().into_owned(),
+                Err(e) => {
+                    tracing::warn!("Failed to write {out_name}: {e}");
+                    String::new()
+                }
+            },
+            None => {
+                tracing::warn!("Embedded asset {embedded} missing");
+                String::new()
+            }
+        }
+    }
+    let kdl = write_embedded(data_dir, "layouts/den-bare.kdl", "den-bare.kdl");
+    let conf = write_embedded(data_dir, "layouts/den.conf", "den.conf");
+    (kdl, conf)
+}
+
 fn serve_file(path: &str) -> Response {
     match FrontendAssets::get(path) {
         Some(file) => {
@@ -106,5 +131,24 @@ fn serve_file(path: &str) -> Response {
                 .into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod mux_layout_tests {
+    use super::*;
+
+    #[test]
+    fn ensure_mux_layouts_writes_files() {
+        let dir = std::env::temp_dir().join("den-mux-layout-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let (kdl, conf) = ensure_mux_layouts(&dir);
+        assert!(std::path::Path::new(&kdl).exists());
+        assert!(std::path::Path::new(&conf).exists());
+        let conf_body = std::fs::read_to_string(&conf).expect("conf readable");
+        assert!(conf_body.contains("status off"));
+        let kdl_body = std::fs::read_to_string(&kdl).expect("kdl readable");
+        assert!(kdl_body.contains("pane"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

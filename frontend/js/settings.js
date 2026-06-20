@@ -22,6 +22,7 @@ const DenSettings = (() => {
     theme_files: null,
     terminal_renderer: null,
     restty_font: null,
+    default_backend: 'shell',
   };
 
   // All available theme options (value → label)
@@ -643,6 +644,9 @@ const DenSettings = (() => {
     const rendererSelect = document.getElementById('setting-terminal-renderer');
     if (rendererSelect) rendererSelect.value = current.terminal_renderer || 'xterm';
 
+    const backendSelect = document.getElementById('setting-default-backend');
+    if (backendSelect) backendSelect.value = current.default_backend || 'shell';
+
     // Show/hide restty font section based on renderer
     const resttyFontSection = document.getElementById('restty-font-section');
     const resttyFontSelect = document.getElementById('setting-restty-font');
@@ -772,6 +776,9 @@ const DenSettings = (() => {
       const terminalRenderer = rendererEl ? rendererEl.value : null;
       const oldRenderer = current.terminal_renderer || 'xterm';
 
+      const backendEl = document.getElementById('setting-default-backend');
+      const defaultBackend = backendEl ? backendEl.value : 'shell';
+
       Spinner.button(saveBtn, async () => {
         const ok = await save({
           font_size: Math.max(8, Math.min(32, fontSize)),
@@ -788,6 +795,7 @@ const DenSettings = (() => {
           group_remote_sessions: groupRemote,
           terminal_renderer: terminalRenderer === 'xterm' ? null : terminalRenderer,
           restty_font: document.getElementById('setting-restty-font')?.value || null,
+          default_backend: defaultBackend,
         });
         if (!ok) return;
         apply();

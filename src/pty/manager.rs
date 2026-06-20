@@ -14,9 +14,12 @@ pub struct PtySession {
 pub struct PtyManager;
 
 impl PtyManager {
-    /// シェルプロセスを PTY で起動
+    /// プロセスを PTY で起動。`program` + `args`（argv 配列）を受け取る。
+    /// Shell backend は `program=shell, args=[]`、multiplexer backend は
+    /// `build_launch_command` が組み立てた zellij/tmux の argv を渡す。
     pub fn spawn(
-        shell: &str,
+        program: &str,
+        args: &[String],
         cols: u16,
         rows: u16,
         instance_id: &str,
@@ -36,7 +39,10 @@ impl PtyManager {
 
         let pair = pty_system.openpty(size)?;
 
-        let mut cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(program);
+        for arg in args {
+            cmd.arg(arg);
+        }
         cmd.env("DEN_INSTANCE", instance_id);
         cmd.env("TERM", "xterm-256color");
         // Windows の場合、ホームディレクトリで起動

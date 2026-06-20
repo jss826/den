@@ -269,11 +269,13 @@ pub async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<Sessi
     Json(sessions)
 }
 
-/// POST /api/terminal/sessions { "name": "...", "ssh": { ... } }
+/// POST /api/terminal/sessions { "name": "...", "ssh": { ... }, "backend": "zellij" }
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {
     pub name: String,
     pub ssh: Option<CreateSessionSsh>,
+    #[serde(default)]
+    pub backend: Option<crate::pty::backend::SessionBackend>,
 }
 
 #[derive(Deserialize)]
@@ -354,7 +356,38 @@ pub fn build_ssh_command(ssh: &SshSessionConfig) -> String {
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSessionRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    // SSH 指定時は従来の ssh 経路（無改変）
+    if req.ssh.is_some() {
+        return create_session_ssh(state, req).await;
+    }
+
+    // backend 経路（省略時 Shell）。1:1 同名 create-or-attach:
+    // AlreadyExists は既存セッションへの合流として 200（frontend は switch のみ）。
+    let backend = req.backend.unwrap_or_default();
+    match state
+        .registry
+        .create_with_backend(&req.name, 80, 24, backend)
+        .await
+    {
+        Ok(_) => StatusCode::CREATED.into_response(),
+        Err(RegistryError::LimitExceeded) => {
+            (StatusCode::TOO_MANY_REQUESTS, "Session limit exceeded").into_response()
+        }
+        Err(RegistryError::AlreadyExists(_)) => StatusCode::OK.into_response(),
+        // 同名セッションが別 backend で存在 → 別種への誤 attach を避け 409 を返す
+        Err(e @ RegistryError::BackendMismatch(_)) => {
+            (StatusCode::CONFLICT, e.to_string()).into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+/// SSH セッション作成（従来ロジック、ssh パス無改変）。
+async fn create_session_ssh(
+    state: Arc<AppState>,
+    req: CreateSessionRequest,
+) -> axum::response::Response {
     let ssh_config = req.ssh.map(|s| SshSessionConfig {
         host: s.host,
         port: s.port.unwrap_or(22),
@@ -554,6 +587,25 @@ fn filter_mouse_sequences(data: &[u8]) -> Cow<'_, [u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- CreateSessionRequest backend parsing ---
+
+    #[test]
+    fn create_session_request_parses_backend() {
+        let json = r#"{"name":"work","backend":"zellij"}"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            req.backend,
+            Some(crate::pty::backend::SessionBackend::Zellij)
+        );
+    }
+
+    #[test]
+    fn create_session_request_backend_absent_is_none() {
+        let json = r#"{"name":"work"}"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        assert!(req.backend.is_none());
+    }
 
     // --- SGR mouse tests ---
 
