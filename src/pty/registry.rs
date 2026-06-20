@@ -66,8 +66,11 @@ impl std::error::Error for RegistryError {}
 /// 最大セッション数（DoS 対策）
 const MAX_SESSIONS: usize = 50;
 
-/// リプレイバッファ容量: 64KB
-const REPLAY_CAPACITY: usize = 64 * 1024;
+/// リプレイバッファ容量: 512KB（約 6000 行相当）。
+/// 再接続・セッション切替後にサーバが穴/重複なく復元できる過去出力の上限。
+/// iPad は WS を頻繁に切断・再接続するためこの窓が実効上限になりやすい。
+/// メモリは容量 × 存在セッション数（最悪 512KB × MAX_SESSIONS ≈ 25MB）。
+const REPLAY_CAPACITY: usize = 512 * 1024;
 
 /// broadcast チャネル容量
 const BROADCAST_CAPACITY: usize = 256;

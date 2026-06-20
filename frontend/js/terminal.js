@@ -253,7 +253,7 @@ const DenTerminal = (() => {
    */
   async function buildTerm(st) {
     const { TerminalClass, FitAddonClass, needsWebgl, isRestty } = await TerminalAdapter.ready();
-    const scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
+    const scrollback = DenSettings.get('terminal_scrollback') ?? 5000;
     const fontSize = DenSettings.get('font_size') ?? 15;
     const t = new TerminalClass({
       cursorBlink: true,
@@ -758,7 +758,7 @@ const DenTerminal = (() => {
     // Re-apply settings that may have changed while this term was hidden.
     t.options.theme = getXtermThemeFor(DenSettings.getPaneTheme('terminal-pane'));
     t.options.fontSize = DenSettings.get('font_size') ?? 15;
-    t.options.scrollback = DenSettings.get('terminal_scrollback') ?? 1000;
+    t.options.scrollback = DenSettings.get('terminal_scrollback') ?? 5000;
     resetFitState();
     fitAndRefresh();
     t.focus();

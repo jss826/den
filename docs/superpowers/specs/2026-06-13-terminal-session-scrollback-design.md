@@ -107,3 +107,32 @@
 - `[hidden]` host show/hide と各 adapter の relayout/refresh の相性（#116 と重複領域）。
 
 > 注: デスクトップ e2e は **xterm レンダラーのみ**。restty/wterm 固有の初期描画・canvas コストは iPad mini 実機計測が本番（design 方針どおり PoC のハンドオフ先）。
+
+## 8. 案1（replay bump）採用 — 保持量引き上げ（2026-06-20）
+
+案2（per-session term 保持）は v3.4.1 で本番反映・実機確認済み。だが本番(v3.5.0)でもユーザー体感「古い内容を保持する量が少なすぎる」が残る。原因は §1 のとおり保持量の二重の上限であり、案2 では解消しない独立軸：
+
+1. **サーバ replay 窓** `REPLAY_CAPACITY = 64KB`（`src/pty/registry.rs:70`）。iPad は WS を頻繁に切断・再接続するため、この窓を超えた古い出力は再接続のたびに full+reset で失われ、**実効上限が 64KB になりがち**。
+2. **クライアント xterm scrollback** デフォルト `1000` 行。
+
+§3 案1 を採用し、両者を引き上げる（目標「数千行程度」）。
+
+### 採用値と変更箇所
+
+- **replay 窓: 64KB → 512KB**（`src/pty/registry.rs:70` `REPLAY_CAPACITY`）。512KB ≈ 約 6000 行相当。メモリ = 容量 × 存在セッション数、最悪 512KB × `MAX_SESSIONS`(50) ≈ 25MB。許容。
+- **xterm scrollback デフォルト: 1000 → 5000 行**：
+  - `src/store.rs:241` `default_scrollback()`
+  - `frontend/js/settings.js:13`（DEFAULTS）
+  - `frontend/js/terminal.js:256, 761`（`?? 1000` フォールバック）
+  - clamp（100〜50000、`src/store_api.rs:112`）は変更不要（5000 は範囲内）。
+- **テスト更新**: `tests/api_test.rs:607`、`src/store.rs:766, 986` の `1000` assert → `5000`。
+
+### スコープ外（YAGNI）
+
+- replay 窓の設定化はしない（ハードコード引き上げのみ）。
+- `MAX_RETAINED = 2`（同時 live 保持セッション数、`frontend/js/terminal.js:15`）は触らない。これは「単一セッションのスクロール量」とは別軸。
+
+### 注意点
+
+- **既存ユーザーが scrollback 設定を保存済みの場合、デフォルト変更は効かない**（保存値が優先）。手動で設定画面から 5000 に上げる必要がある。replay 窓(512KB)はハードコードなのでバージョン更新だけで効く。
+- 「重複表示」自体は §1/#117 で構造的に解消済み（本番 v3.5.0 反映済みと確認）。本変更は保持量のみを扱い、重複ロジックには触れない。

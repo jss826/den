@@ -239,7 +239,7 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 fn default_scrollback() -> u32 {
-    1000
+    5000
 }
 fn default_sleep_prevention_timeout() -> u16 {
     30
@@ -763,7 +763,7 @@ mod tests {
         let settings = store.load_settings();
         assert_eq!(settings.font_size, 14);
         assert_eq!(settings.theme, "dark");
-        assert_eq!(settings.terminal_scrollback, 1000);
+        assert_eq!(settings.terminal_scrollback, 5000);
     }
 
     #[test]
@@ -983,7 +983,7 @@ mod tests {
         let settings = store.load_settings();
         assert_eq!(settings.font_size, 14);
         assert_eq!(settings.theme, "dark");
-        assert_eq!(settings.terminal_scrollback, 1000);
+        assert_eq!(settings.terminal_scrollback, 5000);
         assert!(settings.keybar_buttons.is_none());
         assert!(!settings.ssh_agent_forwarding);
     }

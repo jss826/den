@@ -10,7 +10,7 @@ const DenSettings = (() => {
   let current = {
     font_size: 14,
     theme: 'dark',
-    terminal_scrollback: 1000,
+    terminal_scrollback: 5000,
     keybar_buttons: null,
     keybar_secondary_buttons: null,
     ssh_agent_forwarding: false,

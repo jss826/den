@@ -604,7 +604,7 @@ async fn settings_get_default() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["font_size"], 14);
     assert_eq!(json["theme"], "dark");
-    assert_eq!(json["terminal_scrollback"], 1000);
+    assert_eq!(json["terminal_scrollback"], 5000);
 }
 
 #[tokio::test]
