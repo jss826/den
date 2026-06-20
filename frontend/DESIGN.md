@@ -52,6 +52,18 @@ Den は **開発者向けターミナル/ファイラ/チャット**。LP のよ
 | `--success` `--warn` `--error` | ステータス | バッジ、トースト、diff |
 | `--muted` | 補助テキスト | breadcrumb、status bar |
 
+#### Backend Identity Colors（＋メニュー・Sessions モーダル）
+
+新規の `--backend-*` トークンは追加しない。既存トークンを backend 識別色として再利用する（全 13 テーマで定義済み・意味的にも近い）:
+
+| backend | 色トークン | 理由 |
+|---|---|---|
+| `zellij` | `--accent` | プライマリ blue 系（tokyonight/nord 等） |
+| `tmux` | `--success` | green 系（環境稼働中 = OK） |
+| `shell` (直接) | `--muted` | 補助テキスト色 |
+
+CSS では `.backend-icon[data-backend="zellij"]` のようにデータ属性セレクタで適用 (`style.css`, `.new-session-menu-backend` ブロック)。
+
 ### 2.2 State Tint（透過色レイヤー）
 
 ホバー・フォーカス・選択状態は **必ず tint トークンを使う**（直接 `rgba(...)` を書かない）。

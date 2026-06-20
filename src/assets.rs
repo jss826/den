@@ -96,9 +96,6 @@ pub fn ensure_mux_layouts(
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
 
-    fn write_embedded(data_dir: &std::path::Path, embedded: &str, out_name: &str) -> String {
-        write_rendered(data_dir, embedded, out_name, &|s| s.to_string())
-    }
     // テンプレート（`__DEN_SHELL__` 置換）を施して書き出す。
     fn write_templated(
         data_dir: &std::path::Path,
@@ -136,7 +133,6 @@ pub fn ensure_mux_layouts(
     }
 
     crate::pty::backend::MuxConfig {
-        zellij_layout: write_embedded(data_dir, "layouts/den-bare.kdl", "den-bare.kdl"),
         zellij_config: write_templated(
             data_dir,
             "layouts/den-zellij.kdl",
@@ -190,24 +186,21 @@ mod mux_layout_tests {
         let dir = std::env::temp_dir().join("den-mux-layout-test");
         let _ = std::fs::create_dir_all(&dir);
         let mux = ensure_mux_layouts(&dir, "powershell.exe");
-        assert!(std::path::Path::new(&mux.zellij_layout).exists());
         assert!(std::path::Path::new(&mux.zellij_config).exists());
         assert!(std::path::Path::new(&mux.tmux_conf).exists());
 
         let conf_body = std::fs::read_to_string(&mux.tmux_conf).expect("conf readable");
-        assert!(conf_body.contains("status off"));
-        // tmux: shell 展開 ＋ prefix 解放
+        // Native 化: status line は出す（status off を書かない）
+        assert!(!conf_body.contains("status off"));
+        assert!(conf_body.contains("set -g window-size latest"));
+        // tmux: shell 展開 ＋ prefix 解放は維持
         assert!(conf_body.contains("default-command \"powershell.exe\""));
         assert!(conf_body.contains("set -g prefix None"));
 
-        let kdl_body = std::fs::read_to_string(&mux.zellij_layout).expect("kdl readable");
-        assert!(kdl_body.contains("pane"));
-
         let cfg_body = std::fs::read_to_string(&mux.zellij_config).expect("cfg readable");
-        // zellij: default_shell 展開 ＋ keybinds clear-defaults
+        // zellij: default_shell 展開 ＋ keybinds clear-defaults は維持
         assert!(cfg_body.contains("default_shell \"powershell.exe\""));
         assert!(cfg_body.contains("clear-defaults=true"));
-        // プレースホルダが残っていないこと
         assert!(!cfg_body.contains("__DEN_SHELL__"));
 
         let _ = std::fs::remove_dir_all(&dir);

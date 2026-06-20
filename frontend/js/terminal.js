@@ -1525,8 +1525,9 @@ const DenTerminal = (() => {
   }
 
   /**
-   * Append backend (zellij/tmux) submenu entries for available multiplexers.
-   * status = { zellij:{available,sessions}, tmux:{available,sessions} }
+   * Append backend (zellij/tmux) rows under the current machine group.
+   * Each backend gets a single row: icon + label + session chips + New (+) chip.
+   * status = { zellij:{available,sessions,aliases}, tmux:{available,sessions,aliases} }
    */
   function buildBackendSubmenu(menu, status, remoteConnId, closeMenu) {
     if (!status) return;
@@ -1534,17 +1535,35 @@ const DenTerminal = (() => {
       const bs = status[kind];
       if (!bs || !bs.available) continue;
 
-      const sep = document.createElement('div');
-      sep.className = 'new-session-menu-separator';
-      sep.textContent = kind === 'zellij' ? 'Zellij' : 'tmux';
-      menu.appendChild(sep);
+      const row = document.createElement('div');
+      row.className = 'new-session-menu-backend';
 
-      // Existing multiplexer sessions (attach)
+      // Backend icon (SVG use reference)
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('class', 'backend-icon');
+      icon.dataset.backend = kind;
+      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+      use.setAttribute('href', `#ic-backend-${kind}`);
+      icon.appendChild(use);
+      row.appendChild(icon);
+
+      // Backend label
+      const label = document.createElement('span');
+      label.className = 'new-session-menu-backend-label';
+      label.textContent = kind;
+      row.appendChild(label);
+
+      // Session chips + New chip
+      const chips = document.createElement('span');
+      chips.className = 'new-session-menu-chips';
+      const aliases = bs.aliases || {};
       for (const name of bs.sessions) {
-        const item = document.createElement('div');
-        item.className = 'new-session-menu-item';
-        item.textContent = name;
-        item.addEventListener('click', async () => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'new-session-menu-chip';
+        chip.textContent = aliases[name] || name;
+        chip.title = aliases[name] ? `${aliases[name]} (${name})` : name;
+        chip.addEventListener('click', async () => {
           closeMenu();
           const res = await createSession(name, null, remoteConnId, kind);
           if (!res.ok) { Toast.error(res.message || 'Failed to attach session'); return; }
@@ -1552,14 +1571,15 @@ const DenTerminal = (() => {
           await refreshSessionList();
           switchSession(name, remoteConnId || undefined);
         });
-        menu.appendChild(item);
+        chips.appendChild(chip);
       }
-
-      // New backend session
-      const newItem = document.createElement('div');
-      newItem.className = 'new-session-menu-item';
-      newItem.textContent = `New ${kind} session…`;
-      newItem.addEventListener('click', async () => {
+      // New (+) chip
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'new-session-menu-chip new-session-menu-chip-new';
+      plus.textContent = '+';
+      plus.title = `New ${kind} session`;
+      plus.addEventListener('click', async () => {
         closeMenu();
         const name = await Toast.prompt('Session name:');
         if (!name || !name.trim()) return;
@@ -1572,8 +1592,31 @@ const DenTerminal = (() => {
         await refreshSessionList();
         switchSession(trimmed, remoteConnId || undefined);
       });
-      menu.appendChild(newItem);
+      chips.appendChild(plus);
+      row.appendChild(chips);
+
+      menu.appendChild(row);
     }
+  }
+
+  /**
+   * Append a machine-group header row to the new-session menu.
+   * iconId references an <symbol> in the SVG sprite in index.html.
+   */
+  function appendGroupHeader(menu, iconId, text) {
+    const h = document.createElement('div');
+    h.className = 'new-session-menu-group';
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'group-icon');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', `#${iconId}`);
+    icon.appendChild(use);
+    h.appendChild(icon);
+    const span = document.createElement('span');
+    span.textContent = text;
+    h.appendChild(span);
+    menu.appendChild(h);
+    return h;
   }
 
   /** Show dropdown menu for new session creation (local + SSH bookmarks). */
@@ -1605,7 +1648,22 @@ const DenTerminal = (() => {
     // Centralized cleanup: remove menu + all document listeners
     let closeMenu;
 
-    // Local terminal option
+    // Prefetch multiplexer status for local + every remote Den concurrently.
+    // Serial awaits would make the menu open latency grow with each remote and
+    // let a single unreachable remote stall the whole (local) menu.
+    const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+    const connIds = Object.keys(denConns);
+    const [localStatus, ...remoteStatuses] = await Promise.all([
+      fetchMuxStatus(null),
+      ...connIds.map(id => fetchMuxStatus(id)),
+    ]);
+    const remoteStatusById = {};
+    connIds.forEach((id, i) => { remoteStatusById[id] = remoteStatuses[i]; });
+
+    // \u2500\u2500 Group: This Den (local) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    appendGroupHeader(menu, 'ic-machine-local', 'This Den (local)');
+
+    // Local Terminal item
     const localItem = document.createElement('div');
     localItem.className = 'new-session-menu-item';
     localItem.textContent = 'Local Terminal';
@@ -1626,27 +1684,13 @@ const DenTerminal = (() => {
     });
     menu.appendChild(localItem);
 
-    // Prefetch multiplexer status for local + every remote Den concurrently.
-    // Serial awaits would make the menu open latency grow with each remote and
-    // let a single unreachable remote stall the whole (local) menu.
-    const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
-    const connIds = Object.keys(denConns);
-    const [localStatus, ...remoteStatuses] = await Promise.all([
-      fetchMuxStatus(null),
-      ...connIds.map(id => fetchMuxStatus(id)),
-    ]);
-    const remoteStatusById = {};
-    connIds.forEach((id, i) => { remoteStatusById[id] = remoteStatuses[i]; });
-
     // Local multiplexer backends (zellij/tmux) when available
     buildBackendSubmenu(menu, localStatus, null, () => closeMenu());
 
-    // Den connections (one section per connection)
+    // \u2500\u2500 Groups: Remote Den connections \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     for (const [connId, info] of Object.entries(denConns)) {
-      const sep = document.createElement('div');
-      sep.className = 'new-session-menu-separator';
-      sep.textContent = `Remote ${info.displayName || stripPort(info.hostPort) || connId}`;
-      menu.appendChild(sep);
+      const displayName = info.displayName || stripPort(info.hostPort) || connId;
+      appendGroupHeader(menu, 'ic-machine-remote', `Remote: ${displayName}`);
 
       const newItem = document.createElement('div');
       newItem.className = 'new-session-menu-item';
@@ -1670,23 +1714,10 @@ const DenTerminal = (() => {
       buildBackendSubmenu(menu, remoteStatusById[connId], connId, () => closeMenu());
     }
 
-    // Quick Connect option
-    const quickItem = document.createElement('div');
-    quickItem.className = 'new-session-menu-item';
-    quickItem.textContent = 'Quick Connect Den\u2026';
-    quickItem.addEventListener('click', () => {
-      closeMenu();
-      DenFiler.showDenModal();
-    });
-    menu.appendChild(quickItem);
-
-    // SSH bookmarks
+    // \u2500\u2500 Group: SSH bookmarks \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     const bookmarks = DenSettings.get('ssh_bookmarks') || [];
     if (bookmarks.length > 0) {
-      const sep = document.createElement('div');
-      sep.className = 'new-session-menu-separator';
-      sep.textContent = 'SSH';
-      menu.appendChild(sep);
+      appendGroupHeader(menu, 'ic-machine-ssh', 'SSH');
 
       for (const b of bookmarks) {
         const item = document.createElement('div');
@@ -1714,6 +1745,26 @@ const DenTerminal = (() => {
         menu.appendChild(item);
       }
     }
+
+    // \u2500\u2500 Manage sessions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    const manageItem = document.createElement('div');
+    manageItem.className = 'new-session-menu-item new-session-menu-manage';
+    manageItem.textContent = 'Manage sessions\u2026';
+    manageItem.addEventListener('click', () => {
+      closeMenu();
+      openSessionsModal();
+    });
+    menu.appendChild(manageItem);
+
+    // \u2500\u2500 Quick Connect (always last) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    const quickItem = document.createElement('div');
+    quickItem.className = 'new-session-menu-item';
+    quickItem.textContent = 'Quick Connect Den\u2026';
+    quickItem.addEventListener('click', () => {
+      closeMenu();
+      DenFiler.showDenModal();
+    });
+    menu.appendChild(quickItem);
 
     // Position menu relative to the button, anchored to right edge
     const rect = anchorEl.getBoundingClientRect();
@@ -1762,6 +1813,176 @@ const DenTerminal = (() => {
   function getCurrentRemote() {
     return currentRemote;
   }
+
+  // ── Sessions Management Modal ─────────────────────────────────────────────
+
+  /** Return the API base prefix for local (null) or remote (connId) Den. */
+  function muxApiBase(connId) {
+    return connId ? `/api/remote/${connId}` : '/api';
+  }
+
+  /** POST to multiplexer/{op} endpoint, returns { ok, message? }. */
+  async function muxOp(connId, op, payload) {
+    try {
+      const resp = await fetch(`${muxApiBase(connId)}/multiplexer/${op}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) return { ok: false, message: `HTTP ${resp.status}` };
+      return await resp.json();
+    } catch (e) {
+      return { ok: false, message: String(e) };
+    }
+  }
+
+  /** Build a single session row element. */
+  function buildSessionRow(kind, name, alias, connId) {
+    const row = document.createElement('div');
+    row.className = 'sessions-row';
+    row.dataset.backend = kind;
+    row.dataset.name = name;
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'sessions-row-name';
+    nameEl.textContent = alias ? `${alias} (${name})` : name;
+    row.appendChild(nameEl);
+
+    const actions = document.createElement('span');
+    actions.className = 'sessions-row-actions';
+
+    const mk = (action, text) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sessions-action-btn';
+      b.dataset.action = action;
+      b.textContent = text;
+      actions.appendChild(b);
+      return b;
+    };
+
+    mk('rename', 'Rename').addEventListener('click', async () => {
+      const next = await Toast.prompt('Alias (empty to clear):', alias || '');
+      if (next === null) return;
+      const res = await muxOp(connId, 'rename', { backend: kind, name, alias: next.trim() });
+      if (!res.ok) { Toast.error(res.message || 'Rename failed'); return; }
+      await renderSessionsModal(document.getElementById('sessions-modal-body'));
+    });
+
+    mk('copy', 'Copy attach').addEventListener('click', async () => {
+      const cmd = kind === 'zellij' ? `zellij attach ${name}` : `tmux attach -t ${name}`;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        Toast.show('Copied', 'success');
+      } catch (_) {
+        Toast.error('Copy failed');
+      }
+    });
+
+    mk('kill', 'Kill').addEventListener('click', async () => {
+      const ok = await Toast.confirm(`Kill session "${name}"?`);
+      if (!ok) return;
+      const res = await muxOp(connId, 'kill', { backend: kind, name });
+      if (!res.ok) { Toast.error(res.message || 'Kill failed'); return; }
+      await renderSessionsModal(document.getElementById('sessions-modal-body'));
+    });
+
+    if (kind === 'zellij') {
+      mk('delete', 'Delete').addEventListener('click', async () => {
+        const ok = await Toast.confirm(`Delete (purge) session "${name}"?`);
+        if (!ok) return;
+        const res = await muxOp(connId, 'delete', { backend: kind, name });
+        if (!res.ok) { Toast.error(res.message || 'Delete failed'); return; }
+        await renderSessionsModal(document.getElementById('sessions-modal-body'));
+      });
+    }
+
+    row.appendChild(actions);
+    return row;
+  }
+
+  /** Render one Den's (local or remote) session groups into the modal body. */
+  function renderSessionsGroup(body, title, status, connId) {
+    if (!status) return;
+    let any = false;
+
+    const header = document.createElement('div');
+    header.className = 'sessions-group-header';
+    header.textContent = title;
+    body.appendChild(header);
+
+    for (const kind of ['zellij', 'tmux']) {
+      const bs = status[kind];
+      if (!bs || !bs.available || !bs.sessions || !bs.sessions.length) continue;
+      any = true;
+
+      const sub = document.createElement('div');
+      sub.className = 'sessions-backend-header';
+      sub.textContent = kind;
+      body.appendChild(sub);
+
+      const aliases = bs.aliases || {};
+      for (const name of bs.sessions) {
+        body.appendChild(buildSessionRow(kind, name, aliases[name], connId));
+      }
+    }
+
+    if (!any) header.remove();
+  }
+
+  /** Fetch all sessions and render rows into the modal body. */
+  async function renderSessionsModal(body) {
+    body.innerHTML = '<div class="sessions-loading">Loading…</div>';
+
+    const denConns = typeof FilerRemote !== 'undefined' ? FilerRemote.getDenConnections() : {};
+    const connIds = Object.keys(denConns);
+
+    const [localStatus, ...remoteStatuses] = await Promise.all([
+      fetchMuxStatus(null),
+      ...connIds.map(id => fetchMuxStatus(id)),
+    ]);
+
+    body.innerHTML = '';
+    renderSessionsGroup(body, 'This Den (local)', localStatus, null);
+    connIds.forEach((id, i) => {
+      const info = denConns[id];
+      const title = 'Remote: ' + (info.displayName || stripPort(info.hostPort) || id);
+      renderSessionsGroup(body, title, remoteStatuses[i], id);
+    });
+
+    if (!body.children.length) {
+      body.innerHTML = '<div class="sessions-empty">No multiplexer sessions found.</div>';
+    }
+  }
+
+  /** Open the Sessions management modal. */
+  async function openSessionsModal() {
+    const modal = document.getElementById('sessions-modal');
+    const body = document.getElementById('sessions-modal-body');
+    if (!modal || !body) return;
+    body.innerHTML = '';
+    modal.hidden = false;
+    try {
+      await renderSessionsModal(body);
+    } catch (_e) {
+      modal.hidden = true;
+      Toast.error('Failed to load sessions');
+    }
+  }
+
+  // Wire up Sessions modal close button and backdrop click.
+  // Scripts are loaded at the bottom of <body> so the DOM is already available here.
+  (() => {
+    const modal = document.getElementById('sessions-modal');
+    const closeBtn = document.getElementById('sessions-modal-close');
+    if (modal && closeBtn) {
+      closeBtn.addEventListener('click', () => { modal.hidden = true; });
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+    }
+  })();
+
+  // ── end Sessions Management Modal ─────────────────────────────────────────
 
   // Update xterm theme when Den theme changes — apply to ALL retained terms.
   document.addEventListener('den:theme-changed', () => {

@@ -1,6 +1,0 @@
-// Den multiplexer bare layout (zellij).
-// Omits the default tab-bar / status-bar plugin panes so the multiplexing UI
-// is owned by Den's own tabs. See PoC findings doc §5.
-layout {
-    pane
-}

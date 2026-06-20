@@ -11,6 +11,18 @@
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+  <!-- SVG icon sprite (inline symbols; CSP-safe, no onclick) -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <!-- Backend icons -->
+    <symbol id="ic-backend-shell" viewBox="0 0 16 16"><path d="M2 3l4 5-4 5M8 13h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="ic-backend-zellij" viewBox="0 0 16 16"><path d="M8 1l6 3.5v7L8 15 2 11.5v-7L8 1z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+    <symbol id="ic-backend-tmux" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 7h12" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <!-- Machine group icons -->
+    <symbol id="ic-machine-local" viewBox="0 0 16 16"><rect x="1" y="2" width="14" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 14h6M8 12v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="ic-machine-remote" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 2c-2 2-2 8 0 12M8 2c2 2 2 8 0 12M2 8h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="ic-machine-ssh" viewBox="0 0 16 16"><rect x="3" y="6" width="10" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 6V5a3 3 0 0 1 6 0v1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  </svg>
+
   <!-- ログイン画面 -->
   <div id="login-screen" class="screen">
     <div class="login-box">
@@ -287,6 +299,17 @@
         <div id="connections-list"></div>
         <div class="modal-actions">
           <button id="connections-close" class="modal-btn">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sessions 管理モーダル -->
+    <div id="sessions-modal" class="modal" hidden role="dialog" aria-modal="true" aria-label="Sessions">
+      <div class="modal-content sessions-modal-content">
+        <h3>Sessions</h3>
+        <div id="sessions-modal-body" class="sessions-modal-body"><!-- rows injected --></div>
+        <div class="modal-actions">
+          <button type="button" id="sessions-modal-close" class="modal-btn">Close</button>
         </div>
       </div>
     </div>

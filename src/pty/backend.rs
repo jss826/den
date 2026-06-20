@@ -16,8 +16,6 @@ pub enum SessionBackend {
 /// 各フィールドが空文字列 = 書き出し失敗（`build_launch_command` は該当フラグを省略）。
 #[derive(Debug, Clone, Default)]
 pub struct MuxConfig {
-    /// zellij bare layout（`-l`）
-    pub zellij_layout: String,
     /// zellij config（`--config`）: default_shell ＋ keybinds clear-defaults
     pub zellij_config: String,
     /// tmux conf（`-f`）
@@ -28,14 +26,15 @@ pub struct MuxConfig {
 /// シェル文字列連結はしない（argv 配列で CommandBuilder に渡す）。
 /// name は is_valid_session_name で英数＋`-` に限定済みの前提。
 ///
-/// zellij/tmux の argv は Task 1 PoC findings の確定形を使う:
-/// - zellij: `zellij --config <cfg> -l <layout> attach -c <name>`（attach-or-create。
+/// zellij/tmux の argv:
+/// - zellij: `zellij --config <cfg> attach -c <name>`（attach-or-create。
 ///   `--config` で Den 専用設定[default_shell ＋ keybinds clear-defaults]を渡す。
 ///   グローバルオプションなのでサブコマンド `attach -c` より前に置く。long form 必須
-///   [`attach -c` の `-c`=create と短縮形が衝突するため]）
+///   [`attach -c` の `-c`=create と短縮形が衝突するため]。
+///   `-l` は付けない（デフォルトレイアウト＝tab/status bar 有り）。）
 /// - tmux:   `tmux -f <conf> new-session -A -s <name>`（`-A` で attach-or-create）
 ///
-/// layout/config/conf パスが空（embed 書き出し失敗）のときは該当フラグを最初から付けず、
+/// config/conf パスが空（embed 書き出し失敗）のときは該当フラグを最初から付けず、
 /// 素の `zellij attach -c <name>` / `tmux new-session -A -s <name>` を返す。
 /// 空文字列を引数として渡したり、後段で文字列一致で除去したりはしない
 /// （name が偶然 `-l`/`-f` と一致しても壊れない）。
@@ -50,13 +49,10 @@ pub fn build_launch_command(
         SessionBackend::Zellij => {
             let mut args = Vec::new();
             // --config はグローバルオプション。サブコマンド前・long form で渡す。
+            // Native 化: -l は付けない（デフォルトレイアウト＝tab/status bar 有り）。
             if !mux.zellij_config.is_empty() {
                 args.push("--config".to_string());
                 args.push(mux.zellij_config.clone());
-            }
-            if !mux.zellij_layout.is_empty() {
-                args.push("-l".to_string());
-                args.push(mux.zellij_layout.clone());
             }
             args.push("attach".to_string());
             args.push("-c".to_string());
@@ -152,13 +148,80 @@ pub fn list_mux_sessions(backend: SessionBackend) -> Vec<String> {
     }
 }
 
+/// Validates a mux session name: alphanumeric + `-`, 1–64 chars.
+/// Defense-in-depth even though argv is passed directly (no shell expansion).
+pub fn is_valid_mux_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Returns (program, args) for kill-session per backend. Shell → None.
+fn kill_argv(backend: SessionBackend, name: &str) -> Option<(String, Vec<String>)> {
+    match backend {
+        SessionBackend::Shell => None,
+        SessionBackend::Zellij => Some(("zellij".into(), vec!["kill-session".into(), name.into()])),
+        SessionBackend::Tmux => Some((
+            "tmux".into(),
+            vec!["kill-session".into(), "-t".into(), name.into()],
+        )),
+    }
+}
+
+/// Returns (program, args) for delete-session. Zellij only (`--force` kills+deletes).
+/// Tmux has no separate delete concept (kill serves the same purpose) → None.
+fn delete_argv(backend: SessionBackend, name: &str) -> Option<(String, Vec<String>)> {
+    match backend {
+        SessionBackend::Zellij => Some((
+            "zellij".into(),
+            vec!["delete-session".into(), "--force".into(), name.into()],
+        )),
+        SessionBackend::Shell | SessionBackend::Tmux => None,
+    }
+}
+
+/// Runs (prog, args) and returns Ok(()) on success, Err(stderr) on non-zero exit (blocking).
+fn run_mux_command(prog: &str, args: &[String]) -> Result<(), String> {
+    match Command::new(prog).args(args).output() {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            Err(if stderr.trim().is_empty() {
+                format!("{prog} exited with status {}", o.status)
+            } else {
+                stderr.trim().to_string()
+            })
+        }
+        Err(e) => Err(format!("failed to run {prog}: {e}")),
+    }
+}
+
+/// Terminates a running mux session (blocking — caller should use spawn_blocking).
+pub fn kill_mux_session(backend: SessionBackend, name: &str) -> Result<(), String> {
+    if !is_valid_mux_name(name) {
+        return Err("invalid session name".into());
+    }
+    let (prog, args) = kill_argv(backend, name).ok_or("kill is not supported for this backend")?;
+    run_mux_command(&prog, &args)
+}
+
+/// Removes a dead (exited/resurrectable) zellij session (blocking).
+/// Returns Err for tmux and Shell since they have no separate delete concept.
+pub fn delete_mux_session(backend: SessionBackend, name: &str) -> Result<(), String> {
+    if !is_valid_mux_name(name) {
+        return Err("invalid session name".into());
+    }
+    let (prog, args) =
+        delete_argv(backend, name).ok_or("delete is not supported for this backend")?;
+    run_mux_command(&prog, &args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn mux(zellij_layout: &str, zellij_config: &str, tmux_conf: &str) -> MuxConfig {
+    fn mux(zellij_config: &str, tmux_conf: &str) -> MuxConfig {
         MuxConfig {
-            zellij_layout: zellij_layout.to_string(),
             zellij_config: zellij_config.to_string(),
             tmux_conf: tmux_conf.to_string(),
         }
@@ -170,26 +233,23 @@ mod tests {
             SessionBackend::Shell,
             "powershell.exe",
             "work",
-            &mux("L.kdl", "C.kdl", "t.conf"),
+            &mux("C.kdl", "t.conf"),
         );
         assert_eq!(prog, "powershell.exe");
         assert!(args.is_empty());
     }
 
     #[test]
-    fn zellij_backend_attach_or_create_with_config_and_layout() {
-        // PoC 確定形 + Den config: zellij --config <cfg> -l <layout> attach -c <name>
+    fn zellij_backend_attach_or_create_with_config_no_layout() {
+        // Native 化: -l を付けない（デフォルトレイアウト＝バー有り）。--config は維持。
         let (prog, args) = build_launch_command(
             SessionBackend::Zellij,
             "powershell.exe",
             "work",
-            &mux("L.kdl", "C.kdl", "t.conf"),
+            &mux("C.kdl", "t.conf"),
         );
         assert_eq!(prog, "zellij");
-        assert_eq!(
-            args,
-            vec!["--config", "C.kdl", "-l", "L.kdl", "attach", "-c", "work"]
-        );
+        assert_eq!(args, vec!["--config", "C.kdl", "attach", "-c", "work"]);
     }
 
     #[test]
@@ -198,7 +258,7 @@ mod tests {
             SessionBackend::Tmux,
             "powershell.exe",
             "work",
-            &mux("L.kdl", "C.kdl", "t.conf"),
+            &mux("C.kdl", "t.conf"),
         );
         assert_eq!(prog, "tmux");
         assert_eq!(
@@ -208,58 +268,32 @@ mod tests {
     }
 
     #[test]
-    fn zellij_backend_without_config_or_layout_omits_flags() {
-        // config/layout 書き出し失敗（空文字列）→ --config も -l も付けない
+    fn zellij_backend_without_config_omits_flag() {
         let (prog, args) = build_launch_command(
             SessionBackend::Zellij,
             "powershell.exe",
             "work",
-            &mux("", "", ""),
+            &mux("", ""),
         );
         assert_eq!(prog, "zellij");
         assert_eq!(args, vec!["attach", "-c", "work"]);
     }
 
     #[test]
-    fn zellij_backend_config_without_layout() {
-        // config だけ成功・layout 失敗 → --config のみ付与（-l は省略）
-        let (_, args) = build_launch_command(
-            SessionBackend::Zellij,
-            "powershell.exe",
-            "work",
-            &mux("", "C.kdl", ""),
-        );
-        assert_eq!(args, vec!["--config", "C.kdl", "attach", "-c", "work"]);
-    }
-
-    #[test]
     fn tmux_backend_without_conf_omits_flag() {
-        let (prog, args) = build_launch_command(
-            SessionBackend::Tmux,
-            "powershell.exe",
-            "work",
-            &mux("", "", ""),
-        );
+        let (prog, args) =
+            build_launch_command(SessionBackend::Tmux, "powershell.exe", "work", &mux("", ""));
         assert_eq!(prog, "tmux");
         assert_eq!(args, vec!["new-session", "-A", "-s", "work"]);
     }
 
     #[test]
     fn hyphenated_name_is_not_confused_with_flag() {
-        // name が "-l"/"-f" と一致しても layout 省略時に壊れない（文字列除去ではなく条件付き付与）
-        let (_, zargs) = build_launch_command(
-            SessionBackend::Zellij,
-            "powershell.exe",
-            "-l",
-            &mux("", "", ""),
-        );
+        let (_, zargs) =
+            build_launch_command(SessionBackend::Zellij, "powershell.exe", "-l", &mux("", ""));
         assert_eq!(zargs, vec!["attach", "-c", "-l"]);
-        let (_, targs) = build_launch_command(
-            SessionBackend::Tmux,
-            "powershell.exe",
-            "-f",
-            &mux("", "", ""),
-        );
+        let (_, targs) =
+            build_launch_command(SessionBackend::Tmux, "powershell.exe", "-f", &mux("", ""));
         assert_eq!(targs, vec!["new-session", "-A", "-s", "-f"]);
     }
 
@@ -292,5 +326,55 @@ mod tests {
     fn parse_handles_empty() {
         assert!(parse_zellij_ls("").is_empty());
         assert!(parse_tmux_ls("").is_empty());
+    }
+
+    #[test]
+    fn is_valid_mux_name_accepts_alnum_hyphen() {
+        assert!(is_valid_mux_name("work"));
+        assert!(is_valid_mux_name("work-1"));
+        assert!(!is_valid_mux_name(""));
+        assert!(!is_valid_mux_name("a b"));
+        assert!(!is_valid_mux_name("../x"));
+        assert!(!is_valid_mux_name(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn kill_argv_per_backend() {
+        assert_eq!(
+            kill_argv(SessionBackend::Zellij, "work"),
+            Some((
+                "zellij".into(),
+                vec!["kill-session".to_string(), "work".to_string()]
+            ))
+        );
+        assert_eq!(
+            kill_argv(SessionBackend::Tmux, "work"),
+            Some((
+                "tmux".into(),
+                vec![
+                    "kill-session".to_string(),
+                    "-t".to_string(),
+                    "work".to_string()
+                ]
+            ))
+        );
+        assert_eq!(kill_argv(SessionBackend::Shell, "work"), None);
+    }
+
+    #[test]
+    fn delete_argv_zellij_force_tmux_none() {
+        assert_eq!(
+            delete_argv(SessionBackend::Zellij, "work"),
+            Some((
+                "zellij".into(),
+                vec![
+                    "delete-session".to_string(),
+                    "--force".to_string(),
+                    "work".to_string()
+                ]
+            ))
+        );
+        assert_eq!(delete_argv(SessionBackend::Tmux, "work"), None);
+        assert_eq!(delete_argv(SessionBackend::Shell, "work"), None);
     }
 }

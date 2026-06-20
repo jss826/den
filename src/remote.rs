@@ -938,6 +938,9 @@ mod tests {
     #[test]
     fn allowlist_permits_multiplexer() {
         assert!(path_in_allowlist("multiplexer/status"));
+        assert!(path_in_allowlist("multiplexer/kill"));
+        assert!(path_in_allowlist("multiplexer/delete"));
+        assert!(path_in_allowlist("multiplexer/rename"));
         assert!(path_in_allowlist("terminal/sessions"));
         assert!(path_in_allowlist("filer/list"));
         assert!(!path_in_allowlist("settings"));

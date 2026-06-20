@@ -226,6 +226,10 @@ pub struct Settings {
     /// Default session backend for new local sessions: "shell" | "zellij" | "tmux"
     #[serde(default)]
     pub default_backend: Option<String>,
+    /// Den-local aliases for mux sessions. Key = "<backend>:<name>", value = display alias.
+    /// Separate from SessionRecord so externally-created sessions can be aliased too.
+    #[serde(default)]
+    pub mux_aliases: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_deserializing, default)]
     pub version: String,
     #[serde(skip_deserializing, default)]
@@ -266,6 +270,7 @@ impl Default for Settings {
             terminal_renderer: None,
             restty_font: None,
             default_backend: None,
+            mux_aliases: None,
             version: String::new(),
             hostname: String::new(),
         }
@@ -378,6 +383,24 @@ impl Store {
         self.save_settings_internal(settings)?;
         *self.settings_cache.lock().unwrap() = Some(settings.clone());
         Ok(())
+    }
+
+    /// Returns the mux aliases map, normalizing None to an empty map.
+    pub fn load_mux_aliases(&self) -> std::collections::HashMap<String, String> {
+        self.load_settings().mux_aliases.unwrap_or_default()
+    }
+
+    /// Upserts a mux alias (empty `alias` removes the key) and persists to settings.
+    pub fn set_mux_alias(&self, key: &str, alias: &str) -> std::io::Result<()> {
+        let mut settings = self.load_settings();
+        let mut map = settings.mux_aliases.take().unwrap_or_default();
+        if alias.is_empty() {
+            map.remove(key);
+        } else {
+            map.insert(key.to_string(), alias.to_string());
+        }
+        settings.mux_aliases = if map.is_empty() { None } else { Some(map) };
+        self.save_settings(&settings)
     }
 
     fn save_settings_internal(&self, settings: &Settings) -> std::io::Result<()> {
@@ -1262,5 +1285,25 @@ mod tests {
         store.save_session_order(&order).unwrap();
         let loaded = store.load_session_order();
         assert_eq!(loaded, order);
+    }
+
+    #[test]
+    fn mux_alias_set_and_load_roundtrip() {
+        let dir = std::env::temp_dir().join("den-mux-alias-test-1");
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone()).unwrap();
+        assert!(store.load_mux_aliases().is_empty());
+
+        store.set_mux_alias("zellij:work", "My Work").unwrap();
+        let aliases = store.load_mux_aliases();
+        assert_eq!(
+            aliases.get("zellij:work").map(String::as_str),
+            Some("My Work")
+        );
+
+        // empty alias removes the key
+        store.set_mux_alias("zellij:work", "").unwrap();
+        assert!(store.load_mux_aliases().get("zellij:work").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

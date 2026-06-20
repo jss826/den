@@ -148,6 +148,9 @@ pub fn create_app_with_secret(
         )
         // Multiplexer (tmux/zellij) availability + session list
         .route("/api/multiplexer/status", get(multiplexer_api::status))
+        .route("/api/multiplexer/kill", post(multiplexer_api::kill))
+        .route("/api/multiplexer/delete", post(multiplexer_api::delete))
+        .route("/api/multiplexer/rename", post(multiplexer_api::rename))
         // Filer API
         .route("/api/filer/list", get(filer::api::list))
         .route("/api/filer/read", get(filer::api::read))

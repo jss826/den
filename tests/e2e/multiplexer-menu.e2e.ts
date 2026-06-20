@@ -9,8 +9,8 @@ test.describe('Multiplexer backend menu', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          zellij: { available: true, sessions: ['main', 'work'] },
-          tmux: { available: false, sessions: [] },
+          zellij: { available: true, sessions: ['main', 'work'], aliases: {} },
+          tmux: { available: false, sessions: [], aliases: {} },
         }),
       }));
 
@@ -20,15 +20,19 @@ test.describe('Multiplexer backend menu', () => {
     const menu = page.locator('#new-session-menu');
     await expect(menu).toBeVisible({ timeout: 3000 });
 
-    // Zellij section header + existing sessions (attach) + new-session entry are shown.
-    await expect(menu.getByText('Zellij', { exact: true })).toBeVisible();
-    await expect(menu.locator('.new-session-menu-item', { hasText: 'main' })).toBeVisible();
-    await expect(menu.locator('.new-session-menu-item', { hasText: 'work' })).toBeVisible();
-    await expect(menu.locator('.new-session-menu-item', { hasText: 'New zellij session' })).toBeVisible();
+    // Zellij backend row is shown (sessions appear as chips inside the backend row).
+    const backendRow = menu.locator('.new-session-menu-backend');
+    await expect(backendRow).toBeVisible();
+    await expect(backendRow.locator('.backend-icon[data-backend="zellij"]')).toBeVisible();
 
-    // tmux is unavailable, so neither its header nor a new-tmux entry appears.
-    await expect(menu.getByText('tmux', { exact: true })).toHaveCount(0);
-    await expect(menu.locator('.new-session-menu-item', { hasText: 'New tmux session' })).toHaveCount(0);
+    // Existing sessions appear as chips; the "New" (+) chip is also present.
+    await expect(menu.locator('.new-session-menu-chip', { hasText: 'main' })).toBeVisible();
+    await expect(menu.locator('.new-session-menu-chip', { hasText: 'work' })).toBeVisible();
+    // New-session chip ("+") is rendered at the end of each backend row.
+    await expect(menu.locator('.new-session-menu-chip.new-session-menu-chip-new')).toBeVisible();
+
+    // tmux is unavailable, so no tmux backend row appears.
+    await expect(menu.locator('.new-session-menu-backend .backend-icon[data-backend="tmux"]')).toHaveCount(0);
 
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();
@@ -91,6 +95,93 @@ test.describe('Multiplexer backend menu', () => {
     await expect(menu.locator('.new-session-menu-item', { hasText: 'Local Terminal' })).toBeVisible();
     await expect(menu.getByText('Zellij', { exact: true })).toHaveCount(0);
     await expect(menu.getByText('tmux', { exact: true })).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  });
+
+  // ── New: menu grouping & backend icons ──────────────────────────────────
+
+  test('new-session menu groups by machine and shows backend icons', async ({ page }) => {
+    await page.route('**/api/multiplexer/status', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          zellij: { available: true, sessions: ['work'], aliases: { work: 'My Work' } },
+          tmux: { available: false, sessions: [], aliases: {} },
+        }),
+      }));
+
+    await login(page);
+    await page.locator('#session-new-btn').click();
+
+    const menu = page.locator('#new-session-menu');
+    await expect(menu).toBeVisible({ timeout: 3000 });
+
+    // Group header "This Den (local)" should be present.
+    await expect(menu.locator('.new-session-menu-group').first()).toContainText('This Den');
+
+    // Backend row for zellij should contain the backend icon.
+    const backendRow = menu.locator('.new-session-menu-backend');
+    await expect(backendRow).toBeVisible();
+    await expect(backendRow.locator('.backend-icon[data-backend="zellij"]')).toBeVisible();
+
+    // The aliased session chip ("My Work") should appear.
+    await expect(menu.locator('.new-session-menu-chip', { hasText: 'My Work' })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  });
+
+  test('session chips show alias when available, raw name otherwise', async ({ page }) => {
+    await page.route('**/api/multiplexer/status', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          zellij: {
+            available: true,
+            sessions: ['aliased-sess', 'plain-sess'],
+            aliases: { 'aliased-sess': 'My Alias' },
+          },
+          tmux: { available: false, sessions: [], aliases: {} },
+        }),
+      }));
+
+    await login(page);
+    await page.locator('#session-new-btn').click();
+
+    const menu = page.locator('#new-session-menu');
+    await expect(menu).toBeVisible({ timeout: 3000 });
+
+    // Aliased session shows the alias text on the chip.
+    await expect(menu.locator('.new-session-menu-chip', { hasText: 'My Alias' })).toBeVisible();
+    // Un-aliased session shows the raw name.
+    await expect(menu.locator('.new-session-menu-chip', { hasText: 'plain-sess' })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  });
+
+  test('"Manage sessions…" entry is present in + menu', async ({ page }) => {
+    await page.route('**/api/multiplexer/status', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          zellij: { available: true, sessions: ['s1'], aliases: {} },
+          tmux: { available: false, sessions: [], aliases: {} },
+        }),
+      }));
+
+    await login(page);
+    await page.locator('#session-new-btn').click();
+
+    const menu = page.locator('#new-session-menu');
+    await expect(menu).toBeVisible({ timeout: 3000 });
+    await expect(menu.locator('.new-session-menu-manage')).toBeVisible();
+    await expect(menu.locator('.new-session-menu-manage')).toContainText('Manage sessions');
 
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();

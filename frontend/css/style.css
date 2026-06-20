@@ -858,8 +858,8 @@ pre:hover .code-copy-btn {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  min-width: 160px;
-  max-height: 300px;
+  min-width: 200px;
+  max-height: 400px;
   overflow-y: auto;
   z-index: 1000;
   box-shadow: 0 4px 12px rgba(0,0,0,0.3);
@@ -892,6 +892,84 @@ pre:hover .code-copy-btn {
 }
 .new-session-menu-item.disconnect {
   color: var(--error);
+}
+/* Machine-group header row */
+.new-session-menu-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.new-session-menu-group:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+.new-session-menu-group .group-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+/* Backend row (zellij / tmux): icon + label + session chips + New chip */
+.new-session-menu-backend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 20px;
+  min-height: 28px;
+}
+.new-session-menu-backend .backend-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+.new-session-menu-backend .backend-icon[data-backend="zellij"] { color: var(--accent); }
+.new-session-menu-backend .backend-icon[data-backend="tmux"]   { color: var(--success); }
+.new-session-menu-backend .backend-icon[data-backend="shell"]  { color: var(--muted); }
+.new-session-menu-backend-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  min-width: 40px;
+}
+/* Session chips row */
+.new-session-menu-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.new-session-menu-chip {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.new-session-menu-chip:hover {
+  background: var(--hover);
+}
+.new-session-menu-chip-new {
+  font-weight: 700;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.new-session-menu-chip-new:hover {
+  background: var(--accent-tint);
+}
+@media (hover: none) and (pointer: coarse) {
+  .new-session-menu-chip {
+    min-height: 32px;
+    padding: 4px 12px;
+  }
 }
 
 #terminal-container {
@@ -3492,5 +3570,141 @@ html.theme-transition button {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* === Sessions management modal === */
+
+/* Wider content to fit session rows with action buttons */
+.sessions-modal-content {
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sessions-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 12px;
+  min-height: 60px;
+  max-height: 60vh;
+}
+
+.sessions-loading,
+.sessions-empty {
+  padding: 16px 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* Group header: "This Den (local)" / "Remote: ..." */
+.sessions-group-header {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 10px 2px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.sessions-group-header:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 4px;
+}
+
+/* Backend sub-header: "zellij" / "tmux" */
+.sessions-backend-header {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 4px 2px 2px 12px;
+  text-transform: capitalize;
+}
+
+/* Session row */
+.sessions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 6px 24px;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.sessions-row:hover {
+  background: var(--hover-subtle);
+}
+
+.sessions-row-name {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Small action buttons for session rows */
+.sessions-action-btn {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1.4;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.sessions-action-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+  border-color: var(--fg);
+}
+
+.sessions-action-btn[data-action="kill"],
+.sessions-action-btn[data-action="delete"] {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.sessions-action-btn[data-action="kill"]:hover,
+.sessions-action-btn[data-action="delete"]:hover {
+  background: var(--error-tint);
+}
+
+/* "Manage sessions…" entry in the new-session dropdown */
+.new-session-menu-manage {
+  color: var(--accent);
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 8px;
+}
+
+@media (max-width: 600px) {
+  .sessions-modal-content {
+    max-width: 95%;
+  }
+
+  .sessions-row {
+    flex-wrap: wrap;
+    padding-left: 12px;
+  }
+
+  .sessions-row-name {
+    flex-basis: 100%;
   }
 }
