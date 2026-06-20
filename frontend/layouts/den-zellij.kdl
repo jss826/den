@@ -1,0 +1,19 @@
+// Den multiplexer config (zellij). Den owns the multiplexing UI.
+// Passed by Den as: zellij --config <this> -l <layout> attach -c <name>
+// The default_shell value below is filled in at write time with Den's shell.
+
+// Use Den's configured shell so interactive line-editing features (PSReadLine /
+// readline history search, including Ctrl+R) behave exactly like a plain Den
+// session. Without this, zellij falls back to $SHELL / the platform default
+// (cmd.exe on Windows), where Ctrl+R does nothing.
+default_shell "__DEN_SHELL__"
+
+// Den drives tabs / panes / scrollback through its own UI, so zellij's default
+// Ctrl-prefix mode switches (Ctrl+s/t/p/n/o/h/b/g/q, ...) are pure interference:
+// they collide with common shell / editor keys and never reach the shell.
+// clear-defaults=true drops every default binding so all keys pass straight
+// through to the shell. (To re-enable zellij keyboard control, add binds here.)
+keybinds clear-defaults=true {
+}
+
+pane_frames false

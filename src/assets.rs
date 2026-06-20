@@ -75,29 +75,70 @@ pub async fn serve_index() -> Response {
         .into_response()
 }
 
-/// multiplexer 用 layout/conf を `data_dir` に書き出し、絶対パス文字列を返す。
+/// multiplexer 用 layout/config を `data_dir` に書き出し、各絶対パスを返す。
+/// `shell`（Den の設定シェル）は zellij `default_shell` / tmux `default-command` の
+/// `__DEN_SHELL__` プレースホルダへ展開され、mux セッションのシェルを plain Den
+/// セッションと一致させる（PSReadLine/readline の Ctrl+R 等の挙動を揃える）。
 /// 書き出し失敗・asset 欠落時は warn ログを出し、そのパスは空文字列を返す
-/// （呼び出し側は layout フラグ省略にフォールバックする）。
-pub fn ensure_mux_layouts(data_dir: &std::path::Path) -> (String, String) {
+/// （呼び出し側は該当フラグ省略にフォールバックする）。
+pub fn ensure_mux_layouts(
+    data_dir: &std::path::Path,
+    shell: &str,
+) -> crate::pty::backend::MuxConfig {
+    // config 値（二重引用符内）へ安全に埋め込むためのエスケープ。
+    // KDL / tmux conf いずれも `\` と `"` を打ち消せば壊れない
+    // （shell が Windows のフルパスでバックスラッシュを含むケースに備える）。
+    let shell_escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
+
     fn write_embedded(data_dir: &std::path::Path, embedded: &str, out_name: &str) -> String {
+        write_rendered(data_dir, embedded, out_name, &|s| s.to_string())
+    }
+    // テンプレート（`__DEN_SHELL__` 置換）を施して書き出す。
+    fn write_templated(
+        data_dir: &std::path::Path,
+        embedded: &str,
+        out_name: &str,
+        shell_escaped: &str,
+    ) -> String {
+        write_rendered(data_dir, embedded, out_name, &|text| {
+            text.replace("__DEN_SHELL__", shell_escaped)
+        })
+    }
+    fn write_rendered(
+        data_dir: &std::path::Path,
+        embedded: &str,
+        out_name: &str,
+        render: &dyn Fn(&str) -> String,
+    ) -> String {
         let path = data_dir.join(out_name);
         match FrontendAssets::get(embedded) {
-            Some(file) => match std::fs::write(&path, file.data.as_ref()) {
-                Ok(()) => path.to_string_lossy().into_owned(),
-                Err(e) => {
-                    tracing::warn!("Failed to write {out_name}: {e}");
-                    String::new()
+            Some(file) => {
+                let rendered = render(&String::from_utf8_lossy(file.data.as_ref()));
+                match std::fs::write(&path, rendered.as_bytes()) {
+                    Ok(()) => path.to_string_lossy().into_owned(),
+                    Err(e) => {
+                        tracing::warn!("Failed to write {out_name}: {e}");
+                        String::new()
+                    }
                 }
-            },
+            }
             None => {
                 tracing::warn!("Embedded asset {embedded} missing");
                 String::new()
             }
         }
     }
-    let kdl = write_embedded(data_dir, "layouts/den-bare.kdl", "den-bare.kdl");
-    let conf = write_embedded(data_dir, "layouts/den.conf", "den.conf");
-    (kdl, conf)
+
+    crate::pty::backend::MuxConfig {
+        zellij_layout: write_embedded(data_dir, "layouts/den-bare.kdl", "den-bare.kdl"),
+        zellij_config: write_templated(
+            data_dir,
+            "layouts/den-zellij.kdl",
+            "den-zellij.kdl",
+            &shell_escaped,
+        ),
+        tmux_conf: write_templated(data_dir, "layouts/den.conf", "den.conf", &shell_escaped),
+    }
 }
 
 fn serve_file(path: &str) -> Response {
@@ -142,13 +183,38 @@ mod mux_layout_tests {
     fn ensure_mux_layouts_writes_files() {
         let dir = std::env::temp_dir().join("den-mux-layout-test");
         let _ = std::fs::create_dir_all(&dir);
-        let (kdl, conf) = ensure_mux_layouts(&dir);
-        assert!(std::path::Path::new(&kdl).exists());
-        assert!(std::path::Path::new(&conf).exists());
-        let conf_body = std::fs::read_to_string(&conf).expect("conf readable");
+        let mux = ensure_mux_layouts(&dir, "powershell.exe");
+        assert!(std::path::Path::new(&mux.zellij_layout).exists());
+        assert!(std::path::Path::new(&mux.zellij_config).exists());
+        assert!(std::path::Path::new(&mux.tmux_conf).exists());
+
+        let conf_body = std::fs::read_to_string(&mux.tmux_conf).expect("conf readable");
         assert!(conf_body.contains("status off"));
-        let kdl_body = std::fs::read_to_string(&kdl).expect("kdl readable");
+        // tmux: shell 展開 ＋ prefix 解放
+        assert!(conf_body.contains("default-command \"powershell.exe\""));
+        assert!(conf_body.contains("set -g prefix None"));
+
+        let kdl_body = std::fs::read_to_string(&mux.zellij_layout).expect("kdl readable");
         assert!(kdl_body.contains("pane"));
+
+        let cfg_body = std::fs::read_to_string(&mux.zellij_config).expect("cfg readable");
+        // zellij: default_shell 展開 ＋ keybinds clear-defaults
+        assert!(cfg_body.contains("default_shell \"powershell.exe\""));
+        assert!(cfg_body.contains("clear-defaults=true"));
+        // プレースホルダが残っていないこと
+        assert!(!cfg_body.contains("__DEN_SHELL__"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_mux_layouts_escapes_backslashes_in_shell() {
+        // Windows フルパス（バックスラッシュ）でも KDL/conf が壊れない
+        let dir = std::env::temp_dir().join("den-mux-layout-esc-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let mux = ensure_mux_layouts(&dir, r"C:\Win\pwsh.exe");
+        let cfg_body = std::fs::read_to_string(&mux.zellij_config).expect("cfg readable");
+        assert!(cfg_body.contains(r#"default_shell "C:\\Win\\pwsh.exe""#));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

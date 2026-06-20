@@ -43,8 +43,7 @@ fn test_app_from_config(config: Config) -> (axum::Router, std::sync::Arc<den::Ap
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None)
 }
@@ -134,8 +133,7 @@ async fn tls_status_omits_internal_paths() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _) = den::create_app_with_secret(
         config,
@@ -618,8 +616,7 @@ async fn settings_put_and_get() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
@@ -695,8 +692,7 @@ async fn settings_put_partial_json() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
@@ -744,8 +740,7 @@ async fn settings_ssh_bookmarks_roundtrip() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
@@ -1410,8 +1405,7 @@ async fn clipboard_history_post_and_get() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
@@ -1459,8 +1453,7 @@ async fn clipboard_history_dedup() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
@@ -1509,8 +1502,7 @@ async fn clipboard_history_delete() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);
@@ -1663,8 +1655,7 @@ async fn keep_awake_put_and_get() {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     );
     let (app, _state) =
         den::create_app_with_secret(config, registry, TEST_HMAC_SECRET.to_vec(), store, None);

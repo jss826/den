@@ -12,8 +12,7 @@ fn new_registry() -> Arc<SessionRegistry> {
         SleepPreventionMode::Off,
         30,
         None,
-        String::new(),
-        String::new(),
+        den::pty::backend::MuxConfig::default(),
     )
 }
 

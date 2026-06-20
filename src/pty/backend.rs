@@ -11,15 +11,31 @@ pub enum SessionBackend {
     Tmux,
 }
 
+/// multiplexer 起動に使う materialized なファイルパス群。
+/// `ensure_mux_layouts` が `data_dir` へ書き出した絶対パスを保持する。
+/// 各フィールドが空文字列 = 書き出し失敗（`build_launch_command` は該当フラグを省略）。
+#[derive(Debug, Clone, Default)]
+pub struct MuxConfig {
+    /// zellij bare layout（`-l`）
+    pub zellij_layout: String,
+    /// zellij config（`--config`）: default_shell ＋ keybinds clear-defaults
+    pub zellij_config: String,
+    /// tmux conf（`-f`）
+    pub tmux_conf: String,
+}
+
 /// backend に応じた起動コマンド (program, args) を組み立てる。
 /// シェル文字列連結はしない（argv 配列で CommandBuilder に渡す）。
 /// name は is_valid_session_name で英数＋`-` に限定済みの前提。
 ///
 /// zellij/tmux の argv は Task 1 PoC findings の確定形を使う:
-/// - zellij: `zellij -l <layout> attach -c <name>`（attach-or-create。初回 create 時のみ layout 適用）
+/// - zellij: `zellij --config <cfg> -l <layout> attach -c <name>`（attach-or-create。
+///   `--config` で Den 専用設定[default_shell ＋ keybinds clear-defaults]を渡す。
+///   グローバルオプションなのでサブコマンド `attach -c` より前に置く。long form 必須
+///   [`attach -c` の `-c`=create と短縮形が衝突するため]）
 /// - tmux:   `tmux -f <conf> new-session -A -s <name>`（`-A` で attach-or-create）
 ///
-/// layout/conf パスが空（embed 書き出し失敗）のときは layout フラグを最初から付けず、
+/// layout/config/conf パスが空（embed 書き出し失敗）のときは該当フラグを最初から付けず、
 /// 素の `zellij attach -c <name>` / `tmux new-session -A -s <name>` を返す。
 /// 空文字列を引数として渡したり、後段で文字列一致で除去したりはしない
 /// （name が偶然 `-l`/`-f` と一致しても壊れない）。
@@ -27,16 +43,20 @@ pub fn build_launch_command(
     backend: SessionBackend,
     shell: &str,
     name: &str,
-    zellij_layout: &str,
-    tmux_conf: &str,
+    mux: &MuxConfig,
 ) -> (String, Vec<String>) {
     match backend {
         SessionBackend::Shell => (shell.to_string(), Vec::new()),
         SessionBackend::Zellij => {
             let mut args = Vec::new();
-            if !zellij_layout.is_empty() {
+            // --config はグローバルオプション。サブコマンド前・long form で渡す。
+            if !mux.zellij_config.is_empty() {
+                args.push("--config".to_string());
+                args.push(mux.zellij_config.clone());
+            }
+            if !mux.zellij_layout.is_empty() {
                 args.push("-l".to_string());
-                args.push(zellij_layout.to_string());
+                args.push(mux.zellij_layout.clone());
             }
             args.push("attach".to_string());
             args.push("-c".to_string());
@@ -45,9 +65,9 @@ pub fn build_launch_command(
         }
         SessionBackend::Tmux => {
             let mut args = Vec::new();
-            if !tmux_conf.is_empty() {
+            if !mux.tmux_conf.is_empty() {
                 args.push("-f".to_string());
-                args.push(tmux_conf.to_string());
+                args.push(mux.tmux_conf.clone());
             }
             args.push("new-session".to_string());
             args.push("-A".to_string());
@@ -136,31 +156,40 @@ pub fn list_mux_sessions(backend: SessionBackend) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn mux(zellij_layout: &str, zellij_config: &str, tmux_conf: &str) -> MuxConfig {
+        MuxConfig {
+            zellij_layout: zellij_layout.to_string(),
+            zellij_config: zellij_config.to_string(),
+            tmux_conf: tmux_conf.to_string(),
+        }
+    }
+
     #[test]
     fn shell_backend_uses_shell_with_no_args() {
         let (prog, args) = build_launch_command(
             SessionBackend::Shell,
             "powershell.exe",
             "work",
-            "L.kdl",
-            "t.conf",
+            &mux("L.kdl", "C.kdl", "t.conf"),
         );
         assert_eq!(prog, "powershell.exe");
         assert!(args.is_empty());
     }
 
     #[test]
-    fn zellij_backend_attach_or_create_with_layout() {
-        // PoC 確定形: zellij -l <layout> attach -c <name>
+    fn zellij_backend_attach_or_create_with_config_and_layout() {
+        // PoC 確定形 + Den config: zellij --config <cfg> -l <layout> attach -c <name>
         let (prog, args) = build_launch_command(
             SessionBackend::Zellij,
             "powershell.exe",
             "work",
-            "L.kdl",
-            "t.conf",
+            &mux("L.kdl", "C.kdl", "t.conf"),
         );
         assert_eq!(prog, "zellij");
-        assert_eq!(args, vec!["-l", "L.kdl", "attach", "-c", "work"]);
+        assert_eq!(
+            args,
+            vec!["--config", "C.kdl", "-l", "L.kdl", "attach", "-c", "work"]
+        );
     }
 
     #[test]
@@ -169,8 +198,7 @@ mod tests {
             SessionBackend::Tmux,
             "powershell.exe",
             "work",
-            "L.kdl",
-            "t.conf",
+            &mux("L.kdl", "C.kdl", "t.conf"),
         );
         assert_eq!(prog, "tmux");
         assert_eq!(
@@ -180,18 +208,38 @@ mod tests {
     }
 
     #[test]
-    fn zellij_backend_without_layout_omits_flag() {
-        // layout 書き出し失敗（空文字列）→ -l フラグごと付けない
-        let (prog, args) =
-            build_launch_command(SessionBackend::Zellij, "powershell.exe", "work", "", "");
+    fn zellij_backend_without_config_or_layout_omits_flags() {
+        // config/layout 書き出し失敗（空文字列）→ --config も -l も付けない
+        let (prog, args) = build_launch_command(
+            SessionBackend::Zellij,
+            "powershell.exe",
+            "work",
+            &mux("", "", ""),
+        );
         assert_eq!(prog, "zellij");
         assert_eq!(args, vec!["attach", "-c", "work"]);
     }
 
     #[test]
+    fn zellij_backend_config_without_layout() {
+        // config だけ成功・layout 失敗 → --config のみ付与（-l は省略）
+        let (_, args) = build_launch_command(
+            SessionBackend::Zellij,
+            "powershell.exe",
+            "work",
+            &mux("", "C.kdl", ""),
+        );
+        assert_eq!(args, vec!["--config", "C.kdl", "attach", "-c", "work"]);
+    }
+
+    #[test]
     fn tmux_backend_without_conf_omits_flag() {
-        let (prog, args) =
-            build_launch_command(SessionBackend::Tmux, "powershell.exe", "work", "", "");
+        let (prog, args) = build_launch_command(
+            SessionBackend::Tmux,
+            "powershell.exe",
+            "work",
+            &mux("", "", ""),
+        );
         assert_eq!(prog, "tmux");
         assert_eq!(args, vec!["new-session", "-A", "-s", "work"]);
     }
@@ -199,10 +247,19 @@ mod tests {
     #[test]
     fn hyphenated_name_is_not_confused_with_flag() {
         // name が "-l"/"-f" と一致しても layout 省略時に壊れない（文字列除去ではなく条件付き付与）
-        let (_, zargs) =
-            build_launch_command(SessionBackend::Zellij, "powershell.exe", "-l", "", "");
+        let (_, zargs) = build_launch_command(
+            SessionBackend::Zellij,
+            "powershell.exe",
+            "-l",
+            &mux("", "", ""),
+        );
         assert_eq!(zargs, vec!["attach", "-c", "-l"]);
-        let (_, targs) = build_launch_command(SessionBackend::Tmux, "powershell.exe", "-f", "", "");
+        let (_, targs) = build_launch_command(
+            SessionBackend::Tmux,
+            "powershell.exe",
+            "-f",
+            &mux("", "", ""),
+        );
         assert_eq!(targs, vec!["new-session", "-A", "-s", "-f"]);
     }
 

@@ -82,16 +82,16 @@ async fn main() {
     // Settings から初期設定を読み込み、SessionRegistry を生成
     let store = Store::from_data_dir(&config.data_dir).expect("Failed to initialize data store");
     let settings = store.load_settings();
-    // multiplexer 用 layout/conf を data_dir に書き出し（失敗時は空パス → mux layout フラグ省略）
-    let (zellij_layout, tmux_conf) =
-        den::assets::ensure_mux_layouts(std::path::Path::new(&config.data_dir));
+    // multiplexer 用 layout/config を data_dir に書き出し（失敗時は空パス → 該当フラグ省略）。
+    // config.shell を mux 設定にも展開し、plain セッションとシェル挙動を揃える。
+    let mux =
+        den::assets::ensure_mux_layouts(std::path::Path::new(&config.data_dir), &config.shell);
     let registry = SessionRegistry::new(
         config.shell.clone(),
         settings.sleep_prevention_mode,
         settings.sleep_prevention_timeout,
         Some(store.clone()),
-        zellij_layout,
-        tmux_conf,
+        mux,
     );
 
     // クリップボード監視（システムクリップボード変更を検知）

@@ -229,10 +229,9 @@ pub struct SessionRegistry {
     instance_id: String,
     /// Store for session persistence
     store: Option<crate::store::Store>,
-    /// zellij bare layout path (empty if materialization failed → no -l flag)
-    zellij_layout: String,
-    /// tmux conf path (empty if materialization failed → no -f flag)
-    tmux_conf: String,
+    /// multiplexer 用 materialized パス群（zellij layout/config・tmux conf）。
+    /// 各パスが空 = 書き出し失敗 → build_launch_command が該当フラグを省略。
+    mux: crate::pty::backend::MuxConfig,
 }
 
 /// 1 つの名前付き PTY セッション
@@ -438,8 +437,7 @@ impl SessionRegistry {
         sleep_mode: SleepPreventionMode,
         sleep_timeout: u16,
         store: Option<crate::store::Store>,
-        zellij_layout: String,
-        tmux_conf: String,
+        mux: crate::pty::backend::MuxConfig,
     ) -> Arc<Self> {
         let last_activity = Arc::new(AtomicU64::new(now_epoch_secs()));
         let sleep_config = Arc::new(std::sync::Mutex::new(SleepConfig {
@@ -466,8 +464,7 @@ impl SessionRegistry {
             last_activity,
             instance_id,
             store,
-            zellij_layout,
-            tmux_conf,
+            mux,
         });
 
         // always モードなら即座に ON
@@ -799,13 +796,8 @@ impl SessionRegistry {
 
         // layout/conf パスが空（書き出し失敗）のときは build_launch_command 側で
         // layout フラグを付けずに素の attach コマンドを返す。
-        let (program, args) = crate::pty::backend::build_launch_command(
-            backend,
-            &self.shell,
-            name,
-            &self.zellij_layout,
-            &self.tmux_conf,
-        );
+        let (program, args) =
+            crate::pty::backend::build_launch_command(backend, &self.shell, name, &self.mux);
 
         // PTY を spawn（blocking）
         let pty = tokio::task::spawn_blocking({
@@ -1534,8 +1526,7 @@ mod tests {
             SleepPreventionMode::Off,
             0,
             None,
-            String::new(),
-            String::new(),
+            crate::pty::backend::MuxConfig::default(),
         );
         let err = registry.rename("nonexistent", "new").await.unwrap_err();
         assert!(matches!(err, RegistryError::NotFound(_)));
@@ -1548,8 +1539,7 @@ mod tests {
             SleepPreventionMode::Off,
             0,
             None,
-            String::new(),
-            String::new(),
+            crate::pty::backend::MuxConfig::default(),
         );
         // Not found takes precedence, but invalid name is checked first
         let err = registry.rename("x", "bad name!").await.unwrap_err();
