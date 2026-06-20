@@ -367,11 +367,13 @@ impl DenSshHandler {
         let cols = self.pty_cols;
         let rows = self.pty_rows;
 
+        // SSH は毎回フル画面をクリアしてから full replay する（差分は使わない）→ since=None。
         let (shared_session, mut output_rx, replay, client_id) = self
             .registry
-            .get_or_create(session_name, ClientKind::Ssh, cols, rows)
+            .get_or_create(session_name, ClientKind::Ssh, cols, rows, None)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let replay = replay.data;
 
         self.session_name = Some(session_name.to_string());
         self.client_id = Some(client_id);
@@ -419,8 +421,8 @@ impl DenSshHandler {
                 // recv with timeout: ConPTY は子プロセス終了後も reader を
                 // ブロックし続けるため、定期的に alive を確認する
                 match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
-                    Ok(Ok(data)) => {
-                        let filtered = filter_conpty_private_modes(&data);
+                    Ok(Ok(chunk)) => {
+                        let filtered = filter_conpty_private_modes(&chunk.data);
                         let filtered = replace_osc_title(&filtered, &osc_replacement);
                         if filtered.is_empty() {
                             continue;

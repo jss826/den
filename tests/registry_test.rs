@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serial_test::serial;
 use tokio::sync::broadcast;
 
-use den::pty::registry::{ClientKind, RegistryError, SessionRegistry, SharedSession};
+use den::pty::registry::{ClientKind, OutputChunk, RegistryError, SessionRegistry, SharedSession};
 use den::store::SleepPreventionMode;
 
 fn new_registry() -> Arc<SessionRegistry> {
@@ -29,15 +29,15 @@ fn session_name(test: &str) -> String {
 
 /// ConPTY の DSR (`ESC[6n`) に CPR で応答し、シェルが起動するまで待つ。
 /// シェルが初期化前に死亡した場合は panic する。
-async fn init_shell(session: &Arc<SharedSession>, rx: &mut broadcast::Receiver<Vec<u8>>) {
+async fn init_shell(session: &Arc<SharedSession>, rx: &mut broadcast::Receiver<Arc<OutputChunk>>) {
     let overall = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut buf = Vec::new();
 
     // Phase 1: DSR を検出して CPR を返す
     loop {
         match tokio::time::timeout_at(overall, rx.recv()).await {
-            Ok(Ok(data)) => {
-                buf.extend_from_slice(&data);
+            Ok(Ok(chunk)) => {
+                buf.extend_from_slice(&chunk.data);
                 if buf.windows(4).any(|w| w == b"\x1b[6n") {
                     let _ = session.write_input(b"\x1b[1;1R").await;
                     break;
@@ -118,7 +118,7 @@ async fn create_invalid_name() {
 async fn attach_nonexistent_returns_not_found() {
     let reg = new_registry();
     let result = reg
-        .attach("nonexistent-session", ClientKind::WebSocket, 80, 24)
+        .attach("nonexistent-session", ClientKind::WebSocket, 80, 24, None)
         .await;
     assert!(matches!(result, Err(RegistryError::NotFound(_))));
 }
@@ -168,10 +168,13 @@ fn pty_non_interactive() {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             let (_s, _rx, replay, _cid) = reg
-                .attach(&name, ClientKind::WebSocket, 80, 24)
+                .attach(&name, ClientKind::WebSocket, 80, 24, None)
                 .await
                 .unwrap();
-            assert!(!replay.is_empty(), "Replay should contain DSR sequences");
+            assert!(
+                !replay.data.is_empty(),
+                "Replay should contain DSR sequences"
+            );
             reg.destroy(&name).await;
         }
 
@@ -184,7 +187,7 @@ fn pty_non_interactive() {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             let (_s, _rx, _replay, cid) = reg
-                .attach(&name, ClientKind::WebSocket, 80, 24)
+                .attach(&name, ClientKind::WebSocket, 80, 24, None)
                 .await
                 .unwrap();
             reg.detach(&name, cid).await;
@@ -198,7 +201,7 @@ fn pty_non_interactive() {
             let name = session_name("goc-new");
 
             let (session, _rx, _replay, _cid) = reg
-                .get_or_create(&name, ClientKind::WebSocket, 80, 24)
+                .get_or_create(&name, ClientKind::WebSocket, 80, 24, None)
                 .await
                 .unwrap();
             assert!(session.is_alive());
@@ -212,7 +215,7 @@ fn pty_non_interactive() {
 
             let (_s, _rx) = reg.create(&name, 80, 24).await.unwrap();
             let (session, _rx, _replay, _cid) = reg
-                .get_or_create(&name, ClientKind::WebSocket, 80, 24)
+                .get_or_create(&name, ClientKind::WebSocket, 80, 24, None)
                 .await
                 .unwrap();
             assert!(session.is_alive());
@@ -262,10 +265,13 @@ fn pty_non_interactive() {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             let (s, _rx1, _rp1, id1) = reg
-                .attach(&name, ClientKind::WebSocket, 120, 40)
+                .attach(&name, ClientKind::WebSocket, 120, 40, None)
                 .await
                 .unwrap();
-            let (_s2, _rx2, _rp2, id2) = reg.attach(&name, ClientKind::Ssh, 80, 24).await.unwrap();
+            let (_s2, _rx2, _rp2, id2) = reg
+                .attach(&name, ClientKind::Ssh, 80, 24, None)
+                .await
+                .unwrap();
 
             // 登録済みクライアントからの書き込みは成功する
             assert!(s.write_input_from(id1, b"test1").await.is_ok());
@@ -290,10 +296,13 @@ fn pty_non_interactive() {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
             let (s1, _rx1, _rp1, id1) = reg
-                .attach(&name, ClientKind::WebSocket, 120, 40)
+                .attach(&name, ClientKind::WebSocket, 120, 40, None)
                 .await
                 .unwrap();
-            let (s2, _rx2, _rp2, id2) = reg.attach(&name, ClientKind::Ssh, 80, 24).await.unwrap();
+            let (s2, _rx2, _rp2, id2) = reg
+                .attach(&name, ClientKind::Ssh, 80, 24, None)
+                .await
+                .unwrap();
             s1.resize(id1, 100, 30).await;
             s2.resize(id2, 90, 25).await;
             reg.destroy(&name).await;
@@ -329,7 +338,7 @@ fn pty_interactive() {
         loop {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Ok(data)) => {
-                    output.push_str(&String::from_utf8_lossy(&data));
+                    output.push_str(&String::from_utf8_lossy(&data.data));
                     if output.contains("BROADCAST_MARKER_99") {
                         break;
                     }
@@ -354,7 +363,7 @@ fn pty_interactive() {
         loop {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Ok(data)) => {
-                    output2.push_str(&String::from_utf8_lossy(&data));
+                    output2.push_str(&String::from_utf8_lossy(&data.data));
                     if output2.contains("WRITE_MARKER_77") {
                         break;
                     }
@@ -369,11 +378,11 @@ fn pty_interactive() {
 
         // --- replay: attach して replay に内容が含まれるか ---
         let (_s, _rx2, replay, _cid) = reg
-            .attach(&name, ClientKind::WebSocket, 80, 24)
+            .attach(&name, ClientKind::WebSocket, 80, 24, None)
             .await
             .unwrap();
-        let replay_text = String::from_utf8_lossy(&replay);
-        assert!(!replay.is_empty(), "Replay should contain data");
+        let replay_text = String::from_utf8_lossy(&replay.data);
+        assert!(!replay.data.is_empty(), "Replay should contain data");
         assert!(
             replay_text.contains("BROADCAST_MARKER_99")
                 || replay_text.contains("WRITE_MARKER_77")
@@ -422,7 +431,7 @@ fn pty_exit_and_recreate() {
 
         // get_or_create → 再作成
         let (new_session, _rx, _replay, _cid) = reg
-            .get_or_create(&name, ClientKind::WebSocket, 80, 24)
+            .get_or_create(&name, ClientKind::WebSocket, 80, 24, None)
             .await
             .unwrap();
         assert!(new_session.is_alive());

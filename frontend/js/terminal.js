@@ -491,6 +491,10 @@ const DenTerminal = (() => {
       ws: null, pingTimer: null, connectGeneration: 0,
       reconnectAttempts: 0, manualReconnectDisposable: null,
       lastSentCols: 0, lastSentRows: 0,
+      // Absolute byte sequence of the last output the term has applied. Sent as
+      // ?since=N on (re)connect so the server replays only the delta — preventing
+      // the scrollback duplication that full re-replays caused on reconnect (#117).
+      lastSeq: 0n,
       disposed: false, ready: null,
     };
     // Never reject: a failed build (adapter load error) leaves st.term null,
@@ -517,7 +521,7 @@ const DenTerminal = (() => {
     const cols = st.term.cols;
     const rows = st.term.rows;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}${stWsPath(st)}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(st.name)}`;
+    const url = `${proto}//${location.host}${stWsPath(st)}?cols=${cols}&rows=${rows}&session=${encodeURIComponent(st.name)}&since=${st.lastSeq}`;
 
     let retries = 0;
 
@@ -539,11 +543,26 @@ const DenTerminal = (() => {
       // null sentinel means "no pending rAF" (rAF returns a positive integer).
       let writeBuf = [];
       let writeRaf = null;
+      // Seq of the most recently buffered (not-yet-written) frame. st.lastSeq is
+      // advanced to this ONLY once the bytes are actually handed to the term in
+      // flushWrite — never at receive time. Otherwise a frame received but then
+      // discarded (writeBuf is cleared in ws.onclose, and a pending rAF is frozen
+      // while the tab is backgrounded on iOS) would push lastSeq past data the
+      // term never applied, leaving a gap in the delta replay after reconnect (#117).
+      let pendingSeq = st.lastSeq;
+      // Set when the server sends a {"type":"sync","mode":"full"} control frame,
+      // meaning the next replay frame is authoritative and the term must be reset
+      // first (the client fell outside the server's replay window).
+      let pendingReset = false;
 
       const flushWrite = () => {
         const chunks = writeBuf;
+        if (chunks.length === 0) return;
         writeBuf = [];
         st.term.write(chunks.length === 1 ? chunks[0] : mergeChunks(chunks));
+        // Commit the seq only now that the bytes live in the term's own buffer,
+        // so a discarded writeBuf never advances lastSeq past unrendered output.
+        st.lastSeq = pendingSeq;
       };
 
       ws.onopen = () => {
@@ -558,7 +577,7 @@ const DenTerminal = (() => {
       ws.onmessage = (event) => {
         if (generation !== st.connectGeneration) return;
         if (typeof event.data === 'string') {
-          // Text branch carries only JSON control messages (e.g. session_ended).
+          // Text branch carries only JSON control messages (session_ended / sync).
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'session_ended') {
@@ -567,12 +586,27 @@ const DenTerminal = (() => {
               refreshSessionList();
               return;
             }
+            if (msg.type === 'sync') {
+              // Full replay incoming: reset the term before applying it so the
+              // authoritative window replaces (not appends to) stale scrollback.
+              if (msg.mode === 'full') pendingReset = true;
+              return;
+            }
           } catch (_) {
             // テキストデータとして扱う
           }
           st.term.write(event.data);
         } else if (event.data instanceof ArrayBuffer) {
-          writeBuf.push(new Uint8Array(event.data));
+          // Every binary frame is [8-byte big-endian abs seq][terminal data].
+          if (event.data.byteLength < 8) return;
+          pendingSeq = new DataView(event.data).getBigUint64(0);
+          if (pendingReset) {
+            pendingReset = false;
+            writeBuf = [];
+            if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
+            st.term.reset();
+          }
+          writeBuf.push(new Uint8Array(event.data, 8));
           if (writeRaf === null) {
             // rAF is throttled when the tab is hidden AND for background
             // (non-active) sessions whose host is display:none. Write directly

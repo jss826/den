@@ -9,8 +9,19 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::manager::PtyManager;
+pub use super::ring_buffer::ReplaySlice;
 use super::ring_buffer::RingBuffer;
 use crate::store::{SleepPreventionMode, SshAuthType};
+
+/// PTY 出力の 1 チャンク。broadcast で配信される。
+///
+/// `seq_end` は「このチャンクの末尾までに書き込まれた総バイト数」（絶対シーケンス）。
+/// クライアントはこの seq を覚えておき、再接続時に差分リプレイを要求する。
+#[derive(Debug)]
+pub struct OutputChunk {
+    pub data: Vec<u8>,
+    pub seq_end: u64,
+}
 
 /// SessionRegistry の操作エラー
 #[derive(Debug)]
@@ -221,7 +232,7 @@ pub struct SharedSession {
     /// リプレイバッファ（std::sync::Mutex: blocking context から常にアクセス可能）
     replay_buf: std::sync::Mutex<RingBuffer>,
     /// broadcast 送信側（read_task 終了時に drop してチャネルを閉じる）
-    output_tx: std::sync::Mutex<Option<broadcast::Sender<Vec<u8>>>>,
+    output_tx: std::sync::Mutex<Option<broadcast::Sender<std::sync::Arc<OutputChunk>>>>,
     /// PTY 内部状態（pty_writer, clients, child 等）
     pub inner: Mutex<SessionInner>,
     /// ユーザー操作タイムスタンプ（Registry と共有、AtomicU64 で lock-free 更新）
@@ -495,7 +506,7 @@ impl SessionRegistry {
         ssh_config: Option<SshSessionConfig>,
     ) -> (
         Arc<SharedSession>,
-        broadcast::Receiver<Vec<u8>>,
+        broadcast::Receiver<Arc<OutputChunk>>,
         tokio::task::JoinHandle<()>,
     ) {
         let (output_tx, first_rx) = broadcast::channel(BROADCAST_CAPACITY);
@@ -551,13 +562,19 @@ impl SessionRegistry {
                     Ok(n) => {
                         let data = buf[..n].to_vec();
 
-                        // replay buffer: std::sync::Mutex なので常に取得可能
-                        if let Ok(mut rb) = session_for_read.replay_buf.lock() {
+                        // replay buffer: std::sync::Mutex なので常に取得可能。
+                        // poison しても seq の連続性を保つため into_inner で復帰する。
+                        let seq_end = {
+                            let mut rb = session_for_read
+                                .replay_buf
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
                             rb.write(&data);
-                        }
+                            rb.total_written()
+                        };
 
                         // broadcast（receiver がいなくても OK）
-                        let _ = broadcast_tx.send(data);
+                        let _ = broadcast_tx.send(Arc::new(OutputChunk { data, seq_end }));
                     }
                     Err(_) => break,
                 }
@@ -616,7 +633,7 @@ impl SessionRegistry {
         name: &str,
         cols: u16,
         rows: u16,
-    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Arc<OutputChunk>>), RegistryError> {
         self.create_with_ssh(name, cols, rows, None).await
     }
 
@@ -627,7 +644,7 @@ impl SessionRegistry {
         cols: u16,
         rows: u16,
         ssh_config: Option<SshSessionConfig>,
-    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Vec<u8>>), RegistryError> {
+    ) -> Result<(Arc<SharedSession>, broadcast::Receiver<Arc<OutputChunk>>), RegistryError> {
         if !is_valid_session_name(name) {
             return Err(RegistryError::InvalidName(name.to_string()));
         }
@@ -716,17 +733,21 @@ impl SessionRegistry {
     }
 
     /// 既存セッションに attach（クライアント追加 + broadcast::Receiver + replay data）
+    ///
+    /// `since` はクライアントが最後に受信した絶対 seq。これがバッファ窓内なら
+    /// 差分のみ（`ReplaySlice.full = false`）を返し、再接続時の重複を防ぐ。
     pub async fn attach(
         &self,
         name: &str,
         kind: ClientKind,
         cols: u16,
         rows: u16,
+        since: Option<u64>,
     ) -> Result<
         (
             Arc<SharedSession>,
-            broadcast::Receiver<Vec<u8>>,
-            Vec<u8>,
+            broadcast::Receiver<Arc<OutputChunk>>,
+            ReplaySlice,
             u64,
         ),
         RegistryError,
@@ -754,7 +775,7 @@ impl SessionRegistry {
         });
 
         let rx = session.subscribe();
-        let replay = session.replay_buf.lock().unwrap().read_all();
+        let replay = session.replay_since(since);
 
         // アクティブクライアントがいない場合は新クライアントをアクティブにする
         if inner.active_client_id.is_none() {
@@ -796,17 +817,18 @@ impl SessionRegistry {
         kind: ClientKind,
         cols: u16,
         rows: u16,
+        since: Option<u64>,
     ) -> Result<
         (
             Arc<SharedSession>,
-            broadcast::Receiver<Vec<u8>>,
-            Vec<u8>,
+            broadcast::Receiver<Arc<OutputChunk>>,
+            ReplaySlice,
             u64,
         ),
         RegistryError,
     > {
         // まず attach 試行
-        match self.attach(name, kind, cols, rows).await {
+        match self.attach(name, kind, cols, rows, since).await {
             Ok(result) => return Ok(result),
             Err(RegistryError::NotFound(_)) => {
                 // セッションが存在しない → 作成を試みる
@@ -837,7 +859,11 @@ impl SessionRegistry {
                 // ConPTY の初期出力（DSR 等）を確実に保持している。
                 // replay は不要（first_rx が全データを持つ）。
                 let rx = first_rx;
-                let replay = Vec::new();
+                let replay = ReplaySlice {
+                    data: Vec::new(),
+                    full: false,
+                    end_seq: 0,
+                };
 
                 // ConPTY は同一サイズの resize を無視するため、
                 // 異なるサイズで一度 resize してから正しいサイズに戻す。
@@ -853,7 +879,7 @@ impl SessionRegistry {
             }
             Err(RegistryError::AlreadyExists(_)) => {
                 // レース: attach と create の間に別クライアントが作成した → retry attach
-                self.attach(name, kind, cols, rows).await
+                self.attach(name, kind, cols, rows, since).await
             }
             Err(e) => Err(e),
         }
@@ -1272,13 +1298,13 @@ impl SharedSession {
 
     /// broadcast::Receiver を新たに取得
     /// セッション終了済みの場合は即座に Closed を返す receiver を返す
-    pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<OutputChunk>> {
         let guard = self.output_tx.lock().unwrap();
         match guard.as_ref() {
             Some(tx) => tx.subscribe(),
             None => {
                 // sender は既に drop 済み → 即 Closed になる receiver を返す
-                let (_, rx) = broadcast::channel::<Vec<u8>>(1);
+                let (_, rx) = broadcast::channel::<Arc<OutputChunk>>(1);
                 rx
             }
         }
@@ -1287,6 +1313,16 @@ impl SharedSession {
     /// alive 状態を取得（AtomicBool: Mutex 不要）
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// クライアントの `since` シーケンス以降のリプレイ片を返す。
+    /// WS 経路はこれを「唯一の真実」として使い、broadcast は起床信号にのみ用いる。
+    /// これにより再接続の重複・先頭化け・lag 取りこぼしを一括で防ぐ。
+    pub fn replay_since(&self, since: Option<u64>) -> ReplaySlice {
+        self.replay_buf
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replay_since(since)
     }
 }
 

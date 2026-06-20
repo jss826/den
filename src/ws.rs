@@ -20,15 +20,27 @@ use crate::terminal_filter::{filter_conpty_private_modes, filter_terminal_respon
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Maximum bytes to coalesce before flushing to WebSocket.
-/// Prevents the drain loop from buffering unboundedly under high throughput.
-const MAX_COALESCE_BYTES: usize = 256 * 1024; // 256 KiB
+/// Sync control frame: client must reset its terminal before applying the next
+/// replay frame (it fell outside the server's replay window).
+const SYNC_FULL_MSG: &str = r#"{"type":"sync","mode":"full"}"#;
+
+/// Prepend the 8-byte big-endian absolute sequence to a terminal data frame.
+/// The client strips this prefix and records the seq so it can request a delta
+/// replay (`?since=N`) on reconnect, avoiding scrollback duplication.
+fn seq_frame(seq_end: u64, data: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(8 + data.len());
+    frame.extend_from_slice(&seq_end.to_be_bytes());
+    frame.extend_from_slice(data);
+    frame
+}
 
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     pub session: Option<String>,
+    /// Last absolute sequence the client already has (for delta replay on reconnect).
+    pub since: Option<u64>,
 }
 
 /// WebSocket コマンド（型付きデシリアライズ）
@@ -64,9 +76,10 @@ pub async fn ws_handler(
     };
     let cols = query.cols.unwrap_or(80);
     let rows = query.rows.unwrap_or(24);
+    let since = query.since;
     let registry = Arc::clone(&state.registry);
 
-    ws.on_upgrade(move |socket| handle_socket(socket, registry, session_name, cols, rows))
+    ws.on_upgrade(move |socket| handle_socket(socket, registry, session_name, cols, rows, since))
         .into_response()
 }
 
@@ -76,12 +89,13 @@ async fn handle_socket(
     session_name: String,
     cols: u16,
     rows: u16,
+    since: Option<u64>,
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // SessionRegistry に attach（なければ create）
+    // SessionRegistry に attach（なければ create）。`since` で差分リプレイを要求。
     let (session, mut output_rx, replay, client_id) = match registry
-        .get_or_create(&session_name, ClientKind::WebSocket, cols, rows)
+        .get_or_create(&session_name, ClientKind::WebSocket, cols, rows, since)
         .await
     {
         Ok(result) => result,
@@ -94,72 +108,93 @@ async fn handle_socket(
         }
     };
 
-    // replay data を送信（ConPTY private mode を除去）
-    if !replay.is_empty() {
-        let filtered_replay = filter_conpty_private_modes(&replay);
-        if !filtered_replay.is_empty()
+    // 初期リプレイを送信。差分なら term をそのまま追記、full なら reset 指示を先に送る。
+    // 送出後、client_seq は replay.end_seq まで進んでいる。
+    let mut client_seq = replay.end_seq;
+    if !replay.data.is_empty() {
+        if replay.full
+            && since.is_some()
             && ws_tx
-                .send(Message::Binary(filtered_replay.into_owned().into()))
+                .send(Message::Text(SYNC_FULL_MSG.into()))
                 .await
                 .is_err()
         {
             registry.detach(&session_name, client_id).await;
             return;
         }
+        let filtered = filter_conpty_private_modes(&replay.data);
+        if ws_tx
+            .send(Message::Binary(seq_frame(replay.end_seq, &filtered).into()))
+            .await
+            .is_err()
+        {
+            registry.detach(&session_name, client_id).await;
+            return;
+        }
     }
 
-    // broadcast → WS 転送（coalescing: burst データを単一 WS メッセージに結合）
+    // ── 出力転送 ──
+    // broadcast は「新しい出力が来た」起床信号としてのみ使い、実データは常に
+    // セッションのリングバッファから `replay_since(client_seq)` で取り出す。
+    // これにより lag で broadcast を取りこぼしても、リングバッファが保持している限り
+    // 穴/重複なく差分を送れる（窓を外れた場合のみ full + reset でデグレード）。
     let session_for_output = Arc::clone(&session);
     let name_for_output = session_name.clone();
     let pty_to_ws = async {
-        let mut buf: Vec<u8> = Vec::new();
         loop {
             // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
             // 閉じないため、定期的に alive を確認する
-            match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
-                Ok(Ok(data)) => {
-                    buf.extend_from_slice(&data);
-                    // Non-blocking drain: キューに溜まった追加データを結合（上限あり）
-                    while buf.len() < MAX_COALESCE_BYTES {
-                        match output_rx.try_recv() {
-                            Ok(more) => buf.extend_from_slice(&more),
-                            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
-                            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
-                                tracing::warn!(
-                                    "WS client burst-drain lagged {n} messages on session {name_for_output}"
-                                );
-                                break;
-                            }
-                            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
-                        }
-                    }
-                    let coalesced = std::mem::take(&mut buf);
-                    let filtered = filter_conpty_private_modes(&coalesced);
-                    let bytes: Vec<u8> = match filtered {
-                        std::borrow::Cow::Borrowed(_) => coalesced,
-                        std::borrow::Cow::Owned(v) => v,
-                    };
-                    if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
-                        break;
-                    }
-                }
+            let ended = match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
+                Ok(Ok(_)) => false, // woke: 内容は無視（リングバッファが真実）
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
                     tracing::warn!("WS client lagged {n} messages on session {name_for_output}");
+                    false // 取りこぼしは下の replay_since で復旧する
                 }
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                    // セッション終了
-                    let msg = r#"{"type":"session_ended"}"#.to_string();
-                    let _ = ws_tx.send(Message::Text(msg.into())).await;
-                    break;
-                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => true, // セッション終了
                 Err(_) => {
-                    // タイムアウト: セッション生存チェック
+                    // タイムアウト: 生存確認のみ（出力なし → 差分も無い）
                     if !session_for_output.is_alive() {
-                        let msg = r#"{"type":"session_ended"}"#.to_string();
-                        let _ = ws_tx.send(Message::Text(msg.into())).await;
-                        break;
+                        true
+                    } else {
+                        continue;
                     }
                 }
+            };
+
+            // 溜まった追加の起床信号を捨てる（次の replay_since で一括取得するため）。
+            // Empty / Closed で止まる。Ok と Lagged は読み捨てて継続。
+            while matches!(
+                output_rx.try_recv(),
+                Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+            ) {}
+
+            // client_seq 以降の差分をリングバッファから取得して送る。
+            let slice = session_for_output.replay_since(Some(client_seq));
+            if slice.end_seq != client_seq {
+                if slice.full
+                    && ws_tx
+                        .send(Message::Text(SYNC_FULL_MSG.into()))
+                        .await
+                        .is_err()
+                {
+                    break;
+                }
+                let filtered = filter_conpty_private_modes(&slice.data);
+                if ws_tx
+                    .send(Message::Binary(seq_frame(slice.end_seq, &filtered).into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                client_seq = slice.end_seq;
+            }
+
+            if ended {
+                let _ = ws_tx
+                    .send(Message::Text(r#"{"type":"session_ended"}"#.into()))
+                    .await;
+                break;
             }
         }
         drop(session_for_output); // keep session alive during output
