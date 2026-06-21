@@ -19,6 +19,12 @@ const DenTerminal = (() => {
   const WS_PING_INTERVAL_MS = 30000;
   const WS_PING_MSG = JSON.stringify({ type: 'ping' });
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
+  // Written (not term.reset()) when the server sends a full resync. A full
+  // replay only happens when the server's window starts *past* our lastSeq, so
+  // it is a history gap — never an overlap. Marking the gap keeps the existing
+  // scrollback instead of wiping it (the old reset was the main cause of sparse
+  // iPad scrollback after frequent reconnects).
+  const GAP_MARKER = textEncoder.encode('\r\n\x1b[90m── reconnected ──\x1b[0m\r\n');
 
   /** Stable identity key for a (name, remote) session. */
   function sessionId(name, remote) {
@@ -551,8 +557,9 @@ const DenTerminal = (() => {
       // term never applied, leaving a gap in the delta replay after reconnect (#117).
       let pendingSeq = st.lastSeq;
       // Set when the server sends a {"type":"sync","mode":"full"} control frame,
-      // meaning the next replay frame is authoritative and the term must be reset
-      // first (the client fell outside the server's replay window).
+      // meaning the client fell outside the server's replay window and the next
+      // frame is a full window. We mark the gap and keep scrollback rather than
+      // resetting (the window starts past lastSeq, so there is no overlap).
       let pendingReset = false;
 
       const flushWrite = () => {
@@ -602,9 +609,11 @@ const DenTerminal = (() => {
           pendingSeq = new DataView(event.data).getBigUint64(0);
           if (pendingReset) {
             pendingReset = false;
-            writeBuf = [];
-            if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
-            st.term.reset();
+            // Non-destructive resync: the full window starts past lastSeq (a
+            // history gap, not an overlap), so keep the existing scrollback and
+            // mark the gap. Queued before the full data so it flushes in order
+            // after any already-buffered deltas.
+            writeBuf.push(GAP_MARKER);
           }
           writeBuf.push(new Uint8Array(event.data, 8));
           if (writeRaf === null) {

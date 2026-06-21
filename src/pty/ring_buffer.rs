@@ -2,8 +2,9 @@
 pub struct ReplaySlice {
     /// 送出するバイト列（古い順）。
     pub data: Vec<u8>,
-    /// true の場合、クライアントは適用前に term をリセットすべき
-    /// （新規接続、またはクライアントがバッファ窓より後れて差分を出せないとき）。
+    /// true の場合、これは差分ではなくバッファ窓全体（新規接続、またはクライアントが
+    /// バッファ窓より後れて差分を出せないとき）。窓はクライアントの最終 seq より後ろから
+    /// 始まる＝重複ではなく「隙間」なので、クライアントは reset せず隙間を示して追記する。
     pub full: bool,
     /// `data` の末尾に対応する絶対シーケンス（= これまでに書き込まれた総バイト数）。
     pub end_seq: u64,
@@ -98,7 +99,7 @@ impl RingBuffer {
     /// - `since = Some(s)` かつ `s` がバッファ窓 `[oldest_seq, total_written]` 内:
     ///   `[s, total_written)` の差分のみを `full = false` で返す（重複なし）。
     /// - それ以外（新規接続 = None、または窓より後れた s）:
-    ///   バッファ全体を `full = true` で返す。クライアントは適用前にリセットする。
+    ///   バッファ全体を `full = true` で返す。窓は s より後ろから始まる（重複ではなく隙間）。
     ///   全体リプレイは先頭の壊れたエスケープシーケンスを避けるため行境界に揃える。
     pub fn replay_since(&self, since: Option<u64>) -> ReplaySlice {
         let end = self.total_written;
