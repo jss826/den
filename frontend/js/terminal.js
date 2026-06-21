@@ -1846,17 +1846,25 @@ const DenTerminal = (() => {
     }
   }
 
-  /** Build a single session row element. */
-  function buildSessionRow(kind, name, alias, connId) {
+  /** Build a single session row element. `exited` = zellij dead/resurrectable. */
+  function buildSessionRow(kind, name, alias, connId, exited) {
     const row = document.createElement('div');
     row.className = 'sessions-row';
     row.dataset.backend = kind;
     row.dataset.name = name;
+    if (exited) row.dataset.exited = 'true';
 
     const nameEl = document.createElement('span');
     nameEl.className = 'sessions-row-name';
     nameEl.textContent = alias ? `${alias} (${name})` : name;
     row.appendChild(nameEl);
+
+    if (exited) {
+      const tag = document.createElement('span');
+      tag.className = 'sessions-row-tag';
+      tag.textContent = 'exited';
+      row.appendChild(tag);
+    }
 
     const actions = document.createElement('span');
     actions.className = 'sessions-row-actions';
@@ -1889,15 +1897,21 @@ const DenTerminal = (() => {
       }
     });
 
-    mk('kill', 'Kill').addEventListener('click', async () => {
-      const ok = await Toast.confirm(`Kill session "${name}"?`);
-      if (!ok) return;
-      const res = await muxOp(connId, 'kill', { backend: kind, name });
-      if (!res.ok) { Toast.error(res.message || 'Kill failed'); return; }
-      await renderSessionsModal(document.getElementById('sessions-modal-body'));
-    });
+    // Kill targets *running* sessions. zellij refuses kill-session on an exited
+    // session (surfaces a raw "Os NotFound" error), so for those we offer Delete.
+    if (!exited) {
+      mk('kill', 'Kill').addEventListener('click', async () => {
+        const ok = await Toast.confirm(`Kill session "${name}"?`);
+        if (!ok) return;
+        const res = await muxOp(connId, 'kill', { backend: kind, name });
+        if (!res.ok) { Toast.error(res.message || 'Kill failed'); return; }
+        await renderSessionsModal(document.getElementById('sessions-modal-body'));
+      });
+    }
 
-    if (kind === 'zellij') {
+    // Delete (purge) only applies to exited zellij sessions — delete on a running
+    // session is a no-op, and tmux has no separate delete concept.
+    if (kind === 'zellij' && exited) {
       mk('delete', 'Delete').addEventListener('click', async () => {
         const ok = await Toast.confirm(`Delete (purge) session "${name}"?`);
         if (!ok) return;
@@ -1932,8 +1946,9 @@ const DenTerminal = (() => {
       body.appendChild(sub);
 
       const aliases = bs.aliases || {};
+      const exitedSet = new Set(bs.exited || []);
       for (const name of bs.sessions) {
-        body.appendChild(buildSessionRow(kind, name, aliases[name], connId));
+        body.appendChild(buildSessionRow(kind, name, aliases[name], connId, exitedSet.has(name)));
       }
     }
 
@@ -1980,15 +1995,27 @@ const DenTerminal = (() => {
     }
   }
 
-  // Wire up Sessions modal close button and backdrop click.
+  // Wire up Sessions modal close/refresh buttons and backdrop click.
   // Scripts are loaded at the bottom of <body> so the DOM is already available here.
   (() => {
     const modal = document.getElementById('sessions-modal');
     const closeBtn = document.getElementById('sessions-modal-close');
+    const refreshBtn = document.getElementById('sessions-modal-refresh');
     if (modal && closeBtn) {
       closeBtn.addEventListener('click', () => { modal.hidden = true; });
       modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
     }
+    const reRender = () => {
+      const body = document.getElementById('sessions-modal-body');
+      if (body) renderSessionsModal(body);
+    };
+    if (refreshBtn) refreshBtn.addEventListener('click', reRender);
+    // The server lists sessions live, but the open modal is a snapshot — session
+    // changes made elsewhere (in the terminal, another client, or directly on the
+    // host) aren't reflected until a re-fetch. Re-fetch when returning to the tab.
+    const refreshIfOpen = () => { if (modal && !modal.hidden && !document.hidden) reRender(); };
+    window.addEventListener('focus', refreshIfOpen);
+    document.addEventListener('visibilitychange', refreshIfOpen);
   })();
 
   // ── end Sessions Management Modal ─────────────────────────────────────────

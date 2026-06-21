@@ -96,6 +96,22 @@ pub fn parse_zellij_ls(output: &str) -> Vec<String> {
         .collect()
 }
 
+/// `zellij list-sessions -n`（装飾なし・1 行 1 セッション）から `(名前, exited)` を抽出する。
+/// 形式例: `work [Created 2m ago]` / `cur [Created …] (current)` / `old [Created …] (EXITED - 5m ago)`。
+/// `--short` は状態（EXITED）を落とすため使わない。行頭トークンを名前、行中の `EXITED` 有無で
+/// 終了済み（resurrectable）判定する。防御的に ANSI も落とす。
+pub fn parse_zellij_ls_detailed(output: &str) -> Vec<(String, bool)> {
+    output
+        .lines()
+        .map(strip_ansi)
+        .filter_map(|line| {
+            let name = line.split_whitespace().next()?.to_string();
+            let exited = line.contains("EXITED");
+            Some((name, exited))
+        })
+        .collect()
+}
+
 /// 簡易 ANSI ストリップ（ESC[...m を読み飛ばす）。
 fn strip_ansi(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
@@ -146,6 +162,21 @@ pub fn list_mux_sessions(backend: SessionBackend) -> Vec<String> {
         SessionBackend::Tmux => parse_tmux_ls(&output),
         SessionBackend::Shell => Vec::new(),
     }
+}
+
+/// zellij セッションを `(名前, exited)` 付きで列挙する（blocking）。
+/// `exited = true` は終了済み（resurrectable）セッション。`kill-session` は実行中専用で、
+/// 終了済みに対しては zellij がソケット不在エラー（`Os NotFound`）を返すため、UI 側で
+/// 実行中＝Kill / 終了済み＝Delete を出し分けるのに使う。
+pub fn list_zellij_detailed() -> Vec<(String, bool)> {
+    let output = match Command::new("zellij")
+        .args(["list-sessions", "-n"])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
+        _ => return Vec::new(),
+    };
+    parse_zellij_ls_detailed(&output)
 }
 
 /// Validates a mux session name: alphanumeric + `-`, 1–64 chars.
@@ -314,6 +345,30 @@ mod tests {
         // 装飾付き（--short 無し）でも行頭トークンを拾い ANSI を落とす
         let out = "\u{1b}[32;1mmain\u{1b}[m [Created 1h ago]\nwork [Created 2m ago] (EXITED)\n";
         assert_eq!(parse_zellij_ls(out), vec!["main", "work"]);
+    }
+
+    #[test]
+    fn parse_zellij_ls_detailed_marks_exited() {
+        // -n 出力（装飾なし）想定。running / current / EXITED の 3 種を判定する。
+        let out = "work [Created 2m ago]\ncur [Created 1h ago] (current)\nold [Created 3h ago] (EXITED - 5m ago)\n";
+        assert_eq!(
+            parse_zellij_ls_detailed(out),
+            vec![
+                ("work".to_string(), false),
+                ("cur".to_string(), false),
+                ("old".to_string(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_zellij_ls_detailed_strips_ansi_and_handles_empty() {
+        // 装飾付きでも行頭トークンを拾い ANSI を落とす。空行は無視。
+        let out = "\u{1b}[32;1mmain\u{1b}[m [Created 1h ago]\n\n\u{1b}[32;1mdead\u{1b}[m [Created 2h ago] (EXITED - 1m ago)\n";
+        assert_eq!(
+            parse_zellij_ls_detailed(out),
+            vec![("main".to_string(), false), ("dead".to_string(), true)]
+        );
     }
 
     #[test]

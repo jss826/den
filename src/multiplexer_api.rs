@@ -1,6 +1,6 @@
 use crate::pty::backend::{
     SessionBackend, delete_mux_session, is_valid_mux_name, kill_mux_session, list_mux_sessions,
-    probe_available,
+    list_zellij_detailed, probe_available,
 };
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,11 @@ use std::sync::{Arc, OnceLock};
 pub struct BackendStatus {
     pub available: bool,
     pub sessions: Vec<String>,
+    /// Subset of `sessions` that have exited (resurrectable). Only zellij
+    /// distinguishes these; the UI shows Delete (not Kill) for them. tmux
+    /// does not list dead sessions, so this is always empty for tmux.
+    #[serde(default)]
+    pub exited: Vec<String>,
     /// name -> Den-local alias (this backend only)
     pub aliases: HashMap<String, String>,
 }
@@ -73,13 +78,21 @@ fn availability() -> &'static (bool, bool) {
 pub async fn status(State(state): State<Arc<crate::AppState>>) -> Json<MultiplexerStatus> {
     let (zellij_ok, tmux_ok) = *availability();
     // ls is blocking, so wrap in spawn_blocking
-    let zellij_sessions = if zellij_ok {
-        tokio::task::spawn_blocking(|| list_mux_sessions(SessionBackend::Zellij))
+    // zellij: list with exited status so the UI can offer Kill (running) vs
+    // Delete (exited) — killing an exited session fails with a raw zellij error.
+    let zellij_detailed = if zellij_ok {
+        tokio::task::spawn_blocking(list_zellij_detailed)
             .await
             .unwrap_or_default()
     } else {
         Vec::new()
     };
+    let zellij_sessions: Vec<String> = zellij_detailed.iter().map(|(n, _)| n.clone()).collect();
+    let zellij_exited: Vec<String> = zellij_detailed
+        .iter()
+        .filter(|(_, exited)| *exited)
+        .map(|(n, _)| n.clone())
+        .collect();
     let tmux_sessions = if tmux_ok {
         tokio::task::spawn_blocking(|| list_mux_sessions(SessionBackend::Tmux))
             .await
@@ -95,11 +108,13 @@ pub async fn status(State(state): State<Arc<crate::AppState>>) -> Json<Multiplex
         zellij: BackendStatus {
             available: zellij_ok,
             sessions: zellij_sessions,
+            exited: zellij_exited,
             aliases: aliases_for(&all_aliases, "zellij"),
         },
         tmux: BackendStatus {
             available: tmux_ok,
             sessions: tmux_sessions,
+            exited: Vec::new(),
             aliases: aliases_for(&all_aliases, "tmux"),
         },
     })
@@ -207,18 +222,21 @@ mod tests {
         let payload = MultiplexerStatus {
             zellij: BackendStatus {
                 available: true,
-                sessions: vec!["main".into()],
+                sessions: vec!["main".into(), "old".into()],
+                exited: vec!["old".into()],
                 aliases: HashMap::new(),
             },
             tmux: BackendStatus {
                 available: false,
                 sessions: vec![],
+                exited: vec![],
                 aliases: HashMap::new(),
             },
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"available\":true"));
         assert!(json.contains("\"main\""));
+        assert!(json.contains("\"exited\":[\"old\"]"));
     }
 
     #[test]
@@ -250,6 +268,7 @@ mod tests {
         let bs = BackendStatus {
             available: true,
             sessions: vec!["work".into()],
+            exited: vec![],
             aliases: std::collections::HashMap::from([("work".to_string(), "My Work".to_string())]),
         };
         let json = serde_json::to_string(&bs).unwrap();

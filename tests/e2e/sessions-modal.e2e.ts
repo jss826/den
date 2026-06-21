@@ -99,13 +99,13 @@ test.describe('Sessions modal', () => {
     await expect(modal).toBeHidden();
   });
 
-  test('sessions modal action buttons are rendered for each row', async ({ page }) => {
+  test('running rows show Kill, exited rows show Delete', async ({ page }) => {
     await page.route('**/api/multiplexer/status', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          zellij: { available: true, sessions: ['alpha'], aliases: {} },
+          zellij: { available: true, sessions: ['alpha', 'gone'], exited: ['gone'], aliases: {} },
           tmux: { available: false, sessions: [], aliases: {} },
         }),
       }));
@@ -114,15 +114,21 @@ test.describe('Sessions modal', () => {
     await openSessionsModal(page);
 
     const modal = page.locator('#sessions-modal');
-    const row = modal.locator('.sessions-row[data-name="alpha"]');
-    await expect(row).toBeVisible();
 
-    // Rename, Copy attach, Kill, Delete (zellij-only) buttons should all be present.
-    await expect(row.locator('[data-action="rename"]')).toBeVisible();
-    await expect(row.locator('[data-action="copy"]')).toBeVisible();
-    await expect(row.locator('[data-action="kill"]')).toBeVisible();
-    // zellij sessions also get a Delete button.
-    await expect(row.locator('[data-action="delete"]')).toBeVisible();
+    // Running session: Rename, Copy, Kill present; Delete absent.
+    const running = modal.locator('.sessions-row[data-name="alpha"]');
+    await expect(running).toBeVisible();
+    await expect(running.locator('[data-action="rename"]')).toBeVisible();
+    await expect(running.locator('[data-action="copy"]')).toBeVisible();
+    await expect(running.locator('[data-action="kill"]')).toBeVisible();
+    await expect(running.locator('[data-action="delete"]')).toHaveCount(0);
+
+    // Exited session: Delete present, Kill absent; tagged as exited.
+    const exited = modal.locator('.sessions-row[data-name="gone"]');
+    await expect(exited).toBeVisible();
+    await expect(exited).toHaveAttribute('data-exited', 'true');
+    await expect(exited.locator('[data-action="delete"]')).toBeVisible();
+    await expect(exited.locator('[data-action="kill"]')).toHaveCount(0);
 
     await modal.locator('#sessions-modal-close').click();
     await expect(modal).toBeHidden();

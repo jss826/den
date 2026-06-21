@@ -3648,6 +3648,15 @@ html.theme-transition button {
   white-space: nowrap;
 }
 
+.sessions-row-tag {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted, #888);
+  opacity: 0.75;
+}
+
 .sessions-row-actions {
   display: flex;
   gap: 4px;
