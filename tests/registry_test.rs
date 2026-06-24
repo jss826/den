@@ -435,6 +435,55 @@ fn reconnect_full_replay_includes_visible_snapshot() {
     rt.shutdown_timeout(std::time::Duration::from_secs(3));
 }
 
+#[test]
+#[serial]
+fn reconnect_at_smaller_size_snapshots_new_geometry() {
+    // Regression: the snapshot must be generated at the *reconnecting* client's
+    // geometry, not at the previous VT geometry. We create a tall session (40
+    // rows), scroll the cursor to the bottom, then reconnect with a SHORTER
+    // client (24 rows). The snapshot ends with an absolute cursor MoveTo; if it
+    // were taken at the old 40-row geometry the cursor would land below row 24.
+    let rt = build_test_runtime();
+    rt.block_on(async {
+        let reg = new_registry();
+        let (session, mut rx) = reg.create("resizesnap", 80, 40).await.unwrap();
+        init_shell(&session, &mut rx).await;
+
+        // Emit far more than 40 lines so the 40-row screen scrolls and the
+        // prompt (cursor) parks at the bottom row, well below row 24.
+        session
+            .write_input(b"1..60 | ForEach-Object { Write-Output \"L$_\" }\r")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+        // Reconnect with a SHORTER terminal (24 rows). since = None → full + snapshot.
+        let (_s, _rx2, replay, _cid) = reg
+            .attach("resizesnap", ClientKind::WebSocket, 80, 24, None)
+            .await
+            .unwrap();
+        assert!(replay.full, "new client must get a full replay");
+        let snap = replay
+            .snapshot
+            .expect("full replay must carry a VT snapshot");
+
+        // Re-render the snapshot into a parser TALLER than both geometries so it
+        // never clamps the cursor row itself. The final cursor row therefore
+        // reflects the geometry the snapshot was generated at.
+        let mut p = vt100::Parser::new(40, 80, 0);
+        p.process(&snap);
+        let (cursor_row, _col) = p.screen().cursor_position();
+        assert!(
+            cursor_row < 24,
+            "snapshot must be sized to the reconnecting 24-row client (cursor row < 24), \
+             got row {cursor_row} — snapshot was generated at the old geometry"
+        );
+
+        reg.destroy("resizesnap").await;
+    });
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+}
+
 // ============================================================
 // PTY テスト（exit）: init_shell + exit → dead 検出 → 再作成
 // ============================================================

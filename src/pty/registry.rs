@@ -931,7 +931,6 @@ impl SessionRegistry {
         });
 
         let rx = session.subscribe();
-        let replay = session.replay_since(since);
 
         // アクティブクライアントがいない場合は新クライアントをアクティブにする
         if inner.active_client_id.is_none() {
@@ -939,6 +938,20 @@ impl SessionRegistry {
         }
         // クライアント追加により最適サイズが変わる可能性があるため再計算
         Self::recalculate_size(&mut inner);
+
+        // Generate the VT snapshot at the reconnecting client's current geometry.
+        // Calling replay_since before recalculate_size would snapshot at the
+        // previous active client's dimensions (the stale VT geometry), causing a
+        // brief layout transient on resize-reconnect. Sync-resize the VT parser to
+        // last_size (the authoritative ConPTY geometry after recalculate_size)
+        // before snapshotting. resize leaves the sequence untouched, so end_seq
+        // stays consistent; the nudge below then authoritatively overwrites via a
+        // full ConPTY redraw delta.
+        let (snap_cols, snap_rows) = inner.last_size;
+        if snap_cols > 0 && snap_rows > 0 {
+            session.resize_replay_state(snap_cols, snap_rows);
+        }
+        let replay = session.replay_since(since);
 
         // ConPTY に再描画を強制する（nudge）
         // これにより、新しくアタッチしたクライアントに対して現在の画面状態が
@@ -1494,6 +1507,16 @@ impl SharedSession {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .replay_since(since)
+    }
+
+    /// Sync the VT parser's dimensions to `(cols, rows)`. Used right before
+    /// taking a snapshot on reconnect, to align it with the authoritative
+    /// terminal geometry. The sequence counter is left unchanged.
+    pub fn resize_replay_state(&self, cols: u16, rows: u16) {
+        self.replay_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .resize(cols, rows);
     }
 }
 
