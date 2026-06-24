@@ -140,4 +140,12 @@ test item5_double_processing_cost ... ok
 - Client (`terminal.js`): on `{"type":"snapshot"}` it `term.reset()`s then writes the bytes (history then clean redraw) — eliminating overlap (no dup), rebuilding scrollback from the ring (retention), stamping the authoritative viewport (claude bottom line). `GAP_MARKER`/`pendingReset` removed.
 - e2e: raw-WS protocol assertion (the `{"type":"snapshot"}` + binary contract); throwaway `tests/vt_snapshot_spike.rs` removed.
 
-**Decisive verification = iPad real device** (real claude, resize + reconnect: dup gone, retention up, claude bottom line present) — pending. Phase 2 (#3 reflow via `row_wrapped`) is next.
+**Decisive verification = iPad real device** (real claude, resize + reconnect: dup gone, retention up, claude bottom line present) — pending.
+
+## Phase 2 (#3 reflow) outcome (2026-06-24): already delivered by Phase 1
+
+A verification spike (`tests/vt_reflow_spike.rs`, since deleted) plus a re-read of vt100 0.16.2 source established that **no custom wrap-aware serializer is needed** — `Screen::state_formatted()` (the snapshot Phase 1 already sends) is wrap-aware:
+
+- `grid::write_contents_formatted` tracks each `row.wrapped()` and, for a continuation row, emits **no cursor-move (CUP)** — it lets the content flow as one continuous run so the receiving terminal auto-wraps it (`row.rs:226-237`). This is exactly the "trigger auto-wrap on the continuation row" technique the spec §5 described as the goal.
+- **Decisive proof:** re-rendering a snapshot of a 200-char wrapped line into a fresh same-size parser, the fresh parser independently reports `row_wrapped(0/1) == true` and `row_wrapped(2) == false`. The soft-wrap is transmitted faithfully via auto-wrap, which is the exact signal xterm.js uses (`isWrapped`) to reflow on resize.
+- **Phase 2 code = a regression guard only:** `snapshot_preserves_soft_wrap_for_reflow` and `snapshot_keeps_hard_newlines_unwrapped` in `src/pty/replay_state.rs` lock in this property against future serialization changes. The byte-level precondition is proven in Rust; the final pixel-level reflow proof is the iPad real-device check.

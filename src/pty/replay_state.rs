@@ -151,4 +151,46 @@ mod tests {
             "snapshot must match resized geometry"
         );
     }
+
+    // Reflow readiness (#3, Phase 2). A soft-wrapped logical line must be
+    // serialized so the client records it as soft-wrapped and reflows it on a
+    // later resize. `state_formatted()` already emits a wrapped line as one
+    // continuous auto-wrapping run (no cursor-move between continuation rows),
+    // so no custom serializer is needed; these tests guard that the snapshot
+    // keeps that property. Proof is byte-level and renderer-independent: a fresh
+    // parser fed the snapshot independently re-derives the wrap flags, which is
+    // exactly the signal xterm.js uses to reflow.
+
+    #[test]
+    fn snapshot_preserves_soft_wrap_for_reflow() {
+        let mut rs = ReplayState::new(4096, 24, 80);
+        // 200 chars, no newline, on an 80-col screen wrap across 3 rows.
+        rs.write(&vec![b'a'; 200]);
+        let snap = rs.replay_since(None).snapshot.unwrap();
+
+        let mut fresh = vt100::Parser::new(24, 80, 0);
+        fresh.process(&snap);
+        let screen = fresh.screen();
+        assert!(screen.row_wrapped(0), "row 0 must stay soft-wrapped");
+        assert!(screen.row_wrapped(1), "row 1 must stay soft-wrapped");
+        assert!(
+            !screen.row_wrapped(2),
+            "logical-line end (row 2) must not be wrapped"
+        );
+    }
+
+    #[test]
+    fn snapshot_keeps_hard_newlines_unwrapped() {
+        // Negative control: distinct hard-newline lines must not be merged into
+        // a wrapped run, or unrelated lines would reflow together.
+        let mut rs = ReplayState::new(4096, 24, 80);
+        rs.write(b"alpha\r\nbeta\r\ngamma");
+        let snap = rs.replay_since(None).snapshot.unwrap();
+
+        let mut fresh = vt100::Parser::new(24, 80, 0);
+        fresh.process(&snap);
+        let screen = fresh.screen();
+        assert!(!screen.row_wrapped(0), "hard line must not be wrapped");
+        assert!(!screen.row_wrapped(1), "hard line must not be wrapped");
+    }
 }
