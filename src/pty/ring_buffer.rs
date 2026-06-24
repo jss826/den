@@ -8,6 +8,11 @@ pub struct ReplaySlice {
     pub full: bool,
     /// `data` の末尾に対応する絶対シーケンス（= これまでに書き込まれた総バイト数）。
     pub end_seq: u64,
+    /// `full` のとき、可視画面のクリーンな再描画 ANSI（VT snapshot, D-2）。
+    /// クライアントは reset 後に `data`（履歴）→ `snapshot` の順で書く。
+    /// 差分（`full == false`）では常に `None`。RingBuffer 単体では常に `None` を入れ、
+    /// VT を保持する `ReplayState` のみが `Some` を載せる。
+    pub snapshot: Option<Vec<u8>>,
 }
 
 /// 固定容量のリングバッファ（リプレイ用）
@@ -116,6 +121,7 @@ impl RingBuffer {
                 data: self.read_last(take),
                 full: false,
                 end_seq: end,
+                snapshot: None,
             };
         }
 
@@ -133,6 +139,7 @@ impl RingBuffer {
             data,
             full: true,
             end_seq: end,
+            snapshot: None,
         }
     }
 }

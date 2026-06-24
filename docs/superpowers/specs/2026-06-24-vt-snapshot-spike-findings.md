@@ -126,4 +126,18 @@ test item5_double_processing_cost ... ok
 - **Snapshot API:** Atomically return `(contents_formatted_bytes: Vec<u8>, total_written_seq: u64)` under one lock, per spec §4 step 2. This is the payload for the new reconnect frame.
 - **New protocol frame:** `{"type":"snapshot", "data": <base64 or raw bytes>}` on reconnect. Client (`terminal.js`) receives this frame, resets the xterm instance, and writes the snapshot bytes — replacing the current full raw-byte replay for the visible screen. Ring-buffer replay still provides scrollback history (prepended before the snapshot, D-2).
 - **Promote vt100 to `[dependencies]`:** Currently a `dev-dependency` (spike). Phase 1 integration moves it to the main dependency section in `Cargo.toml`.
-- **Expose a configurable scrollback cap:** Phase 1 must add a `vt_scrollback` setting (e.g., default 1000, max 5000) to bound the per-session parser memory. The 5000-row × 50-session fully-populated worst case (~2.5 GB) is the key risk to mitigate.
+- **~~Expose a configurable scrollback cap~~ — OBVIATED (Phase 1 implemented).** This follow-up assumed the per-session parser would hold scrollback. Phase 1 (D-2) constructs every parser with `vt100::Parser::new(rows, cols, 0)` — scrollback `0`. History comes exclusively from the existing byte ring; the parser only ever serializes the visible grid (`state_formatted()`). With no scrollback rows held, the 2.5 GB worst case is structurally impossible, so no `vt_scrollback` setting was added. (Spike `item1`/`item3` already verified scrollback `0` round-trips the visible screen.)
+
+---
+
+## Phase 1 implementation status (2026-06-24)
+
+**Implemented** on branch `feat/vt-snapshot-reconnect` via subagent-driven-development (6 tasks, all review clean). Summary:
+- vt100 v0.16.2 promoted to `[dependencies]`.
+- New `src/pty/replay_state.rs`: `ReplayState` = byte ring + headless `vt100::Parser` (scrollback 0), fed the same bytes under one lock in `read_task`; `replay_since` attaches a `Some(snapshot)` iff the slice is full. Snapshot = `?1049h` (when on alt-screen) + `state_formatted()`.
+- `SharedSession.replay_buf` → `replay_state: Arc<Mutex<ReplayState>>`; resize_task follows VT geometry.
+- Server (`src/ws.rs`): on a full slice the WS sends a Text control frame `{"type":"snapshot"}` then one Binary frame `[8-byte be seq][filter(history ++ snapshot)]`; the old `{"type":"sync","mode":"full"}` frame is retired. Snapshot fires for any full slice (new connection `since=None` OR window-miss).
+- Client (`terminal.js`): on `{"type":"snapshot"}` it `term.reset()`s then writes the bytes (history then clean redraw) — eliminating overlap (no dup), rebuilding scrollback from the ring (retention), stamping the authoritative viewport (claude bottom line). `GAP_MARKER`/`pendingReset` removed.
+- e2e: raw-WS protocol assertion (the `{"type":"snapshot"}` + binary contract); throwaway `tests/vt_snapshot_spike.rs` removed.
+
+**Decisive verification = iPad real device** (real claude, resize + reconnect: dup gone, retention up, claude bottom line present) — pending. Phase 2 (#3 reflow via `row_wrapped`) is next.

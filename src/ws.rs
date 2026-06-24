@@ -20,9 +20,23 @@ use crate::terminal_filter::{filter_conpty_private_modes, filter_terminal_respon
 /// PTY 出力受信タイムアウト（alive チェック間隔）
 const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Sync control frame: client must reset its terminal before applying the next
-/// replay frame (it fell outside the server's replay window).
-const SYNC_FULL_MSG: &str = r#"{"type":"sync","mode":"full"}"#;
+/// Snapshot control frame: the next binary frame is a full, self-contained
+/// redraw (byte-ring history followed by a clean VT screen snapshot). The
+/// client resets its terminal before applying it — so there is no overlap with
+/// prior scrollback (no duplication) and the current viewport is authoritative.
+const SNAPSHOT_MSG: &str = r#"{"type":"snapshot"}"#;
+
+/// Build the snapshot binary frame: `[8-byte be seq][history ++ snapshot]`.
+/// The combined buffer is run through `filter_conpty_private_modes`; the VT
+/// snapshot never contains the blocked `?9001`/`?1004` modes, so filtering is a
+/// no-op on its bytes and only scrubs the raw history portion.
+fn build_snapshot_binary(end_seq: u64, history: &[u8], snapshot: &[u8]) -> Vec<u8> {
+    let mut combined = Vec::with_capacity(history.len() + snapshot.len());
+    combined.extend_from_slice(history);
+    combined.extend_from_slice(snapshot);
+    let filtered = filter_conpty_private_modes(&combined);
+    seq_frame(end_seq, &filtered)
+}
 
 /// Prepend the 8-byte big-endian absolute sequence to a terminal data frame.
 /// The client strips this prefix and records the seq so it can request a delta
@@ -108,20 +122,26 @@ async fn handle_socket(
         }
     };
 
-    // 初期リプレイを送信。差分なら term をそのまま追記、full なら reset 指示を先に送る。
-    // 送出後、client_seq は replay.end_seq まで進んでいる。
+    // 初期リプレイ。full かつ snapshot 付き → snapshot プロトコル（reset → 履歴 → snapshot）。
+    // それ以外（差分）は従来どおり seq 前置バイナリを追記。
     let mut client_seq = replay.end_seq;
-    if !replay.data.is_empty() {
-        if replay.full
-            && since.is_some()
-            && ws_tx
-                .send(Message::Text(SYNC_FULL_MSG.into()))
+    if replay.full {
+        if let Some(ref snapshot) = replay.snapshot {
+            if ws_tx
+                .send(Message::Text(SNAPSHOT_MSG.into()))
                 .await
                 .is_err()
-        {
-            registry.detach(&session_name, client_id).await;
-            return;
+            {
+                registry.detach(&session_name, client_id).await;
+                return;
+            }
+            let frame = build_snapshot_binary(replay.end_seq, &replay.data, snapshot);
+            if ws_tx.send(Message::Binary(frame.into())).await.is_err() {
+                registry.detach(&session_name, client_id).await;
+                return;
+            }
         }
+    } else if !replay.data.is_empty() {
         let filtered = filter_conpty_private_modes(&replay.data);
         if ws_tx
             .send(Message::Binary(seq_frame(replay.end_seq, &filtered).into()))
@@ -169,25 +189,46 @@ async fn handle_socket(
             ) {}
 
             // client_seq 以降の差分をリングバッファから取得して送る。
+            // client_seq は「実際に送出できた」ブランチでのみ進める。full かつ
+            // snapshot 無し（Task 2 不変条件違反・本来到達不能）は何も送らず client_seq を
+            // 据え置き、次回起床で replay_since を再試行する（無音スキップ＝サイレント
+            // データ欠落を避ける）。
             let slice = session_for_output.replay_since(Some(client_seq));
             if slice.end_seq != client_seq {
-                if slice.full
-                    && ws_tx
-                        .send(Message::Text(SYNC_FULL_MSG.into()))
+                if slice.full {
+                    if let Some(ref snapshot) = slice.snapshot {
+                        if ws_tx
+                            .send(Message::Text(SNAPSHOT_MSG.into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        let frame = build_snapshot_binary(slice.end_seq, &slice.data, snapshot);
+                        if ws_tx.send(Message::Binary(frame.into())).await.is_err() {
+                            break;
+                        }
+                        client_seq = slice.end_seq;
+                    } else {
+                        // Invariant violation (full ⟹ Some). Should be unreachable.
+                        // Do NOT advance client_seq — retry on the next wake rather
+                        // than silently dropping this output window.
+                        tracing::warn!(
+                            "full replay slice without snapshot on session {name_for_output} (end_seq={}); retrying",
+                            slice.end_seq
+                        );
+                    }
+                } else {
+                    let filtered = filter_conpty_private_modes(&slice.data);
+                    if ws_tx
+                        .send(Message::Binary(seq_frame(slice.end_seq, &filtered).into()))
                         .await
                         .is_err()
-                {
-                    break;
+                    {
+                        break;
+                    }
+                    client_seq = slice.end_seq;
                 }
-                let filtered = filter_conpty_private_modes(&slice.data);
-                if ws_tx
-                    .send(Message::Binary(seq_frame(slice.end_seq, &filtered).into()))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-                client_seq = slice.end_seq;
             }
 
             if ended {
@@ -587,6 +628,24 @@ fn filter_mouse_sequences(data: &[u8]) -> Cow<'_, [u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Snapshot protocol unit tests ---
+
+    #[test]
+    fn snapshot_binary_frame_concatenates_history_then_snapshot() {
+        let history = b"HIST";
+        let snapshot = b"SNAP";
+        let frame = build_snapshot_binary(42, history, snapshot);
+        // 8-byte big-endian seq prefix.
+        assert_eq!(&frame[..8], &42u64.to_be_bytes());
+        // history then snapshot, in order.
+        assert_eq!(&frame[8..], b"HISTSNAP");
+    }
+
+    #[test]
+    fn snapshot_control_frame_is_typed_json() {
+        assert_eq!(SNAPSHOT_MSG, r#"{"type":"snapshot"}"#);
+    }
 
     // --- CreateSessionRequest backend parsing ---
 

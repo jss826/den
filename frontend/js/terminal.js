@@ -19,13 +19,6 @@ const DenTerminal = (() => {
   const WS_PING_INTERVAL_MS = 30000;
   const WS_PING_MSG = JSON.stringify({ type: 'ping' });
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
-  // Written (not term.reset()) when the server sends a full resync. A full
-  // replay only happens when the server's window starts *past* our lastSeq, so
-  // it is a history gap — never an overlap. Marking the gap keeps the existing
-  // scrollback instead of wiping it (the old reset was the main cause of sparse
-  // iPad scrollback after frequent reconnects).
-  const GAP_MARKER = textEncoder.encode('\r\n\x1b[90m── reconnected ──\x1b[0m\r\n');
-
   /** Stable identity key for a (name, remote) session. */
   function sessionId(name, remote) {
     return (remote || '') + ' ' + name;
@@ -556,19 +549,23 @@ const DenTerminal = (() => {
       // while the tab is backgrounded on iOS) would push lastSeq past data the
       // term never applied, leaving a gap in the delta replay after reconnect (#117).
       let pendingSeq = st.lastSeq;
-      // Set when the server sends a {"type":"sync","mode":"full"} control frame,
-      // meaning the client fell outside the server's replay window and the next
-      // frame is a full window. We mark the gap and keep scrollback rather than
-      // resetting (the window starts past lastSeq, so there is no overlap).
-      let pendingReset = false;
+      // Set when the server sends a {"type":"snapshot"} control frame: the next
+      // binary frame is a full self-contained redraw (history + clean VT
+      // snapshot). We reset the term before applying it so the authoritative
+      // window replaces stale scrollback — no overlap, no duplication.
+      let pendingSnapshot = false;
+      let resetBeforeFlush = false;
 
       const flushWrite = () => {
+        if (writeBuf.length === 0) return;
         const chunks = writeBuf;
-        if (chunks.length === 0) return;
         writeBuf = [];
+        if (resetBeforeFlush) {
+          resetBeforeFlush = false;
+          st.term.reset();
+        }
         st.term.write(chunks.length === 1 ? chunks[0] : mergeChunks(chunks));
-        // Commit the seq only now that the bytes live in the term's own buffer,
-        // so a discarded writeBuf never advances lastSeq past unrendered output.
+        // Commit the seq only now that the bytes live in the term's buffer.
         st.lastSeq = pendingSeq;
       };
 
@@ -584,7 +581,7 @@ const DenTerminal = (() => {
       ws.onmessage = (event) => {
         if (generation !== st.connectGeneration) return;
         if (typeof event.data === 'string') {
-          // Text branch carries only JSON control messages (session_ended / sync).
+          // Text branch carries only JSON control messages (session_ended / snapshot).
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'session_ended') {
@@ -593,27 +590,28 @@ const DenTerminal = (() => {
               refreshSessionList();
               return;
             }
-            if (msg.type === 'sync') {
-              // Full replay incoming: reset the term before applying it so the
-              // authoritative window replaces (not appends to) stale scrollback.
-              if (msg.mode === 'full') pendingReset = true;
+            if (msg.type === 'snapshot') {
+              // Next binary frame is a full redraw: reset before applying it.
+              pendingSnapshot = true;
               return;
             }
           } catch (_) {
             // テキストデータとして扱う
           }
+          // Any text frame reaching here is NOT the snapshot control frame, so a
+          // pending snapshot flag would be stale. Clear it so the next binary
+          // delta is never mistaken for a snapshot (avoiding a spurious reset).
+          pendingSnapshot = false;
           st.term.write(event.data);
         } else if (event.data instanceof ArrayBuffer) {
           // Every binary frame is [8-byte big-endian abs seq][terminal data].
           if (event.data.byteLength < 8) return;
           pendingSeq = new DataView(event.data).getBigUint64(0);
-          if (pendingReset) {
-            pendingReset = false;
-            // Non-destructive resync: the full window starts past lastSeq (a
-            // history gap, not an overlap), so keep the existing scrollback and
-            // mark the gap. Queued before the full data so it flushes in order
-            // after any already-buffered deltas.
-            writeBuf.push(GAP_MARKER);
+          if (pendingSnapshot) {
+            pendingSnapshot = false;
+            // Drop any not-yet-flushed deltas; the snapshot supersedes them.
+            writeBuf = [];
+            resetBeforeFlush = true;
           }
           writeBuf.push(new Uint8Array(event.data, 8));
           if (writeRaf === null) {

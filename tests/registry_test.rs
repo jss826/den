@@ -400,6 +400,41 @@ fn pty_interactive() {
     rt.shutdown_timeout(std::time::Duration::from_secs(3));
 }
 
+#[test]
+#[serial]
+fn reconnect_full_replay_includes_visible_snapshot() {
+    let rt = build_test_runtime();
+    rt.block_on(async {
+        let reg = new_registry();
+        let (session, mut rx) = reg.create("snaptest", 80, 24).await.unwrap();
+        init_shell(&session, &mut rx).await;
+
+        // Produce a distinctive line on screen.
+        session.write_input(b"echo SNAP_VT_MARKER\r").await.unwrap();
+        // Let the shell echo + render.
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+        // A brand-new client (since = None) gets a FULL replay → snapshot present.
+        let slice = session.replay_since(None);
+        assert!(slice.full, "new client must get a full replay");
+        let snap = slice
+            .snapshot
+            .expect("full replay must carry a VT snapshot");
+
+        // The snapshot, re-rendered, reproduces the marker on the visible screen.
+        let mut p = vt100::Parser::new(24, 80, 0);
+        p.process(&snap);
+        assert!(
+            p.screen().contents().contains("SNAP_VT_MARKER"),
+            "snapshot must reflect the current screen, got:\n{}",
+            p.screen().contents()
+        );
+
+        reg.destroy("snaptest").await;
+    });
+    rt.shutdown_timeout(std::time::Duration::from_secs(3));
+}
+
 // ============================================================
 // PTY テスト（exit）: init_shell + exit → dead 検出 → 再作成
 // ============================================================

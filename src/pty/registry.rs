@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use super::manager::PtyManager;
+use super::replay_state::ReplayState;
 pub use super::ring_buffer::ReplaySlice;
-use super::ring_buffer::RingBuffer;
 use crate::store::{SleepPreventionMode, SshAuthType};
 
 /// PTY 出力の 1 チャンク。broadcast で配信される。
@@ -244,8 +244,9 @@ pub struct SharedSession {
     pub created_at: DateTime<Utc>,
     /// PTY プロセスが生存しているか（AtomicBool: read_task から常に設定可能）
     alive: AtomicBool,
-    /// リプレイバッファ（std::sync::Mutex: blocking context から常にアクセス可能）
-    replay_buf: std::sync::Mutex<RingBuffer>,
+    /// リプレイ状態（byte ring + VT parser）。std::sync::Mutex: blocking context
+    /// から常にアクセス可能。Arc で resize_task と共有し、リサイズを VT に追従させる。
+    replay_state: std::sync::Arc<std::sync::Mutex<ReplayState>>,
     /// broadcast 送信側（read_task 終了時に drop してチャネルを閉じる）
     output_tx: std::sync::Mutex<Option<broadcast::Sender<std::sync::Arc<OutputChunk>>>>,
     /// PTY 内部状態（pty_writer, clients, child 等）
@@ -534,6 +535,8 @@ impl SessionRegistry {
     #[allow(clippy::too_many_arguments)]
     fn setup_pty_session(
         name: &str,
+        cols: u16,
+        rows: u16,
         pty_reader: Box<dyn std::io::Read + Send>,
         pty_writer: Box<dyn std::io::Write + Send>,
         master: Box<dyn portable_pty::MasterPty + Send>,
@@ -550,6 +553,13 @@ impl SessionRegistry {
         let (output_tx, first_rx) = broadcast::channel(BROADCAST_CAPACITY);
         let (resize_tx, resize_rx) = std::sync::mpsc::channel::<(u16, u16)>();
 
+        let replay_state = std::sync::Arc::new(std::sync::Mutex::new(ReplayState::new(
+            REPLAY_CAPACITY,
+            rows,
+            cols,
+        )));
+        let replay_state_for_resize = std::sync::Arc::clone(&replay_state);
+
         // resize task: blocking スレッドで master.resize()
         // master を所有 → recv() が Err (= resize_tx drop) で終了 → master drop → ConPTY 閉鎖
         let resize_handle = tokio::task::spawn_blocking(move || {
@@ -561,6 +571,10 @@ impl SessionRegistry {
                     pixel_height: 0,
                 };
                 let _ = master.resize(size);
+                replay_state_for_resize
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .resize(cols, rows);
             }
             // master はここで drop → ClosePseudoConsole → OpenConsole.exe 終了
         });
@@ -569,7 +583,7 @@ impl SessionRegistry {
             name: name.to_string(),
             created_at: Utc::now(),
             alive: AtomicBool::new(true),
-            replay_buf: std::sync::Mutex::new(RingBuffer::new(REPLAY_CAPACITY)),
+            replay_state: std::sync::Arc::clone(&replay_state),
             output_tx: std::sync::Mutex::new(Some(output_tx.clone())),
             last_activity,
             ssh_config,
@@ -601,15 +615,14 @@ impl SessionRegistry {
                     Ok(n) => {
                         let data = buf[..n].to_vec();
 
-                        // replay buffer: std::sync::Mutex なので常に取得可能。
+                        // replay state: byte ring + VT parser を同一ロックで更新。
                         // poison しても seq の連続性を保つため into_inner で復帰する。
                         let seq_end = {
-                            let mut rb = session_for_read
-                                .replay_buf
+                            let mut rs = session_for_read
+                                .replay_state
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner());
-                            rb.write(&data);
-                            rb.total_written()
+                            rs.write(&data)
                         };
 
                         // broadcast（receiver がいなくても OK）
@@ -711,6 +724,8 @@ impl SessionRegistry {
 
         let (session, first_rx, monitor_handle) = Self::setup_pty_session(
             name,
+            cols,
+            rows,
             pty.reader,
             pty.writer,
             pty.master,
@@ -814,6 +829,8 @@ impl SessionRegistry {
 
         let (session, first_rx, monitor_handle) = Self::setup_pty_session(
             name,
+            cols,
+            rows,
             pty.reader,
             pty.writer,
             pty.master,
@@ -1015,6 +1032,7 @@ impl SessionRegistry {
                     data: Vec::new(),
                     full: false,
                     end_seq: 0,
+                    snapshot: None,
                 };
 
                 // ConPTY は同一サイズの resize を無視するため、
@@ -1472,7 +1490,7 @@ impl SharedSession {
     /// WS 経路はこれを「唯一の真実」として使い、broadcast は起床信号にのみ用いる。
     /// これにより再接続の重複・先頭化け・lag 取りこぼしを一括で防ぐ。
     pub fn replay_since(&self, since: Option<u64>) -> ReplaySlice {
-        self.replay_buf
+        self.replay_state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .replay_since(since)

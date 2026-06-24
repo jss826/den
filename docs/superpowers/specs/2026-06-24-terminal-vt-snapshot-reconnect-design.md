@@ -1,7 +1,7 @@
 # ターミナル再接続のクリーン化 — サーバー側 VT snapshot 設計
 
 - 日付: 2026-06-24
-- ステータス: Draft（spec）
+- ステータス: Phase 1 実装済み（branch `feat/vt-snapshot-reconnect`、SDD 6 タスク review clean）。決定打 = iPad 実機確認待ち。Phase 2（#3 reflow via `row_wrapped`）は次段。
 - 関連: v3.5.0 #117（seq 差分 replay）, v3.6.0（iPad replay 非破壊追記＋窓 2MB）, restty-refresh-noop
 - 着想元: getpaseo/paseo のサーバー側ヘッドレス VT + snapshot/restore（`memory/paseo-architecture-comparison.md`）
 
