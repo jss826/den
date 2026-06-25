@@ -18,6 +18,10 @@ const DenTerminal = (() => {
   let currentRemote = null; // null for local, connectionId for remote Den
   const WS_PING_INTERVAL_MS = 30000;
   const WS_PING_MSG = JSON.stringify({ type: 'ping' });
+  // After a ping, the server answers with a pong. If no inbound frame (pong or
+  // any output) arrives within this grace window, the socket is treated as
+  // half-open (OPEN but dead) and force-closed so onclose drives a reconnect.
+  const WS_LIVENESS_GRACE_MS = 8000;
   const textEncoder = new TextEncoder(); // 再利用で毎回の alloc を回避
   /** Stable identity key for a (name, remote) session. */
   function sessionId(name, remote) {
@@ -240,7 +244,11 @@ const DenTerminal = (() => {
     if (document.fonts?.ready) {
       document.fonts.ready.then(() => fitAndRefresh());
     }
-    window.addEventListener('pageshow', () => fitAndRefresh());
+    // On resume (tab refocus / bfcache restore), ping every live session at once
+    // so a half-open socket is detected within the grace window instead of
+    // waiting up to a full ping interval (30s). iPad sleep is the common trigger.
+    window.addEventListener('pageshow', () => { fitAndRefresh(); pingAllSessions(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) pingAllSessions(); });
     const resizeObserver = new ResizeObserver(() => scheduleFit());
     resizeObserver.observe(container);
   }
@@ -490,6 +498,10 @@ const DenTerminal = (() => {
       ws: null, pingTimer: null, connectGeneration: 0,
       reconnectAttempts: 0, manualReconnectDisposable: null,
       lastSentCols: 0, lastSentRows: 0,
+      // WS liveness (half-open detection). pingSentTs = baseline of the current
+      // unanswered ping (0 = none); lastReceiveTs = last inbound frame; graceTimer
+      // = pending half-open check. Seeded on connect, see stSendHeartbeat.
+      pingSentTs: 0, lastReceiveTs: 0, graceTimer: null,
       // Absolute byte sequence of the last output the term has applied. Sent as
       // ?since=N on (re)connect so the server replays only the delta — preventing
       // the scrollback duplication that full re-replays caused on reconnect (#117).
@@ -571,19 +583,28 @@ const DenTerminal = (() => {
 
       ws.onopen = () => {
         retries = 0;
+        // Seed liveness state: we just connected, so the socket is alive and no
+        // ping is outstanding yet.
+        st.lastReceiveTs = Date.now();
+        st.pingSentTs = 0;
         if (st.pingTimer) clearInterval(st.pingTimer);
-        st.pingTimer = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) ws.send(WS_PING_MSG);
-        }, WS_PING_INTERVAL_MS);
+        st.pingTimer = setInterval(() => stSendHeartbeat(st), WS_PING_INTERVAL_MS);
         if (active === st) { st.term.focus(); fitAndRefresh(); }
       };
 
       ws.onmessage = (event) => {
         if (generation !== st.connectGeneration) return;
+        // Any inbound frame proves the socket is live — feed the half-open check.
+        st.lastReceiveTs = Date.now();
         if (typeof event.data === 'string') {
-          // Text branch carries only JSON control messages (session_ended / snapshot).
+          // Text branch carries only JSON control messages (pong / session_ended / snapshot).
           try {
             const msg = JSON.parse(event.data);
+            if (msg.type === 'pong') {
+              // Heartbeat ack — receive time already recorded above. Never write
+              // it to the terminal.
+              return;
+            }
             if (msg.type === 'session_ended') {
               sessionEnded = true;
               st.term.writeln('\r\n\x1b[33mSession ended.\x1b[0m');
@@ -633,6 +654,7 @@ const DenTerminal = (() => {
 
       ws.onclose = () => {
         if (st.pingTimer) { clearInterval(st.pingTimer); st.pingTimer = null; }
+        if (st.graceTimer) { clearTimeout(st.graceTimer); st.graceTimer = null; }
         if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; }
         writeBuf = [];
         if (generation !== st.connectGeneration) return;
@@ -656,6 +678,40 @@ const DenTerminal = (() => {
 
     // 少し遅延させてから接続（Safari の初回 WS stall 軽減）
     setTimeout(attemptConnect, 200);
+  }
+
+  // Send a heartbeat ping and arm a grace-window check. If the connection
+  // produces no inbound frame (pong or output) before the window elapses, it is
+  // half-open — force-close it so the existing onclose → reconnect path runs.
+  // Browsers never fire onclose for a half-open socket, so without this a slept
+  // or network-dropped session goes silent forever until the tab is recreated.
+  function stSendHeartbeat(st) {
+    const ws = st.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // readyState can flip OPEN→CLOSING between the check and send; a throw here
+    // must not abort callers that ping multiple sessions (pingAllSessions).
+    try { ws.send(WS_PING_MSG); } catch (_) { return; }
+    // Restart the liveness window only if the previous ping was answered;
+    // otherwise keep timing from the oldest unanswered ping (see shouldStampPing).
+    if (DenWsLiveness.shouldStampPing(st.lastReceiveTs, st.pingSentTs)) {
+      st.pingSentTs = Date.now();
+    }
+    if (st.graceTimer) clearTimeout(st.graceTimer);
+    st.graceTimer = setTimeout(() => {
+      st.graceTimer = null;
+      // Guard st.ws === ws so a timer armed for a since-replaced socket can't
+      // close the current one.
+      if (st.ws === ws && ws.readyState === WebSocket.OPEN
+        && DenWsLiveness.isStale(st.lastReceiveTs, st.pingSentTs, WS_LIVENESS_GRACE_MS, Date.now())) {
+        try { ws.close(); } catch (_) { /* already closing */ }
+      }
+    }, WS_LIVENESS_GRACE_MS);
+  }
+
+  // Ping every retained session's live socket. stSendHeartbeat ignores sockets
+  // that aren't OPEN, so this is safe to call indiscriminately.
+  function pingAllSessions() {
+    for (const st of sessionTerms.values()) stSendHeartbeat(st);
   }
 
   function stStartReconnect(st, generation) {
@@ -691,6 +747,7 @@ const DenTerminal = (() => {
   function stDisconnect(st) {
     st.connectGeneration++;
     if (st.pingTimer) { clearInterval(st.pingTimer); st.pingTimer = null; }
+    if (st.graceTimer) { clearTimeout(st.graceTimer); st.graceTimer = null; }
     if (st.manualReconnectDisposable) { st.manualReconnectDisposable.dispose(); st.manualReconnectDisposable = null; }
     if (st.ws) {
       st.ws.onopen = st.ws.onclose = st.ws.onerror = st.ws.onmessage = null;

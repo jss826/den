@@ -26,6 +26,13 @@ const OUTPUT_RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// prior scrollback (no duplication) and the current viewport is authoritative.
 const SNAPSHOT_MSG: &str = r#"{"type":"snapshot"}"#;
 
+/// Heartbeat response. The client pings periodically and force-closes a socket
+/// that produces no inbound frame within a grace window (half-open detection).
+/// Answering every ping guarantees an idle-but-alive connection keeps producing
+/// inbound traffic, so it is never mistaken for a dead one. The client swallows
+/// this frame (it is never written to the terminal).
+const PONG_MSG: &str = r#"{"type":"pong"}"#;
+
 /// Build the snapshot binary frame: `[8-byte be seq][history ++ snapshot]`.
 /// The combined buffer is run through `filter_conpty_private_modes`; the VT
 /// snapshot never contains the blocked `?9001`/`?1004` modes, so filtering is a
@@ -107,6 +114,11 @@ async fn handle_socket(
 ) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
+    // The sink (`ws_tx`) is owned by the output task; the input task (which sees
+    // the client's pings) cannot touch it. Funnel pong requests over this channel
+    // so the output task is the single writer.
+    let (pong_tx, mut pong_rx) = tokio::sync::mpsc::channel::<()>(4);
+
     // SessionRegistry に attach（なければ create）。`since` で差分リプレイを要求。
     let (session, mut output_rx, replay, client_id) = match registry
         .get_or_create(&session_name, ClientKind::WebSocket, cols, rows, since)
@@ -163,20 +175,40 @@ async fn handle_socket(
     let pty_to_ws = async {
         loop {
             // recv with timeout: ConPTY は子プロセス終了後も broadcast チャネルが
-            // 閉じないため、定期的に alive を確認する
-            let ended = match tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()).await {
-                Ok(Ok(_)) => false, // woke: 内容は無視（リングバッファが真実）
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
-                    tracing::warn!("WS client lagged {n} messages on session {name_for_output}");
-                    false // 取りこぼしは下の replay_since で復旧する
+            // 閉じないため、定期的に alive を確認する。pong 要求が来たら即返答する
+            // （client の half-open 検知に応答 — idle でも応答するため誤切断しない）。
+            let ended = tokio::select! {
+                biased;
+                pong = pong_rx.recv() => {
+                    match pong {
+                        // Answer the ping; a send error means the socket is gone.
+                        Some(()) => {
+                            if ws_tx.send(Message::Text(PONG_MSG.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        // Input task ended → the connection is closing down.
+                        None => break,
+                    }
+                    // No new PTY output to replay; loop back and wait again.
+                    continue;
                 }
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => true, // セッション終了
-                Err(_) => {
-                    // タイムアウト: 生存確認のみ（出力なし → 差分も無い）
-                    if !session_for_output.is_alive() {
-                        true
-                    } else {
-                        continue;
+                recv = tokio::time::timeout(OUTPUT_RECV_TIMEOUT, output_rx.recv()) => {
+                    match recv {
+                        Ok(Ok(_)) => false, // woke: 内容は無視（リングバッファが真実）
+                        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                            tracing::warn!("WS client lagged {n} messages on session {name_for_output}");
+                            false // 取りこぼしは下の replay_since で復旧する
+                        }
+                        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => true, // セッション終了
+                        Err(_) => {
+                            // タイムアウト: 生存確認のみ（出力なし → 差分も無い）
+                            if !session_for_output.is_alive() {
+                                true
+                            } else {
+                                continue;
+                            }
+                        }
                     }
                 }
             };
@@ -279,8 +311,13 @@ async fn handle_socket(
                                 session.nudge_resize(client_id).await;
                             }
                             WsCommand::Ping => {
-                                // Keepalive — no response needed; the message
-                                // itself prevents idle-timeout disconnection.
+                                // Ask the output task (the sole sink owner) to
+                                // send a pong. The client force-closes a socket
+                                // that gets no inbound frame within its grace
+                                // window, so an idle session must still answer.
+                                // A full channel means a pong is already queued;
+                                // dropping the extra request is harmless.
+                                let _ = pong_tx.try_send(());
                             }
                         }
                     }

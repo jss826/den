@@ -22,6 +22,7 @@ export default [
         DenClipboard: 'readonly',
         ClipboardHistory: 'readonly',
         TerminalAdapter: 'readonly',
+        DenWsLiveness: 'readonly',
         DenSnippet: 'readonly',
         DenDragList: 'readonly',
         DenKeyPresets: 'readonly',

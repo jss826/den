@@ -67,6 +67,33 @@ test.describe('Terminal', () => {
     expect(frames[1].len).toBeGreaterThanOrEqual(8);
   });
 
+  test('server answers a ping with a pong frame', async ({ page }) => {
+    await login(page);
+    await createSession(page, 'pong-e2e');
+    await page.waitForTimeout(1000);
+
+    // The client's half-open detection relies on the server answering every
+    // app-level ping. Open a raw WS, send {"type":"ping"}, expect {"type":"pong"}.
+    const gotPong = await page.evaluate(async (sessionName: string) => {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}/api/ws?cols=80&rows=24&session=${encodeURIComponent(sessionName)}`;
+      return await new Promise<boolean>((resolve) => {
+        const ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => { ws.send(JSON.stringify({ type: 'ping' })); };
+        ws.onmessage = (e: MessageEvent) => {
+          if (typeof e.data === 'string' && e.data === '{"type":"pong"}') {
+            try { ws.close(); } catch (_) {}
+            resolve(true);
+          }
+        };
+        setTimeout(() => { try { ws.close(); } catch (_) {} resolve(false); }, 3000);
+      });
+    }, 'pong-e2e');
+
+    expect(gotPong).toBe(true);
+  });
+
   // xterm.js v6 DOM interaction is unreliable in headless Chromium
   test.fixme('terminal receives command output', async ({ page }) => {
     await login(page);
