@@ -94,6 +94,20 @@ test.describe('Terminal', () => {
     expect(gotPong).toBe(true);
   });
 
+  test('WS-state badge reflects the live OPEN connection', async ({ page }) => {
+    await login(page);
+    await createSession(page, 'badge-e2e');
+
+    // The diagnostic badge lives inside the active session host and surfaces the
+    // socket state. Once connected it must read "open" (the iPad freeze case
+    // would instead show closing/closed). Scoped to the visible host so an
+    // inactive session's hidden badge can't satisfy the assertion.
+    const badge = page.locator('.term-session-host:not([hidden]) .term-ws-badge');
+    await expect(badge).toBeVisible({ timeout: 10_000 });
+    await expect(badge).toHaveText(/open/, { timeout: 10_000 });
+    await expect(badge).toHaveAttribute('data-state', 'open');
+  });
+
   // xterm.js v6 DOM interaction is unreliable in headless Chromium
   test.fixme('terminal receives command output', async ({ page }) => {
     await login(page);

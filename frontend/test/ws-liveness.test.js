@@ -62,3 +62,41 @@ describe('DenWsLiveness.shouldStampPing', () => {
     assert.equal(DenWsLiveness.shouldStampPing(200, 1000), false);
   });
 });
+
+// shouldReconnect(readyState, reconnecting)
+// Decides whether a session whose socket is NOT OPEN must be force-reconnected.
+// The half-open detection (isStale) only acts on an OPEN socket; but iOS Safari
+// frequently leaves a backgrounded socket in CLOSING/CLOSED state while NEVER
+// delivering `close` to the resumed page, so the onclose→reconnect path never
+// runs either. Nothing recovers a non-OPEN socket whose onclose was dropped —
+// this decision closes that gap. readyState uses the raw WebSocket constants
+// (0 CONNECTING / 1 OPEN / 2 CLOSING / 3 CLOSED); null means no socket.
+describe('DenWsLiveness.shouldReconnect', () => {
+  it('reconnects a CLOSED socket when no reconnect is in progress', () => {
+    assert.equal(DenWsLiveness.shouldReconnect(3, false), true);
+  });
+
+  it('reconnects a CLOSING socket when no reconnect is in progress', () => {
+    assert.equal(DenWsLiveness.shouldReconnect(2, false), true);
+  });
+
+  it('does NOT reconnect an OPEN socket (handled by the isStale path)', () => {
+    assert.equal(DenWsLiveness.shouldReconnect(1, false), false);
+  });
+
+  it('does NOT reconnect a CONNECTING socket (a connect is already in flight)', () => {
+    assert.equal(DenWsLiveness.shouldReconnect(0, false), false);
+  });
+
+  it('does NOT reconnect a null socket (session torn down or not yet connected)', () => {
+    assert.equal(DenWsLiveness.shouldReconnect(null, false), false);
+  });
+
+  it('does NOT stack a reconnect while one is already scheduled/in flight', () => {
+    // Even a dead socket is left alone if a reconnect is already pending — the
+    // onclose countdown (or a prior force) will bring it back; re-kicking it
+    // would restart the connection storm-style on every resume event.
+    assert.equal(DenWsLiveness.shouldReconnect(3, true), false);
+    assert.equal(DenWsLiveness.shouldReconnect(2, true), false);
+  });
+});

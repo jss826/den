@@ -234,6 +234,16 @@ CSS では `.backend-icon[data-backend="zellij"]` のようにデータ属性セ
 - thumb: `var(--border)`, hover `var(--muted)`, radius `4px`
 - Firefox: `scrollbar-width: thin; scrollbar-color: var(--border) transparent`
 
+### 5.8 WS State Badge（ターミナル診断）
+- `.term-ws-badge`: 各セッションの WS 接続状態を `st.host` 右上に常時表示する診断オーバーレイ。内容 = `readyState ラベル · 最終受信からの秒数 · ↻再接続回数`
+- **目的**: iPad はコンソールが取れないため、socket 状態（half-open / 非 OPEN 死亡 / 自動再接続の発火）を画面で読めるようにする。`frontend/js/terminal.js` の `updateWsBadge`
+- `position: absolute; top: 4px; right: 8px`、font `0.65rem` + `--font-mono`、radius `4px`、bg `--overlay-bg-strong`、border `--border`
+- 状態色: `[data-state="open"]`=`--success` / `connecting`=`--warn` / `closing`・`closed`=`--error` / なし=`--muted`
+- **z-index `60`**（ペイン内オーバーレイ band 50-100）
+- **`pointer-events: none`**: 読み取り専用。ターミナル入力・テキスト選択を絶対に奪わない
+- `st.host` の子なので非アクティブ（`[hidden]`）セッションでは自動的に非表示。タッチターゲットではない（44px 不要）
+- 検証フェーズの診断 UI。常用ノイズになると判断されたら `[hidden]` 化 / 撤去を検討（撤去は別 PR）
+
 ---
 
 ## 6. 規約まとめ（チェックリスト）

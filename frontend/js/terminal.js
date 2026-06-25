@@ -251,6 +251,8 @@ const DenTerminal = (() => {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) pingAllSessions(); });
     const resizeObserver = new ResizeObserver(() => scheduleFit());
     resizeObserver.observe(container);
+    // Keep the WS-state badges' idle-second counters ticking.
+    setInterval(() => { for (const st of sessionTerms.values()) updateWsBadge(st); }, 1000);
   }
 
   /**
@@ -283,6 +285,9 @@ const DenTerminal = (() => {
     st.fitAddon = fit;
 
     t.open(st.host);
+
+    // Overlay the WS-state badge on top of the freshly built terminal DOM.
+    if (st.wsBadge) { st.host.appendChild(st.wsBadge); updateWsBadge(st); }
 
     // OSC 52: clipboard write from terminal programs
     t.parser.registerOscHandler(52, (data) => {
@@ -492,11 +497,23 @@ const DenTerminal = (() => {
     host.className = 'term-session-host';
     host.hidden = true;
     rootContainer.appendChild(host);
+    // Compact WS-state badge (diagnostic). iPad has no reachable console, so the
+    // socket's live state is surfaced on-screen: readyState / idle seconds /
+    // reconnect count. pointer-events:none keeps it from blocking terminal input.
+    // Appended to the host after t.open (below) so the terminal lib's open()
+    // can't drop it while building its own DOM into the same host.
+    const wsBadge = document.createElement('div');
+    wsBadge.className = 'term-ws-badge';
     const st = {
       id: sessionId(name, remote), name, remote: remote || null,
-      host, term: null, fitAddon: null, isRestty: false,
+      host, wsBadge, term: null, fitAddon: null, isRestty: false,
       ws: null, pingTimer: null, connectGeneration: 0,
       reconnectAttempts: 0, manualReconnectDisposable: null,
+      // reconnecting = a reconnect is scheduled/in flight (guards against stacking
+      // a forced reconnect on top of the onclose-driven one). reconnectCount =
+      // cumulative (re)connect count, surfaced in the badge so iPad testing can
+      // confirm auto-recovery actually fired.
+      reconnecting: false, reconnectCount: 0,
       lastSentCols: 0, lastSentRows: 0,
       // WS liveness (half-open detection). pingSentTs = baseline of the current
       // unanswered ping (0 = none); lastReceiveTs = last inbound frame; graceTimer
@@ -583,12 +600,19 @@ const DenTerminal = (() => {
 
       ws.onopen = () => {
         retries = 0;
+        // Connected: clear the reconnect-in-progress guard so a future dead
+        // socket can be force-reconnected again.
+        st.reconnecting = false;
         // Seed liveness state: we just connected, so the socket is alive and no
         // ping is outstanding yet.
         st.lastReceiveTs = Date.now();
         st.pingSentTs = 0;
         if (st.pingTimer) clearInterval(st.pingTimer);
-        st.pingTimer = setInterval(() => stSendHeartbeat(st), WS_PING_INTERVAL_MS);
+        // The periodic check is the universal backstop: it runs even when no
+        // resume event fires. stEnsureAlive pings an OPEN socket and force-
+        // reconnects one that is CLOSING/CLOSED with no onclose (the iPad case).
+        st.pingTimer = setInterval(() => stEnsureAlive(st), WS_PING_INTERVAL_MS);
+        updateWsBadge(st);
         if (active === st) { st.term.focus(); fitAndRefresh(); }
       };
 
@@ -708,16 +732,69 @@ const DenTerminal = (() => {
     }, WS_LIVENESS_GRACE_MS);
   }
 
-  // Ping every retained session's live socket. stSendHeartbeat ignores sockets
-  // that aren't OPEN, so this is safe to call indiscriminately.
+  // Drive a liveness check for one session. An OPEN socket gets the heartbeat
+  // ping + grace-window check (half-open detection). A socket that is CLOSING/
+  // CLOSED with no reconnect already pending is the orphaned-on-resume case
+  // (onclose was never delivered): force a reconnect so the session recovers.
+  // CONNECTING and null sockets are left alone (a connect is in flight, or the
+  // session is torn down / not yet connected).
+  function stEnsureAlive(st) {
+    if (st.disposed || !st.term) return;
+    const ws = st.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      stSendHeartbeat(st);
+      return;
+    }
+    if (DenWsLiveness.shouldReconnect(ws ? ws.readyState : null, st.reconnecting)) {
+      st.reconnecting = true;
+      st.reconnectCount++;
+      updateWsBadge(st);
+      stConnect(st);
+    }
+  }
+
+  // Run a liveness check for every retained session. Safe to call
+  // indiscriminately; stEnsureAlive ignores healthy and torn-down sessions.
   function pingAllSessions() {
-    for (const st of sessionTerms.values()) stSendHeartbeat(st);
+    for (const st of sessionTerms.values()) stEnsureAlive(st);
+  }
+
+  // Refresh a session's WS-state badge: readyState label, seconds since the last
+  // inbound frame, and cumulative reconnect count. Read-only diagnostic.
+  function updateWsBadge(st) {
+    const badge = st.wsBadge;
+    if (!badge) return;
+    const ws = st.ws;
+    const rs = ws ? ws.readyState : null;
+    let label = 'no socket';
+    let state = 'none';
+    if (rs === WebSocket.CONNECTING) { label = 'connecting'; state = 'connecting'; }
+    else if (rs === WebSocket.OPEN) { label = 'open'; state = 'open'; }
+    else if (rs === WebSocket.CLOSING) { label = 'closing'; state = 'closing'; }
+    else if (rs === WebSocket.CLOSED) { label = 'closed'; state = 'closed'; }
+    const idle = st.lastReceiveTs ? Math.floor((Date.now() - st.lastReceiveTs) / 1000) : null;
+    const idleStr = idle === null ? '—' : `${idle}s`;
+    badge.textContent = `${label} · ${idleStr} · ↻${st.reconnectCount}`;
+    badge.dataset.state = state;
   }
 
   function stStartReconnect(st, generation) {
+    // A reconnect is now scheduled — block stEnsureAlive from kicking a second
+    // one. Cleared on the next successful onopen.
+    st.reconnecting = true;
+    st.reconnectCount++;
+    updateWsBadge(st);
     st.reconnectAttempts++;
     if (st.reconnectAttempts > MAX_RECONNECT) {
       st.term.writeln('\r\n\x1b[31mConnection lost. Press Enter to reconnect.\x1b[0m');
+      // Auto-retry is exhausted: clear the in-flight guard so a later resume
+      // (pageshow/visibilitychange → stEnsureAlive) can still force-reconnect
+      // when the network is back. Without this the flag latches true forever and
+      // the resume backstop no-ops — the iPad "freeze never recovers" symptom
+      // this fix targets. stConnect (reached via the force path or the manual
+      // Enter handler below) disposes manualReconnectDisposable and resets the
+      // attempt counter, so the manual prompt and auto-retry stay consistent.
+      st.reconnecting = false;
       st.manualReconnectDisposable = st.term.onData((data) => {
         if (data === '\r' || data === '\n') {
           if (st.manualReconnectDisposable) { st.manualReconnectDisposable.dispose(); st.manualReconnectDisposable = null; }
@@ -746,6 +823,7 @@ const DenTerminal = (() => {
 
   function stDisconnect(st) {
     st.connectGeneration++;
+    st.reconnecting = false;
     if (st.pingTimer) { clearInterval(st.pingTimer); st.pingTimer = null; }
     if (st.graceTimer) { clearTimeout(st.graceTimer); st.graceTimer = null; }
     if (st.manualReconnectDisposable) { st.manualReconnectDisposable.dispose(); st.manualReconnectDisposable = null; }

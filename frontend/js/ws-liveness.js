@@ -39,7 +39,31 @@ const DenWsLiveness = (() => {
     return lastReceiveTs >= pingSentTs; // previous ping answered → safe to restart
   }
 
-  return { isStale, shouldStampPing };
+  /**
+   * Whether a session whose socket is NOT OPEN must be force-reconnected.
+   *
+   * `isStale` only rescues an OPEN-but-dead socket. The other failure mode —
+   * common on iOS Safari after sleep/backgrounding — is a socket the browser
+   * moves to CLOSING/CLOSED while the page is suspended, then resumes WITHOUT
+   * ever delivering the `close` event. The onclose→reconnect path never fires,
+   * and the OPEN-only heartbeat skips it, so the session goes silent until the
+   * tab is recreated. A non-OPEN socket with no reconnect already scheduled is
+   * exactly that orphaned state and must be reconnected.
+   *
+   * @param {?number} readyState raw WebSocket state (0 CONNECTING / 1 OPEN /
+   *                             2 CLOSING / 3 CLOSED), or null when there is no socket
+   * @param {boolean} reconnecting whether a reconnect is already scheduled/in flight
+   * @returns {boolean}
+   */
+  function shouldReconnect(readyState, reconnecting) {
+    if (reconnecting) return false; // a reconnect is already pending → don't stack another
+    // CONNECTING(0)/OPEN(1) are healthy-or-in-progress; null means the session is
+    // torn down or not yet connected (handled by its own connect path). Only a
+    // socket that exists but is CLOSING(2)/CLOSED(3) needs a forced reconnect.
+    return readyState === 2 || readyState === 3;
+  }
+
+  return { isStale, shouldStampPing, shouldReconnect };
 })();
 
 if (typeof module !== 'undefined') module.exports = DenWsLiveness;

@@ -1002,6 +1002,32 @@ pre:hover .code-copy-btn {
   inset: 0;
 }
 
+/* WS-state diagnostic badge (per session, top-right of the term host). Read-only:
+   pointer-events:none so it never intercepts terminal input or text selection.
+   iPad has no reachable console, so the socket's live state is surfaced here —
+   readyState / idle seconds / cumulative reconnect count. Lives inside the host,
+   so it is hidden automatically for inactive (hidden) sessions. */
+.term-ws-badge {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 60;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--overlay-bg-strong);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.term-ws-badge[data-state="open"] { color: var(--success); }
+.term-ws-badge[data-state="connecting"] { color: var(--warn); }
+.term-ws-badge[data-state="closing"],
+.term-ws-badge[data-state="closed"] { color: var(--error); }
+
 .terminal-empty-state {
   display: flex;
   align-items: center;
